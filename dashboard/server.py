@@ -602,6 +602,19 @@ def strategy_correlation():
         conn.close()
 
 
+@app.route("/api/edge_diff", methods=["GET"])
+def edge_diff():
+    """Realized-vs-theoretical edge per strategy. Computed live from
+    paper_trades + strategies.raw_record_json.test_runs — same shape as
+    the snapshot written by scripts/edge_diff.py."""
+    from monitoring import edge_diff as ed
+    conn = db.init_db()
+    try:
+        return jsonify(ed.compute_edge_diff(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/guide/<name>", methods=["GET"])
 def get_guide(name: str):
     """Serve a markdown guide as plain text. Whitelist enforced."""

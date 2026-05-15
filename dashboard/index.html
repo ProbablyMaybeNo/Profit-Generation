@@ -294,6 +294,37 @@
   .corr-footer ul { list-style: none; padding: 0; }
   .corr-footer li { padding: 2px 0; color: var(--text); }
 
+  /* Edge diff (realized vs theoretical) */
+  table.edge-diff { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.edge-diff th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 10px;
+    border-bottom: 1px dashed var(--grid);
+    padding: 6px 8px;
+  }
+  table.edge-diff td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--grid);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  table.edge-diff td.r { text-align: right; }
+  table.edge-diff tr.degraded td { color: var(--dim); font-style: italic; }
+  table.edge-diff td .narrative {
+    display: block;
+    font-size: 11px;
+    color: var(--dim);
+    white-space: normal;
+    margin-top: 2px;
+  }
+  .edge-diff-cap-hi { color: var(--green); }
+  .edge-diff-cap-mid { color: var(--text); }
+  .edge-diff-cap-lo { color: var(--red); }
+
   /* Edge slices */
   .slice-section { margin-bottom: 18px; }
   .slice-section:last-child { margin-bottom: 0; }
@@ -714,6 +745,12 @@
   <div class="card">
     <h2>strategy correlation — daily P&amp;L <span class="count" id="corr-count"></span></h2>
     <div id="strategy-correlation" class="loading">loading...</div>
+  </div>
+
+  <!-- Realized vs theoretical edge -->
+  <div class="card">
+    <h2>edge diff — backtest vs paper fills <span class="count" id="edge-diff-count"></span></h2>
+    <div id="edge-diff" class="loading">loading...</div>
   </div>
 
   <!-- Open positions -->
@@ -1468,6 +1505,63 @@ function renderStrategyCorrelation() {
     });
 }
 
+function edgeDiffCapClass(cap) {
+  if (cap === null || cap === undefined) return 'edge-diff-cap-mid';
+  if (cap >= 75) return 'edge-diff-cap-hi';
+  if (cap >= 50) return 'edge-diff-cap-mid';
+  return 'edge-diff-cap-lo';
+}
+
+function renderEdgeDiff() {
+  const el = document.getElementById('edge-diff');
+  const count = document.getElementById('edge-diff-count');
+  fetch('/api/edge_diff', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+    .then(d => {
+      count.textContent = `${d.n_rows} strats · ${d.n_ok} ok`;
+      if (!d.rows.length) {
+        el.innerHTML = '<div class="empty">no paper-traded strategies with backtest baselines yet.</div>';
+        return;
+      }
+      let html = '<table class="edge-diff">';
+      html += '<thead><tr>'
+        + '<th>strategy</th>'
+        + '<th class="r">theo /sig</th>'
+        + '<th class="r">real /sig</th>'
+        + '<th class="r">slip</th>'
+        + '<th class="r">capture</th>'
+        + '<th class="r">n pairs</th>'
+        + '<th class="r">status</th>'
+        + '</tr></thead><tbody>';
+      for (const r of d.rows) {
+        const theo = r.theoretical_per_signal_pct;
+        const real = r.realized && r.realized.n ? r.realized.mean_pct : null;
+        const slip = r.slippage_pct;
+        const cap = r.capture_ratio_pct;
+        const degraded = r.status !== 'ok';
+        const capCls = edgeDiffCapClass(cap);
+        const capLabel = cap === null || cap === undefined ? '—' : `${cap.toFixed(0)}%`;
+        const slipLabel = slip === null || slip === undefined ? '—' : `${slip >= 0 ? '+' : ''}${slip.toFixed(2)}%`;
+        html += `<tr class="${degraded ? 'degraded' : ''}">`
+          + `<td>${escapeHtml(shortStrat(r.strategy_id))}`
+          + (r.narrative ? `<span class="narrative">${escapeHtml(r.narrative)}</span>` : '')
+          + '</td>'
+          + `<td class="r ${pctClass(theo)}">${theo === null || theo === undefined ? '—' : fmtPct(theo)}</td>`
+          + `<td class="r ${pctClass(real)}">${real === null || real === undefined ? '—' : fmtPct(real)}</td>`
+          + `<td class="r">${escapeHtml(slipLabel)}</td>`
+          + `<td class="r ${capCls}">${escapeHtml(capLabel)}</td>`
+          + `<td class="r">${r.realized ? r.realized.n : 0}</td>`
+          + `<td class="r">${escapeHtml(r.status.replace(/_/g, ' '))}</td>`
+          + '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    })
+    .catch(e => {
+      el.innerHTML = `<div class="empty">edge-diff fetch failed: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
 function renderEdgeSlices() {
   const el = document.getElementById('edge-slices');
   fetch('/api/edge_slices', { cache: 'no-store' })
@@ -1646,6 +1740,7 @@ async function refresh() {
     renderEquityCurves(s);
     renderEdgeSlices();
     renderStrategyCorrelation();
+    renderEdgeDiff();
     renderOpenPositions(s);
     renderPaperTrades(s);
     renderSignals(s);
