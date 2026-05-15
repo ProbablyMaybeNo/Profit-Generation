@@ -106,9 +106,10 @@ the box.
   - **Acceptance:** auto-trader respects a "wait N minutes after open before submitting" setting. Default 0 (current behavior). When > 0, orders submitted in the EOD pipeline get `client_order_id` tagged with the desired execution time and a small follow-up scheduler in `auto_trader.py` sleeps until that time before submitting. Tests: settings override honored, default unchanged.
   - **Completed:** 2026-05-15 · commit `ea6fd57`
 
-- [ ] **2.3.2 Limit-inside-spread orders**
+- [x] **2.3.2 Limit-inside-spread orders**
   - **Deliverable:** `auto_trade.order_type = "market" | "limit_inside_spread"` setting; `auto_trader._submit_market_order` extended.
   - **Acceptance:** when set to limit_inside_spread, fetches latest bid/ask via Alpaca data API, submits limit at mid-price, with `time_in_force=DAY`. Records both `limit_price` and `fill_price` in paper_trades. Tests: order construction, mid-price math, market fallback if no quote available.
+  - **Completed:** 2026-05-15 · commit `82ac428`
 
 - [ ] **2.3.3 Position sizing by Kelly fraction**
   - **Deliverable:** `monitoring/sizing.py` + `auto_trade.sizing_method = "fixed" | "kelly"` setting
