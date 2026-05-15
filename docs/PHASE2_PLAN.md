@@ -32,8 +32,8 @@ the box.
 
 - [ ] **2.1.2 Reddit strategy scraper**
   - **Deliverable:** `scripts/scrape_reddit_strategies.py` + tests
-  - **Acceptance:** pulls top posts from r/algotrading, r/quantfinance, r/stocks (last 30d), runs each post body through Ollama (qwen2.5-coder:14b) with a prompt: "extract any actionable trading strategies from this post as JSON {strategy_id, title, entry_rules, exit_rules}". Writes results to records.jsonl as UNTESTED. Skips posts that don't contain a strategy. PRAW credentials in credentials.json.
-  - **Notes:** May need a `reddit` section in credentials.json. The agent should NOT add it — surface for user to add manually if missing.
+  - **Acceptance:** pulls top posts from r/algotrading, r/quantfinance, r/stocks (last 30d) via Reddit's **public JSON endpoints** (no auth, no app, no PRAW). Runs each post body through Ollama (qwen2.5-coder:14b) with a prompt: "extract any actionable trading strategies from this post as JSON {strategy_id, title, entry_rules, exit_rules}". Writes results to records.jsonl as UNTESTED. Skips posts that don't contain a strategy.
+  - **Notes:** Use `requests.get("https://www.reddit.com/r/<sub>/top.json?t=month&limit=50", headers={"User-Agent": "profit-generation/0.1 (personal-research)"})`. Rate-limit: 1 req/2 sec to stay well under Reddit's 60 req/min unauthenticated cap. Use `config.cache.cached(ttl=24*3600, ...)` so repeated runs the same day don't re-fetch. Dedupe by post permalink. NO `reddit` credentials section needed — public JSON requires only a polite User-Agent.
 
 - [ ] **2.1.3 Quantitative-blog scrapers**
   - **Deliverable:** `scripts/scrape_quantocracy.py` + `scripts/scrape_quantpedia.py` + tests
