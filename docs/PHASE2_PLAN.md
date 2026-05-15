@@ -92,9 +92,10 @@ the box.
   - **Acceptance:** for each closed outcome, look up news on the symbol within ±1 day of entry_ts. Aggregate sentiment from `news.sentiment` JSON. Slice outcomes by entry-day sentiment (positive/neutral/negative) and report mean return per slice per strategy. Dashboard shows "trades into negative-sentiment days return +X% vs +Y% on neutral days" per strategy.
   - **Completed:** 2026-05-15 · commit `f64ad3f`
 
-- [ ] **2.2.7 Forward expectations**
+- [x] **2.2.7 Forward expectations**
   - **Deliverable:** `/api/strategy_forecast/<strategy_id>` + dashboard widget
   - **Acceptance:** based on backfill stats, compute expected fires-per-month and median return. Show as "expected: ~12 fires/month, median +0.5%/trade" on the strategy edge card. Sets calibrated user expectations. Tests: synthetic strategy with known fire frequency gets forecast accurately.
+  - **Completed:** 2026-05-15 · commit `e355c46`
 
 ---
 
