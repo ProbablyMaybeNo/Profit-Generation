@@ -116,9 +116,10 @@ the box.
   - **Acceptance:** Kelly mode reads strategy's historical win_rate + avg_win + avg_loss from outcomes table, computes Kelly fraction (capped at 25% for safety), sizes the order to `min(max_position_usd, kelly_fraction * portfolio_value)`. Default still "fixed". Tests: Kelly math correctness on canned win_rate/payoff, cap honored.
   - **Completed:** 2026-05-15 · commit `8d41c74`
 
-- [ ] **2.3.4 ATR-based stop-loss**
+- [x] **2.3.4 ATR-based stop-loss**
   - **Deliverable:** `auto_trade.stop_loss_atr_multiple` setting + auto_trader honors it
   - **Acceptance:** when set, after entry the auto-trader submits a STOP order at `entry - N × ATR(20)` along with the market entry. Records `stop_price` in paper_trades. Background process tracks fills; when stop hits, records exit and closes the outcome. Tests: ATR math, stop placement.
+  - **Completed:** 2026-05-15 · commit `b3b19e1`
 
 ---
 
