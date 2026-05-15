@@ -125,9 +125,10 @@ the box.
 
 ## 2.4 Portfolio-level risk
 
-- [ ] **2.4.1 Per-symbol concentration cap**
+- [x] **2.4.1 Per-symbol concentration cap**
   - **Deliverable:** added to auto_trader's eligibility check + setting `risk.max_pct_per_symbol`
   - **Acceptance:** if 3 strategies want to buy KRE on the same day, only the highest-Sharpe gets the order — total notional in any one symbol across strategies stays ≤ `max_pct_per_symbol * portfolio_value` (default 30%). Tests: ranking + cap enforcement, single-strategy unaffected.
+  - **Completed:** 2026-05-15 · commit `751be3f`
 
 - [ ] **2.4.2 Daily drawdown circuit breaker**
   - **Deliverable:** auto_trader honors `risk.max_daily_loss_pct` (already in settings, currently unused)
