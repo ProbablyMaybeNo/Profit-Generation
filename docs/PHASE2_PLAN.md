@@ -42,9 +42,10 @@ the box.
   - **Notes:** Use `requests` against `api.github.com`. Authenticated calls allow 5000 req/hr — supports a `github` section in `credentials.json` with `token` field (Personal Access Token, public_repo scope only). Unauthenticated falls back to 60 req/hr (still enough for `--max-repos 20`). The agent should NOT add the credentials section — surface for user to add a token if missing, OR proceed in unauthenticated mode if user prefers. Polite User-Agent header required.
   - **Completed:** 2026-05-15 · commit `4fd899f`
 
-- [ ] **2.1.3 Quantitative-blog scrapers**
+- [x] **2.1.3 Quantitative-blog scrapers**
   - **Deliverable:** `scripts/scrape_quantocracy.py` + `scripts/scrape_quantpedia.py` + tests
   - **Acceptance:** scrape Quantocracy's RSS feed, extract linked blog posts, run each through LLM extraction, write UNTESTED records. Same for Quantpedia (curated strategy index). At least 5 strategies extracted from each source per run.
+  - **Completed:** 2026-05-15 · commit `019eb99`
 
 - [ ] **2.1.5 Auto-promotion workflow**
   - **Deliverable:** `--promote` flag added to `scripts/validate_strategy.py` AND `scripts/batch_validate.py`. New: `scripts/promote_strategy.py` (helper).
