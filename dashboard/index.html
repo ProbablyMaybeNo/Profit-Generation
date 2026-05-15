@@ -325,6 +325,18 @@
   .edge-diff-cap-mid { color: var(--text); }
   .edge-diff-cap-lo { color: var(--red); }
 
+  /* Strategy forecast pill (embedded in strategy-edge table) */
+  .forecast {
+    display: block;
+    font-size: 10px;
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+  }
+  .forecast.fc-conf-hi  { color: var(--text); }
+  .forecast.fc-conf-mid { color: var(--dim); }
+  .forecast.fc-conf-lo  { color: var(--dimmer); font-style: italic; }
+
   /* News-sentiment overlay */
   .sent-overlay-strat { margin-bottom: 14px; }
   .sent-overlay-strat:last-child { margin-bottom: 0; }
@@ -1265,8 +1277,18 @@ function renderEdge(s) {
     '<th class="num">max loss</th><th class="num">max win</th>' +
     '</tr></thead><tbody>';
   for (const r of rows) {
+    const fc = r.forecast || {};
+    const fcSummary = fc.summary || '';
+    const conf = fc.confidence || '';
+    const confCls = conf === 'high' ? 'fc-conf-hi'
+                    : conf === 'medium' ? 'fc-conf-mid'
+                    : 'fc-conf-lo';
     h += `<tr>
-      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
+      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}` +
+      (fcSummary
+        ? `<span class="forecast ${confCls}" title="confidence: ${escapeHtml(conf)} · ${fc.n_signals_observed || 0} signals over ${fc.observation_days || 0}d">${escapeHtml(fcSummary)}</span>`
+        : '') +
+      `</td>
       <td class="num">${r.n}</td>
       <td class="num ${pctClass(r.mean_ret)}">${fmtPct(r.mean_ret)}</td>
       <td class="num">${(r.win_rate * 100).toFixed(1)}%</td>
