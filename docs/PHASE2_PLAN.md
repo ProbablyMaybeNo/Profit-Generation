@@ -101,9 +101,10 @@ the box.
 
 ## 2.3 Smarter execution
 
-- [ ] **2.3.1 Time-of-day execution offset**
+- [x] **2.3.1 Time-of-day execution offset**
   - **Deliverable:** `auto_trade.entry_time_offset_min` setting + auto_trader honors it
   - **Acceptance:** auto-trader respects a "wait N minutes after open before submitting" setting. Default 0 (current behavior). When > 0, orders submitted in the EOD pipeline get `client_order_id` tagged with the desired execution time and a small follow-up scheduler in `auto_trader.py` sleeps until that time before submitting. Tests: settings override honored, default unchanged.
+  - **Completed:** 2026-05-15 · commit `ea6fd57`
 
 - [ ] **2.3.2 Limit-inside-spread orders**
   - **Deliverable:** `auto_trade.order_type = "market" | "limit_inside_spread"` setting; `auto_trader._submit_market_order` extended.
