@@ -2,7 +2,7 @@
 echo Registering trading system monitor with Windows Task Scheduler...
 
 schtasks /create /tn "TradingSystem\Heartbeat" ^
-  /tr "cmd /c conda activate trading && python D:\AI-Workstation\Antigravity\apps\Trading\monitor.py" ^
+  /tr "cmd /c conda activate trading && python \"D:\AI-Workstation\Antigravity\apps\Profit Generation\monitor.py\"" ^
   /sc minute /mo 15 ^
   /sd 01/01/2025 ^
   /ru "%USERNAME%" ^

@@ -1,5 +1,12 @@
 """
-test_all.py — Run all test modules and print a summary table.
+run_integration_checks.py — Run the live API smoke tests (Alpaca, Polygon,
+FRED, yfinance) as subprocesses and print a summary table.
+
+NOT a pytest module — it spawns the test_*.py scripts as their own processes
+and parses stdout. Was previously at tests/test_all.py where it broke
+`pytest tests/` collection. Use:
+
+    py -3.13 scripts/run_integration_checks.py
 """
 
 import sys

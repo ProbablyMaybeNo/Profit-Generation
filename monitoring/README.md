@@ -47,7 +47,7 @@ Created 2026-04-26 under the user's Personal page (`24ac5770777180bda375eb9ae8e5
 ### 1. Generate report (cron / manual)
 
 ```powershell
-# from D:\AI-Workstation\Antigravity\apps\Trading
+# from D:\AI-Workstation\Antigravity\apps\Profit Generation
 conda run -n trading python -m monitoring.daily_report                    # today, prints markdown
 conda run -n trading python -m monitoring.daily_report 2026-04-26         # specific date
 conda run -n trading python -m monitoring.daily_report --json             # JSON output for downstream

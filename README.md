@@ -15,9 +15,14 @@ conda activate trading
 pip install -r requirements.txt
 ```
 
-## Run tests
+## Run unit tests
 ```
-python tests/test_all.py
+py -3.13 -m pytest tests/
+```
+
+## Run live API smoke tests (requires credentials, places one paper order)
+```
+py -3.13 scripts/run_integration_checks.py
 ```
 
 ## Verify utilities

@@ -25,7 +25,7 @@ Databases to share:
 
 ### 3. Add token to credentials.json
 
-Open `D:\AI-Workstation\Antigravity\apps\Trading\config\credentials.json` and add a `notion` section:
+Open `D:\AI-Workstation\Antigravity\apps\Profit Generation\config\credentials.json` and add a `notion` section:
 
 ```json
 {
@@ -41,7 +41,7 @@ Open `D:\AI-Workstation\Antigravity\apps\Trading\config\credentials.json` and ad
 ### 4. Verify the connection
 
 ```powershell
-cd D:\AI-Workstation\Antigravity\apps\Trading
+cd "D:\AI-Workstation\Antigravity\apps\Profit Generation"
 conda run -n trading python -m monitoring.notion_writer
 ```
 
@@ -52,24 +52,28 @@ If you see a 401, re-check the token. If you see a 404 when posting, the integra
 ### 5. Test the full pipeline manually
 
 ```powershell
-conda run -n trading python -m monitoring.run_daily
+conda run -n trading python -m monitoring.daily_report
 ```
 
-Expected:
-- Writes `logs/daily_reports/<today>.md` and `.json`
-- Logs to `logs/monitoring.log`
-- Posts a new row to **Trading Daily Reports** in Notion
-- Prints `OK posted: https://www.notion.so/...`
+This is the canonical entry point. It:
+- Builds today's snapshot + checks strategy fires
+- Fetches Polygon news for prioritised symbols
+- Persists everything to `data/trading.db` (snapshots, signals, news, daily_reports row)
+- Reconciles outcomes (opens/closes via `outcome_tracker`)
+- Posts to Notion (idempotent — skips if a page already exists for today)
+- Pushes a one-line Telegram summary if `telegram` is configured
+
+Flags: `--no-news`, `--no-notion`, `--no-telegram`, `--news-limit N`
 
 ### 6. Register the scheduled task
 
-Right-click `schedulers\register_daily_report.bat` → **Run as administrator**
+Right-click `schedulers\register_daily.bat` → **Run as administrator**
 
 This creates `TradingSystem\DailyReport` in Task Scheduler:
-- Trigger: weekdays at 09:05 ET
-- Action: runs `schedulers\run_daily_report.bat`
+- Trigger: weekdays at 14:30 PT (≈ 17:30 ET, ~90 min after the close so yfinance has settled today's bar)
+- Action: runs `schedulers\run_daily.bat`
 - Activates conda env `trading`
-- Runs `monitoring/run_daily.py`
+- Runs `monitoring.daily_report` (canonical pipeline)
 
 To verify:
 ```powershell
@@ -84,8 +88,8 @@ schtasks /query /tn "TradingSystem\DailyReport" /fo LIST
 | Pause it | `schtasks /change /tn "TradingSystem\DailyReport" /disable` |
 | Resume | `schtasks /change /tn "TradingSystem\DailyReport" /enable` |
 | Delete | `schtasks /delete /tn "TradingSystem\DailyReport" /f` |
-| Backfill a specific date | `conda run -n trading python -m monitoring.run_daily 2026-04-30` |
-| See last few report logs | `Get-Content D:\AI-Workstation\Antigravity\apps\Trading\logs\monitoring.log -Tail 30` |
+| Backfill a specific date | `conda run -n trading python -m monitoring.daily_report 2026-04-30` |
+| Tail intraday alerts | `Get-Content -Wait "D:\AI-Workstation\Antigravity\apps\Profit Generation\logs\intraday_alerts.log"` |
 
 ## Daily routine
 
@@ -97,6 +101,6 @@ schtasks /query /tn "TradingSystem\DailyReport" /fo LIST
 ## Troubleshooting
 
 - **Scheduled task fires but nothing posts** → check `logs\monitoring.log`. Common cause: integration token missing or DB not shared with integration.
-- **Conda activate fails** → verify miniconda is at `C:\miniconda3\` (default). If installed elsewhere, edit `schedulers\run_daily_report.bat` line 10 to point to the correct `activate.bat`.
+- **Conda activate fails** → `run_daily.bat` invokes the env's `python.exe` directly via `D:\AI-Hub\environments\conda-envs\trading\python.exe`. Edit that path if your conda envs live elsewhere.
 - **yfinance returns no fresh data on weekends** → expected; the report still posts but with the most recent trading day's bars.
-- **Notion post 409 / duplicate** → if the run fires twice for the same day, you'll get two pages. Manually delete one in Notion. Future enhancement: idempotency check before posting.
+- **Notion duplicate** → `daily_report.post_to_notion()` is idempotent (skips if `daily_reports.notion_page_id` is already set for today). To force a re-post, NULL the column manually before running.
