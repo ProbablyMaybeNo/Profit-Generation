@@ -47,9 +47,10 @@ the box.
   - **Acceptance:** scrape Quantocracy's RSS feed, extract linked blog posts, run each through LLM extraction, write UNTESTED records. Same for Quantpedia (curated strategy index). At least 5 strategies extracted from each source per run.
   - **Completed:** 2026-05-15 · commit `019eb99`
 
-- [ ] **2.1.5 Auto-promotion workflow**
+- [x] **2.1.5 Auto-promotion workflow**
   - **Deliverable:** `--promote` flag added to `scripts/validate_strategy.py` AND `scripts/batch_validate.py`. New: `scripts/promote_strategy.py` (helper).
   - **Acceptance:** when verdict is PASS or PASS_WITH_NUANCE, the flag triggers: (1) edit `monitoring/config.py` TRACKED_STRATEGIES list to add the strategy with `active_on=[symbols where it PASSed]` + `compute=<fn_name>`, (2) write `monitoring.intraday_monitor.COMPUTE_FN_MODULES` entry if the strategy lives outside the existing modules, (3) reseed trading.db. Idempotent — re-promoting an already-promoted strategy is a no-op. Dashboard reflects the new active strategy on next refresh. Tests: promotion is reversible via `--demote`, idempotent re-runs, dry-run flag.
+  - **Completed:** 2026-05-15 · commit `223cd29`
 
 - [ ] **2.1.6 Source-attribution & dedupe**
   - **Deliverable:** `scripts/dedupe_records.py` + tests
