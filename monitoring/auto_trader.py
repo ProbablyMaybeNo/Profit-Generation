@@ -31,7 +31,10 @@ from typing import Callable, Dict, List, Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config.utils import get_alpaca_client, is_paper_mode, load_settings, log  # noqa: E402
+from config.utils import (  # noqa: E402
+    get_account_summary, get_alpaca_client, is_paper_mode,
+    load_settings, log,
+)
 from data import db  # noqa: E402
 
 DEFAULT_SETTINGS = {
@@ -44,6 +47,7 @@ DEFAULT_SETTINGS = {
     "skip_intraday_signals": True,
     "entry_time_offset_min": 0,
     "order_type": "market",
+    "sizing_method": "fixed",
 }
 
 ORDER_TYPE_MARKET = "market"
@@ -303,7 +307,9 @@ def _normalize_order_type(raw) -> str:
 def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     *, asof: Optional[date] = None,
                     sleep_fn=None, now_fn=None,
-                    data_client=None) -> dict:
+                    data_client=None,
+                    portfolio_value: Optional[float] = None) -> dict:
+    from monitoring import sizing as sizing_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
     eligible, stats = _is_eligible(conn, sid, settings)
     if not eligible:
@@ -312,10 +318,21 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     if _already_traded(conn, sig["id"], "buy"):
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
-    qty = _calc_qty(sig["close"], float(settings.get("max_position_usd", 1000)))
+    sizing = sizing_mod.compute_notional(
+        conn, sid,
+        sizing_method=settings.get("sizing_method"),
+        portfolio_value=portfolio_value,
+        max_position_usd=float(settings.get("max_position_usd", 1000)),
+    )
+    notional = sizing["notional"]
+    if notional <= 0:
+        return {"action": "SKIP_SIZING_ZERO", "strategy_id": sid, "symbol": sym,
+                "sizing": sizing}
+    qty = _calc_qty(sig["close"], notional)
     if qty < 1:
         return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
-                "price": sig["close"], "max_usd": settings.get("max_position_usd")}
+                "price": sig["close"], "max_usd": settings.get("max_position_usd"),
+                "sizing": sizing}
 
     offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
     target_utc = (
@@ -364,7 +381,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "entry_time_offset_min": offset_min,
                 "order_type": effective_order_type,
                 "limit_price": limit_price,
-                "requested_order_type": requested_order_type}
+                "requested_order_type": requested_order_type,
+                "sizing": sizing}
 
     if target_utc is not None:
         waited = _sleep_until(target_utc, now_fn=now_fn, sleep_fn=sleep_fn)
@@ -417,7 +435,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "entry_time_offset_min": offset_min,
             "order_type": effective_order_type,
             "limit_price": limit_price,
-            "requested_order_type": requested_order_type}
+            "requested_order_type": requested_order_type,
+            "sizing": sizing}
 
 
 def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
@@ -469,6 +488,7 @@ def process_signals(
     sleep_fn=None,
     now_fn=None,
     data_client=None,
+    account_summary_fn: Optional[Callable] = None,
 ) -> dict:
     """Walk today's '1d' signals; submit Alpaca paper market orders per eligibility + dedupe.
 
@@ -497,6 +517,27 @@ def process_signals(
         (asof.isoformat(),),
     ).fetchall()
 
+    # Kelly sizing needs portfolio_value; "fixed" never reads it. Fetch
+    # once per pipeline invocation so all entries see the same number.
+    portfolio_value: Optional[float] = None
+    if str(settings.get("sizing_method") or "").lower() == "kelly":
+        fn = account_summary_fn or (
+            (lambda: get_account_summary()) if not dry_run else None
+        )
+        if fn is None:
+            # Dry-run with kelly + no injected account fn: skip portfolio
+            # lookup and let kelly_notional treat it as missing.
+            portfolio_value = None
+        else:
+            try:
+                acct = fn() or {}
+                pv = acct.get("portfolio_value")
+                portfolio_value = float(pv) if pv is not None else None
+            except Exception as e:
+                log(f"account_summary lookup failed for kelly sizing: {e}",
+                    "WARNING")
+                portfolio_value = None
+
     actions: List[dict] = []
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
@@ -504,6 +545,7 @@ def process_signals(
                 conn, client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
                 data_client=data_client,
+                portfolio_value=portfolio_value,
             ))
         elif sig["signal_type"] == "long_exit":
             actions.append(_process_exit(conn, client, settings, sig, dry_run))
