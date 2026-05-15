@@ -505,6 +505,125 @@ def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
             "order_id": str(order.id), "signal_id": sig["id"]}
 
 
+DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
+
+
+def _max_pct_per_symbol(settings: dict) -> float:
+    """settings.risk.max_pct_per_symbol → float in (0, 1]. Falls back to
+    the default when missing / out of range."""
+    raw = (settings.get("risk") or {}).get("max_pct_per_symbol")
+    if raw is None:
+        raw = settings.get("max_pct_per_symbol")  # back-compat: top-level
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_PCT_PER_SYMBOL
+    if v <= 0 or v > 1.0:
+        return DEFAULT_MAX_PCT_PER_SYMBOL
+    return v
+
+
+def _open_notional_by_symbol(conn) -> Dict[str, float]:
+    """Notional value of currently-open paper positions per symbol."""
+    rows = conn.execute(
+        "SELECT pt.symbol, pt.qty, COALESCE(pt.fill_price, pt.limit_price) AS px "
+        "  FROM paper_trades pt "
+        " WHERE pt.side='buy' "
+        "   AND pt.status IN ('filled', 'partially_filled', 'accepted', 'new') "
+    ).fetchall()
+    out: Dict[str, float] = {}
+    for r in rows:
+        if r["qty"] is None or r["px"] is None:
+            continue
+        # Subtract any matching SELL with later submitted_at? Simpler:
+        # we treat all live BUYs as occupying capital; the sell-paired
+        # filter would require timestamp comparison. For the cap this
+        # over-counts in the worst case (= more conservative), which
+        # is the safe direction.
+        out[r["symbol"]] = out.get(r["symbol"], 0.0) + float(r["qty"]) * float(r["px"])
+    return out
+
+
+def _strategy_sharpe(conn, strategy_id: str) -> float:
+    rows = conn.execute(
+        "SELECT o.return_pct "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        "   AND s.bar_interval='1d' AND s.strategy_id=?",
+        (strategy_id,),
+    ).fetchall()
+    rets = [float(r["return_pct"]) for r in rows]
+    n = len(rets)
+    if n < 2:
+        return 0.0
+    mean = sum(rets) / n
+    sd = statistics.stdev(rets)
+    return (mean / sd) if sd > 0 else 0.0
+
+
+def _concentration_block_map(
+    conn, settings: dict, sigs, *,
+    portfolio_value: Optional[float],
+) -> Dict[int, dict]:
+    """Decide which competing long_entry signals get blocked by the
+    per-symbol concentration cap. Returns {signal_id: skip_action_dict}.
+
+    Rules:
+      - Group today's long_entry signals by symbol.
+      - For each symbol, count the existing open-position notional plus
+        new entries in sharpe-desc order until the cap is hit.
+      - Each rejected entry yields a SKIP_CONCENTRATION_CAP action.
+      - When portfolio_value is unknown, the cap can't be evaluated and
+        no blocks are issued (the upstream pipeline keeps its current
+        behavior).
+    """
+    if not portfolio_value or portfolio_value <= 0:
+        return {}
+    pct = _max_pct_per_symbol(settings)
+    cap = pct * float(portfolio_value)
+    max_position = float(settings.get("max_position_usd", 1000))
+    # When Kelly sizing is in play, the actual notional per entry will be
+    # bounded by both max_position and KELLY_CAP * portfolio_value — using
+    # the smaller of the two avoids over-counting the per-position
+    # footprint when the user has set an aspirational max_position_usd
+    # that Kelly will never actually reach.
+    from monitoring.sizing import KELLY_CAP, normalize_sizing_method
+    if normalize_sizing_method(settings.get("sizing_method")) == "kelly":
+        max_position = min(max_position,
+                            KELLY_CAP * float(portfolio_value))
+
+    by_symbol: Dict[str, List] = {}
+    for s in sigs:
+        if s["signal_type"] != "long_entry":
+            continue
+        by_symbol.setdefault(s["symbol"], []).append(s)
+
+    open_notional = _open_notional_by_symbol(conn)
+    blocks: Dict[int, dict] = {}
+    for sym, entries in by_symbol.items():
+        used = open_notional.get(sym, 0.0)
+        ranked = sorted(
+            entries,
+            key=lambda s: (-_strategy_sharpe(conn, s["strategy_id"]),
+                            s["strategy_id"]),
+        )
+        for ent in ranked:
+            if used + max_position > cap + 1e-6:
+                blocks[ent["id"]] = {
+                    "action": "SKIP_CONCENTRATION_CAP",
+                    "strategy_id": ent["strategy_id"],
+                    "symbol": sym,
+                    "signal_id": ent["id"],
+                    "cap_usd": round(cap, 2),
+                    "used_usd": round(used, 2),
+                    "next_position_usd": round(max_position, 2),
+                    "max_pct_per_symbol": pct,
+                }
+                continue
+            used += max_position
+    return blocks
+
+
 def _maybe_attach_stop(
     conn, client, settings: dict, sig,
     *, entry_fill: float, qty: int,
@@ -635,30 +754,39 @@ def process_signals(
         (asof.isoformat(),),
     ).fetchall()
 
-    # Kelly sizing needs portfolio_value; "fixed" never reads it. Fetch
-    # once per pipeline invocation so all entries see the same number.
+    # portfolio_value is needed by Kelly sizing AND by the per-symbol
+    # concentration cap. We fetch it once per pipeline invocation so both
+    # consumers see the same number; "fixed" sizing without a configured
+    # cap (= 0/None pct) silently skips the call when no account_summary_fn
+    # is provided.
+    needs_kelly = str(settings.get("sizing_method") or "").lower() == "kelly"
+    has_cap_setting = (settings.get("risk") or {}).get("max_pct_per_symbol") \
+        is not None or "max_pct_per_symbol" in settings
     portfolio_value: Optional[float] = None
-    if str(settings.get("sizing_method") or "").lower() == "kelly":
+    if needs_kelly or has_cap_setting:
         fn = account_summary_fn or (
             (lambda: get_account_summary()) if not dry_run else None
         )
-        if fn is None:
-            # Dry-run with kelly + no injected account fn: skip portfolio
-            # lookup and let kelly_notional treat it as missing.
-            portfolio_value = None
-        else:
+        if fn is not None:
             try:
                 acct = fn() or {}
                 pv = acct.get("portfolio_value")
                 portfolio_value = float(pv) if pv is not None else None
             except Exception as e:
-                log(f"account_summary lookup failed for kelly sizing: {e}",
-                    "WARNING")
+                log(f"account_summary lookup failed: {e}", "WARNING")
                 portfolio_value = None
+
+    concentration_blocks = _concentration_block_map(
+        conn, settings, sigs, portfolio_value=portfolio_value,
+    )
 
     actions: List[dict] = []
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
+            block = concentration_blocks.get(sig["id"])
+            if block is not None:
+                actions.append(block)
+                continue
             actions.append(_process_entry(
                 conn, client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
