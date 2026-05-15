@@ -472,3 +472,181 @@ def test_offset_negative_clamped_to_zero(isolated_db, winner_settings, stub_subm
     actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
     assert actions[0]["entry_time_offset_min"] == 0
     assert actions[0]["target_execution_utc"] is None
+
+
+# ----- order_type / limit_inside_spread (2.3.2) -----
+
+def test_normalize_order_type_default_market():
+    assert at._normalize_order_type(None) == "market"
+    assert at._normalize_order_type("") == "market"
+    assert at._normalize_order_type("market") == "market"
+    assert at._normalize_order_type("MARKET") == "market"
+
+
+def test_normalize_order_type_limit():
+    assert at._normalize_order_type("limit_inside_spread") == "limit_inside_spread"
+    assert at._normalize_order_type("LIMIT_INSIDE_SPREAD") == "limit_inside_spread"
+
+
+def test_normalize_order_type_unknown_falls_back():
+    assert at._normalize_order_type("limit") == "market"
+    assert at._normalize_order_type("crazy_type") == "market"
+
+
+def test_mid_price_math():
+    assert at._mid_price(99.0, 101.0) == 100.0
+    assert at._mid_price(50.0, 50.5) == 50.25
+    assert at._mid_price(None, 100.0) is None
+    assert at._mid_price(99.0, None) is None
+    assert at._mid_price(0, 100.0) is None
+    assert at._mid_price(101.0, 100.0) is None  # crossed
+
+
+def test_fetch_latest_quote_extracts_bid_ask():
+    quote = MagicMock()
+    quote.bid_price = 99.5
+    quote.ask_price = 100.5
+    data_client = MagicMock()
+    data_client.get_stock_latest_quote.return_value = {"GDX": quote}
+    bid, ask = at._fetch_latest_quote("GDX", data_client=data_client)
+    assert bid == 99.5
+    assert ask == 100.5
+
+
+def test_fetch_latest_quote_handles_missing_fields():
+    quote = MagicMock()
+    quote.bid_price = 0
+    quote.ask_price = 100.0
+    data_client = MagicMock()
+    data_client.get_stock_latest_quote.return_value = {"GDX": quote}
+    bid, ask = at._fetch_latest_quote("GDX", data_client=data_client)
+    assert bid is None and ask is None
+
+
+def test_fetch_latest_quote_returns_none_on_exception():
+    data_client = MagicMock()
+    data_client.get_stock_latest_quote.side_effect = RuntimeError("api down")
+    bid, ask = at._fetch_latest_quote("GDX", data_client=data_client)
+    assert (bid, ask) == (None, None)
+
+
+def _stub_data_client(bid: float, ask: float):
+    quote = MagicMock()
+    quote.bid_price = bid
+    quote.ask_price = ask
+    data_client = MagicMock()
+    data_client.get_stock_latest_quote.return_value = {"GDX": quote}
+    return data_client
+
+
+def test_limit_inside_spread_submits_at_mid(
+    isolated_db, winner_settings, monkeypatch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    submitted_limits = []
+    submitted_markets = []
+    def fake_limit(client, *, symbol, qty, side, limit_price,
+                   client_order_id=None):
+        submitted_limits.append({"symbol": symbol, "qty": qty,
+                                  "limit_price": limit_price,
+                                  "client_order_id": client_order_id})
+        order = MagicMock()
+        order.id = "lim-1"
+        order.status = "accepted"
+        order.submitted_at = "2026-05-14T14:00:00Z"
+        order.filled_avg_price = 99.95
+        return order
+    def fake_market(*a, **kw):
+        submitted_markets.append(kw)
+        raise AssertionError("should not hit market path")
+    monkeypatch.setattr(at, "_submit_limit_order", fake_limit)
+    monkeypatch.setattr(at, "_submit_market_order", fake_market)
+
+    settings = {**winner_settings, "dry_run": False,
+                "order_type": "limit_inside_spread"}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+        client=_mk_client(), data_client=_stub_data_client(99.5, 100.5),
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "BUY"
+    assert actions[0]["order_type"] == "limit_inside_spread"
+    assert actions[0]["limit_price"] == 100.0
+    assert submitted_limits[0]["limit_price"] == 100.0
+    assert submitted_markets == []
+    # Paper-trades row carries limit_price + fill_price.
+    rows = conn.execute("SELECT * FROM paper_trades").fetchall()
+    assert rows[0]["order_type"] == "limit_inside_spread"
+    assert rows[0]["limit_price"] == 100.0
+    assert rows[0]["fill_price"] == pytest.approx(99.95)
+
+
+def test_limit_inside_spread_falls_back_to_market_when_no_quote(
+    isolated_db, winner_settings, stub_submit, monkeypatch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    def boom_limit(*a, **kw):
+        raise AssertionError("should not hit limit path")
+    monkeypatch.setattr(at, "_submit_limit_order", boom_limit)
+    # data_client raises → no quote available.
+    data_client = MagicMock()
+    data_client.get_stock_latest_quote.side_effect = RuntimeError("no data")
+    settings = {**winner_settings, "dry_run": False,
+                "order_type": "limit_inside_spread"}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+        client=_mk_client(), data_client=data_client,
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "BUY"
+    assert actions[0]["order_type"] == "market"
+    assert actions[0]["requested_order_type"] == "limit_inside_spread"
+    assert actions[0]["limit_price"] is None
+    # Market path actually invoked.
+    assert ("GDX", 14, "buy") in stub_submit
+
+
+def test_market_is_default_and_does_not_fetch_quote(
+    isolated_db, winner_settings, stub_submit,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    data_client = MagicMock()
+    settings = {**winner_settings, "dry_run": False}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+        client=_mk_client(), data_client=data_client,
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "BUY"
+    assert actions[0]["order_type"] == "market"
+    assert actions[0]["limit_price"] is None
+    # The data client was never invoked.
+    data_client.get_stock_latest_quote.assert_not_called()
+
+
+def test_dry_run_with_limit_inside_spread_reports_limit_price(
+    isolated_db, winner_settings,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    settings = {**winner_settings, "dry_run": True,
+                "order_type": "limit_inside_spread"}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+        data_client=_stub_data_client(99.5, 100.5),
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "DRY_BUY"
+    assert actions[0]["order_type"] == "limit_inside_spread"
+    assert actions[0]["limit_price"] == 100.0

@@ -43,7 +43,12 @@ DEFAULT_SETTINGS = {
     "max_position_usd": 1000,
     "skip_intraday_signals": True,
     "entry_time_offset_min": 0,
+    "order_type": "market",
 }
+
+ORDER_TYPE_MARKET = "market"
+ORDER_TYPE_LIMIT_INSIDE_SPREAD = "limit_inside_spread"
+SUPPORTED_ORDER_TYPES = {ORDER_TYPE_MARKET, ORDER_TYPE_LIMIT_INSIDE_SPREAD}
 
 # US Eastern offset relative to UTC during market hours. The auto-trader
 # only operates on EOD '1d' fires so we don't need precise DST handling
@@ -217,9 +222,88 @@ def _submit_market_order(
     return client.submit_order(req)
 
 
+def _submit_limit_order(
+    client, *, symbol: str, qty: int, side: str, limit_price: float,
+    client_order_id: Optional[str] = None,
+):
+    from alpaca.trading.requests import LimitOrderRequest
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    kwargs = dict(
+        symbol=symbol, qty=qty,
+        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
+        time_in_force=TimeInForce.DAY,
+        limit_price=limit_price,
+    )
+    if client_order_id:
+        kwargs["client_order_id"] = client_order_id
+    req = LimitOrderRequest(**kwargs)
+    return client.submit_order(req)
+
+
+def _get_data_client():
+    """Build a Stock data client lazily so callers without market-data
+    permissions never pay the import cost."""
+    from alpaca.data.historical import StockHistoricalDataClient
+    from config.utils import load_credentials
+    creds = load_credentials("alpaca")
+    return StockHistoricalDataClient(creds["api_key"], creds["secret_key"])
+
+
+def _build_quote_request(symbol: str):
+    """Constructed lazily so the alpaca-py import only happens when the
+    real fetch path is exercised; tests that inject a MagicMock data
+    client never need the SDK installed."""
+    from alpaca.data.requests import StockLatestQuoteRequest
+    return StockLatestQuoteRequest(symbol_or_symbols=symbol)
+
+
+def _fetch_latest_quote(symbol: str, data_client=None) -> tuple:
+    """Return (bid, ask) for `symbol`. Returns (None, None) on any
+    failure — caller decides how to fall back."""
+    try:
+        if data_client is None:
+            data_client = _get_data_client()
+        try:
+            req = _build_quote_request(symbol)
+        except ImportError:
+            # alpaca-py isn't installed; let the mock test path through
+            # by passing the bare symbol — production hits the import.
+            req = symbol
+        resp = data_client.get_stock_latest_quote(req)
+        quote = resp.get(symbol) if hasattr(resp, "get") else resp[symbol]
+        bid = float(getattr(quote, "bid_price", 0) or 0)
+        ask = float(getattr(quote, "ask_price", 0) or 0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return (None, None)
+        return (bid, ask)
+    except Exception as e:
+        log(f"latest quote fetch failed for {symbol}: {e}", "WARNING")
+        return (None, None)
+
+
+def _mid_price(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
+    if bid is None or ask is None:
+        return None
+    if bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    return round((bid + ask) / 2.0, 4)
+
+
+def _normalize_order_type(raw) -> str:
+    """Coerce settings.order_type to a known string. Unknown → market."""
+    if not raw:
+        return ORDER_TYPE_MARKET
+    v = str(raw).lower().strip()
+    if v in SUPPORTED_ORDER_TYPES:
+        return v
+    log(f"unknown order_type {raw!r}; falling back to market", "WARNING")
+    return ORDER_TYPE_MARKET
+
+
 def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     *, asof: Optional[date] = None,
-                    sleep_fn=None, now_fn=None) -> dict:
+                    sleep_fn=None, now_fn=None,
+                    data_client=None) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
     eligible, stats = _is_eligible(conn, sid, settings)
     if not eligible:
@@ -243,18 +327,44 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         bar_ts=sig["bar_ts"], target_utc=target_utc,
     )
 
+    requested_order_type = _normalize_order_type(settings.get("order_type"))
+    limit_price: Optional[float] = None
+    effective_order_type = ORDER_TYPE_MARKET
+    if requested_order_type == ORDER_TYPE_LIMIT_INSIDE_SPREAD:
+        bid, ask = _fetch_latest_quote(sym, data_client=data_client)
+        mid = _mid_price(bid, ask)
+        if mid is None:
+            log(
+                f"limit_inside_spread for {sid}/{sym}: no usable quote "
+                f"(bid={bid}, ask={ask}); falling back to market",
+                "WARNING",
+            )
+            effective_order_type = ORDER_TYPE_MARKET
+        else:
+            limit_price = mid
+            effective_order_type = ORDER_TYPE_LIMIT_INSIDE_SPREAD
+
     if dry_run:
         offset_note = (
             f" (would sleep until {target_utc.isoformat()})"
             if target_utc is not None else ""
         )
+        ot_note = (
+            f" [limit @ ${limit_price:.4f}]"
+            if effective_order_type == ORDER_TYPE_LIMIT_INSIDE_SPREAD
+            else ""
+        )
         log(f"[DRY-RUN] BUY {qty} {sym} @ ~${sig['close']:.2f} "
-            f"(~${qty * sig['close']:.2f}) for {sid}{offset_note}", "INFO")
+            f"(~${qty * sig['close']:.2f}) for {sid}{ot_note}{offset_note}",
+            "INFO")
         return {"action": "DRY_BUY", "strategy_id": sid, "symbol": sym,
                 "qty": qty, "price": sig["close"], "signal_id": sig["id"],
                 "client_order_id": client_order_id,
                 "target_execution_utc": target_utc.isoformat() if target_utc else None,
-                "entry_time_offset_min": offset_min}
+                "entry_time_offset_min": offset_min,
+                "order_type": effective_order_type,
+                "limit_price": limit_price,
+                "requested_order_type": requested_order_type}
 
     if target_utc is not None:
         waited = _sleep_until(target_utc, now_fn=now_fn, sleep_fn=sleep_fn)
@@ -266,10 +376,17 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             )
 
     try:
-        order = _submit_market_order(
-            client, symbol=sym, qty=qty, side="buy",
-            client_order_id=client_order_id,
-        )
+        if effective_order_type == ORDER_TYPE_LIMIT_INSIDE_SPREAD:
+            order = _submit_limit_order(
+                client, symbol=sym, qty=qty, side="buy",
+                limit_price=limit_price,
+                client_order_id=client_order_id,
+            )
+        else:
+            order = _submit_market_order(
+                client, symbol=sym, qty=qty, side="buy",
+                client_order_id=client_order_id,
+            )
     except Exception as e:
         log(f"order submit failed for {sid}/{sym}: {e}", "ERROR")
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
@@ -279,18 +396,28 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         "alpaca_order_id": str(getattr(order, "id", "")),
         "signal_id": sig["id"],
         "strategy_id": sid, "symbol": sym, "side": "buy", "qty": qty,
-        "order_type": "market",
+        "order_type": effective_order_type,
+        "limit_price": limit_price,
+        "fill_price": float(getattr(order, "filled_avg_price", 0) or 0) or None,
         "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
         "status": str(getattr(order, "status", "submitted")),
         "notes": f"auto-entry on bar_ts={sig['bar_ts']}"
-                 + (f"; client_order_id={client_order_id}" if offset_min > 0 else ""),
+                 + (f"; client_order_id={client_order_id}" if offset_min > 0 else "")
+                 + (f"; limit_inside_spread @ ${limit_price}" if limit_price else ""),
     })
-    log(f"BUY {qty} {sym} order submitted: {order.id}", "SUCCESS")
+    log(
+        f"BUY {qty} {sym} order submitted: {order.id} "
+        f"({effective_order_type})",
+        "SUCCESS",
+    )
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
             "order_id": str(order.id), "signal_id": sig["id"],
             "client_order_id": client_order_id,
             "target_execution_utc": target_utc.isoformat() if target_utc else None,
-            "entry_time_offset_min": offset_min}
+            "entry_time_offset_min": offset_min,
+            "order_type": effective_order_type,
+            "limit_price": limit_price,
+            "requested_order_type": requested_order_type}
 
 
 def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
@@ -341,6 +468,7 @@ def process_signals(
     client_factory: Callable = get_alpaca_client,
     sleep_fn=None,
     now_fn=None,
+    data_client=None,
 ) -> dict:
     """Walk today's '1d' signals; submit Alpaca paper market orders per eligibility + dedupe.
 
@@ -375,6 +503,7 @@ def process_signals(
             actions.append(_process_entry(
                 conn, client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
+                data_client=data_client,
             ))
         elif sig["signal_type"] == "long_exit":
             actions.append(_process_exit(conn, client, settings, sig, dry_run))
