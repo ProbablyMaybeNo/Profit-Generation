@@ -515,6 +515,69 @@ def _spawn_trigger(trigger_id: str) -> dict:
     return meta
 
 
+def _state_equity_curve(conn, strategy_id: str) -> dict:
+    """Return per-strategy cumulative-return points and drawdown overlay.
+
+    Pulls closed outcomes for the strategy (bar_interval='1d' only,
+    matching the strategy_edge card), orders chronologically by exit_ts,
+    builds cumulative return as sum of per-trade return_pct, and
+    derives drawdown as (cum - running_max).
+    Result shape:
+      {
+        "strategy_id": "...",
+        "points": [{"date": "YYYY-MM-DD", "cum_pct": float,
+                    "drawdown_pct": float, "trade_pct": float}, ...],
+        "n_trades": int,
+        "final_pct": float,
+        "max_drawdown_pct": float,
+      }
+    Empty for unknown strategies / zero outcomes.
+    """
+    rows = conn.execute(
+        "SELECT o.exit_ts, o.return_pct "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status = 'closed' AND o.return_pct IS NOT NULL "
+        "   AND s.strategy_id = ? AND s.bar_interval = '1d' "
+        " ORDER BY o.exit_ts ASC, o.signal_id ASC",
+        (strategy_id,),
+    ).fetchall()
+    points: list = []
+    cum = 0.0
+    running_max = 0.0
+    max_dd = 0.0
+    for r in rows:
+        ret = float(r["return_pct"])
+        cum += ret
+        if cum > running_max:
+            running_max = cum
+        dd = cum - running_max  # <= 0
+        if dd < max_dd:
+            max_dd = dd
+        exit_ts = r["exit_ts"] or ""
+        points.append({
+            "date": exit_ts[:10],
+            "cum_pct": round(cum, 4),
+            "drawdown_pct": round(dd, 4),
+            "trade_pct": round(ret, 4),
+        })
+    return {
+        "strategy_id": strategy_id,
+        "points": points,
+        "n_trades": len(points),
+        "final_pct": round(cum, 4) if points else 0.0,
+        "max_drawdown_pct": round(max_dd, 4) if points else 0.0,
+    }
+
+
+@app.route("/api/equity_curve/<strategy_id>", methods=["GET"])
+def equity_curve(strategy_id: str):
+    conn = db.init_db()
+    try:
+        return jsonify(_state_equity_curve(conn, strategy_id))
+    finally:
+        conn.close()
+
+
 @app.route("/api/guide/<name>", methods=["GET"])
 def get_guide(name: str):
     """Serve a markdown guide as plain text. Whitelist enforced."""
