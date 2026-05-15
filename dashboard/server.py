@@ -591,6 +591,17 @@ def edge_slices():
         conn.close()
 
 
+@app.route("/api/strategy_correlation", methods=["GET"])
+def strategy_correlation():
+    """Pairwise daily-P&L correlation between active strategies."""
+    from monitoring import strategy_correlation as sc
+    conn = db.init_db()
+    try:
+        return jsonify(sc.compute_strategy_correlation(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/guide/<name>", methods=["GET"])
 def get_guide(name: str):
     """Serve a markdown guide as plain text. Whitelist enforced."""

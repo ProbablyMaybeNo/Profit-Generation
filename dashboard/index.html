@@ -274,6 +274,26 @@
   .curve-modal-body svg.curve-full path.dd { fill: rgba(255,68,85,0.16); stroke: var(--red-dim); stroke-width: 0.5; }
   .curve-modal-body svg.curve-full line.axis { stroke: var(--dimmer); stroke-width: 0.5; }
   .curve-modal-body svg.curve-full text.axis-label { fill: var(--dim); font-size: 10px; font-family: var(--font); }
+  /* Correlation heatmap */
+  svg.corr-heatmap { width: 100%; max-width: 720px; height: auto; display: block; }
+  svg.corr-heatmap text.cell-text {
+    fill: var(--text-hi);
+    font-size: 9px;
+    font-family: var(--font);
+    pointer-events: none;
+  }
+  svg.corr-heatmap text.row-label,
+  svg.corr-heatmap text.col-label {
+    fill: var(--text);
+    font-size: 11px;
+    font-family: var(--font);
+  }
+  .corr-footer { margin-top: 14px; font-size: 12px; }
+  .corr-footer.dim { color: var(--dim); }
+  .corr-footer .corr-label { color: var(--dim); margin-bottom: 4px; }
+  .corr-footer ul { list-style: none; padding: 0; }
+  .corr-footer li { padding: 2px 0; color: var(--text); }
+
   /* Edge slices */
   .slice-section { margin-bottom: 18px; }
   .slice-section:last-child { margin-bottom: 0; }
@@ -688,6 +708,12 @@
   <div class="card">
     <h2>edge slices — strategy × condition <span class="count" id="slices-count"></span></h2>
     <div id="edge-slices" class="loading">loading...</div>
+  </div>
+
+  <!-- Strategy correlation -->
+  <div class="card">
+    <h2>strategy correlation — daily P&amp;L <span class="count" id="corr-count"></span></h2>
+    <div id="strategy-correlation" class="loading">loading...</div>
   </div>
 
   <!-- Open positions -->
@@ -1360,6 +1386,88 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeCurveModal();
 });
 
+function corrColor(c) {
+  // Continuous gradient — red (negative) → grey (zero) → green (positive).
+  const r = Math.max(-1, Math.min(1, c));
+  if (r >= 0) {
+    // 0 → grey; 1 → green
+    const g = 30 + Math.round(r * 170);  // 30..200
+    const rr = Math.round(70 - r * 50);  // 70..20
+    const bb = Math.round(70 - r * 50);
+    return `rgb(${rr}, ${g}, ${bb})`;
+  }
+  const ar = Math.abs(r);
+  const rr = 60 + Math.round(ar * 150);  // 60..210
+  const gg = Math.round(50 - ar * 40);  // 50..10
+  const bb = Math.round(60 - ar * 40);
+  return `rgb(${rr}, ${gg}, ${bb})`;
+}
+
+function renderStrategyCorrelation() {
+  const el = document.getElementById('strategy-correlation');
+  fetch('/api/strategy_correlation', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+    .then(c => {
+      const count = document.getElementById('corr-count');
+      count.textContent = `${c.n_strategies} strats · ${c.n_dates} dates`;
+      if (!c.n_strategies) {
+        el.innerHTML = '<div class="empty">no active strategies with closed outcomes.</div>';
+        return;
+      }
+      const labels = c.strategies.map(shortStrat);
+      const n = c.n_strategies;
+      const cell = Math.max(18, Math.min(40, Math.floor(420 / Math.max(n, 1))));
+      const labelW = 130, labelH = 70;
+      const W = labelW + cell * n + 8;
+      const H = labelH + cell * n + 8;
+      let svg = `<svg class="corr-heatmap" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+      // Cells
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+          const v = c.matrix[i][j];
+          const x = labelW + j * cell;
+          const y = labelH + i * cell;
+          const stroke = Math.abs(v) >= c.redundancy_threshold && i !== j ? 'var(--red)' : 'var(--grid)';
+          const sw = Math.abs(v) >= c.redundancy_threshold && i !== j ? 1.2 : 0.5;
+          svg += `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${corrColor(v)}" stroke="${stroke}" stroke-width="${sw}">
+            <title>${escapeHtml(labels[i])} × ${escapeHtml(labels[j])}: ${v.toFixed(3)}</title>
+          </rect>`;
+          if (cell >= 28) {
+            svg += `<text x="${x + cell / 2}" y="${y + cell / 2 + 3}" class="cell-text" text-anchor="middle">${v.toFixed(2)}</text>`;
+          }
+        }
+      }
+      // Row labels (left)
+      for (let i = 0; i < n; i++) {
+        svg += `<text x="${labelW - 6}" y="${labelH + i * cell + cell / 2 + 3}" class="row-label" text-anchor="end">${escapeHtml(labels[i])}</text>`;
+      }
+      // Column labels (top, rotated)
+      for (let j = 0; j < n; j++) {
+        const cx = labelW + j * cell + cell / 2;
+        const cy = labelH - 6;
+        svg += `<text x="${cx}" y="${cy}" class="col-label" text-anchor="end" transform="rotate(-50 ${cx} ${cy})">${escapeHtml(labels[j])}</text>`;
+      }
+      svg += '</svg>';
+
+      let footer = '';
+      if (c.redundant_pairs.length) {
+        const items = c.redundant_pairs
+          .map(p => `<li>${escapeHtml(shortStrat(p.a))} ↔ ${escapeHtml(shortStrat(p.b))}: <span class="${p.corr >= 0 ? 'pos' : 'neg'}">${p.corr.toFixed(2)}</span></li>`)
+          .join('');
+        footer = `<div class="corr-footer">
+          <div class="corr-label">redundant pairs (|r| ≥ ${c.redundancy_threshold.toFixed(2)}):</div>
+          <ul>${items}</ul>
+        </div>`;
+      } else {
+        footer = `<div class="corr-footer dim">no redundant pairs above |r| ≥ ${c.redundancy_threshold.toFixed(2)}.</div>`;
+      }
+      el.innerHTML = svg + footer;
+    })
+    .catch(e => {
+      el.innerHTML = `<div class="empty">correlation fetch failed: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
 function renderEdgeSlices() {
   const el = document.getElementById('edge-slices');
   fetch('/api/edge_slices', { cache: 'no-store' })
@@ -1537,6 +1645,7 @@ async function refresh() {
     renderEdge(s);
     renderEquityCurves(s);
     renderEdgeSlices();
+    renderStrategyCorrelation();
     renderOpenPositions(s);
     renderPaperTrades(s);
     renderSignals(s);
