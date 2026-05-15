@@ -319,6 +319,105 @@
   .interval-pill.intraday { color: var(--amber); border-color: var(--amber); }
   .interval-pill.tv       { color: var(--blue);  border-color: var(--blue); }
 
+  /* Guide button + slide-out panel */
+  .guide-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+  .guide-btn:hover { border-color: var(--green); }
+  .guide-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    opacity: 0; pointer-events: none;
+    transition: opacity 180ms ease;
+    z-index: 999;
+  }
+  .guide-overlay.open { opacity: 1; pointer-events: auto; }
+  .guide-panel {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 720px; max-width: 92vw;
+    background: var(--surface);
+    border-left: 1px solid var(--green-dim);
+    box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+    transform: translateX(100%);
+    transition: transform 220ms ease;
+    z-index: 1000;
+    display: flex; flex-direction: column;
+  }
+  .guide-panel.open { transform: translateX(0); }
+  .guide-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    color: var(--green);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--surface-2);
+  }
+  .guide-close {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text); cursor: pointer;
+    font-size: 18px; line-height: 1;
+    width: 28px; height: 28px;
+    font-family: var(--font);
+  }
+  .guide-close:hover { border-color: var(--red); color: var(--red); }
+  .guide-body {
+    overflow-y: auto;
+    padding: 18px 22px 60px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .guide-body h1 { font-size: 18px; color: var(--green); margin: 18px 0 10px; font-weight: 600; }
+  .guide-body h2 { font-size: 15px; color: var(--text-hi); margin: 22px 0 8px;
+                   border-bottom: 1px dashed var(--border); padding-bottom: 4px; }
+  .guide-body h3 { font-size: 13px; color: var(--amber); margin: 14px 0 6px; }
+  .guide-body p { margin: 6px 0 10px; }
+  .guide-body ul, .guide-body ol { margin: 6px 0 10px 22px; }
+  .guide-body li { margin: 3px 0; }
+  .guide-body code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    padding: 0 4px;
+    font-size: 12px;
+  }
+  .guide-body pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 12px;
+    margin: 8px 0;
+  }
+  .guide-body pre code { background: none; border: none; padding: 0; }
+  .guide-body table {
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-size: 12.5px;
+    width: 100%;
+  }
+  .guide-body th, .guide-body td {
+    border: 1px solid var(--grid);
+    padding: 5px 9px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .guide-body th { background: var(--surface-2); color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+  .guide-body strong { color: var(--text-hi); }
+  .guide-body em { color: var(--amber); font-style: normal; }
+  .guide-body a { color: var(--blue); text-decoration: none; }
+  .guide-body a:hover { color: var(--green); text-decoration: underline; }
+  .guide-body hr { border: none; border-top: 1px dashed var(--border); margin: 16px 0; }
+
   /* Auto-trader control card */
   #control-card.live { border-color: var(--red); box-shadow: inset 0 0 0 1px rgba(255,68,85,0.2); }
   #control-card.dry  { border-color: var(--amber); }
@@ -417,10 +516,21 @@
   <header>
     <h1>profit generation</h1>
     <div class="meta">
+      <button class="guide-btn" onclick="openGuide('tradingview')" title="Open TradingView guide">📖 TV Guide</button>
       <span id="market-status"><span class="dot warn"></span><span class="loading">checking...</span></span>
       <span class="now" id="now">—</span>
     </div>
   </header>
+
+  <!-- Guide slide-out panel (right side) -->
+  <div class="guide-overlay" id="guide-overlay" onclick="closeGuide(event)"></div>
+  <aside class="guide-panel" id="guide-panel" aria-hidden="true">
+    <div class="guide-head">
+      <span id="guide-title">Guide</span>
+      <button class="guide-close" onclick="closeGuide()" title="Close (Esc)">×</button>
+    </div>
+    <div class="guide-body" id="guide-body">loading…</div>
+  </aside>
 
   <!-- ACTION QUEUE — what to do RIGHT NOW -->
   <div class="card action-card">
@@ -523,6 +633,146 @@ function escapeHtml(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// ---------- minimal markdown → HTML renderer (no external deps) ----------
+function renderMarkdown(md) {
+  // Inline pass: code → strong → em → links. Run on text, not raw HTML.
+  function inline(text) {
+    let out = escapeHtml(text);
+    out = out.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+                       (_m, t, u) => `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${t}</a>`);
+    return out;
+  }
+
+  const lines = md.split(/\r?\n/);
+  const html = [];
+  let i = 0;
+  let inUL = false, inOL = false;
+
+  function closeLists() {
+    if (inUL) { html.push('</ul>'); inUL = false; }
+    if (inOL) { html.push('</ol>'); inOL = false; }
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const stripped = line.trim();
+
+    // Code fences
+    if (stripped.startsWith('```')) {
+      closeLists();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        buf.push(escapeHtml(lines[i]));
+        i++;
+      }
+      i++;  // skip closing fence
+      html.push(`<pre><code>${buf.join('\n')}</code></pre>`);
+      continue;
+    }
+
+    // Tables: at least one |, with the row below being separator like |---|---|
+    if (stripped.startsWith('|') && stripped.endsWith('|')
+        && i + 1 < lines.length && /^\|[\s\-|:]+\|$/.test(lines[i + 1].trim())) {
+      closeLists();
+      const headerCells = stripped.slice(1, -1).split('|').map(c => c.trim());
+      i += 2;  // skip header + separator
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')
+             && lines[i].trim().endsWith('|')) {
+        rows.push(lines[i].trim().slice(1, -1).split('|').map(c => c.trim()));
+        i++;
+      }
+      let t = '<table><thead><tr>';
+      for (const h of headerCells) t += `<th>${inline(h)}</th>`;
+      t += '</tr></thead><tbody>';
+      for (const r of rows) {
+        t += '<tr>';
+        for (const c of r) t += `<td>${inline(c)}</td>`;
+        t += '</tr>';
+      }
+      t += '</tbody></table>';
+      html.push(t);
+      continue;
+    }
+
+    if (stripped === '') { closeLists(); i++; continue; }
+    if (stripped === '---') { closeLists(); html.push('<hr>'); i++; continue; }
+
+    let m;
+    if ((m = stripped.match(/^(#{1,6})\s+(.*)/))) {
+      closeLists();
+      const level = Math.min(m[1].length, 6);
+      html.push(`<h${level}>${inline(m[2])}</h${level}>`);
+      i++; continue;
+    }
+    if ((m = stripped.match(/^[-*]\s+(.*)/))) {
+      if (!inUL) { closeLists(); html.push('<ul>'); inUL = true; }
+      html.push(`<li>${inline(m[1])}</li>`);
+      i++; continue;
+    }
+    if ((m = stripped.match(/^\d+\.\s+(.*)/))) {
+      if (!inOL) { closeLists(); html.push('<ol>'); inOL = true; }
+      html.push(`<li>${inline(m[1])}</li>`);
+      i++; continue;
+    }
+
+    // Default: paragraph (gather contiguous non-blank lines)
+    closeLists();
+    const buf = [stripped];
+    i++;
+    while (i < lines.length && lines[i].trim() !== ''
+           && !lines[i].trim().match(/^(#{1,6}\s|[-*]\s|\d+\.\s|```|---|\|)/)) {
+      buf.push(lines[i].trim());
+      i++;
+    }
+    html.push(`<p>${inline(buf.join(' '))}</p>`);
+  }
+  closeLists();
+  return html.join('\n');
+}
+
+// ---------- guide panel open/close ----------
+async function openGuide(name) {
+  document.getElementById('guide-title').textContent = name + ' guide';
+  document.getElementById('guide-body').innerHTML = '<em>loading…</em>';
+  document.getElementById('guide-overlay').classList.add('open');
+  document.getElementById('guide-panel').classList.add('open');
+  document.getElementById('guide-panel').setAttribute('aria-hidden', 'false');
+  try {
+    const r = await fetch(`/api/guide/${encodeURIComponent(name)}`, { cache: 'no-store' });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || ('http ' + r.status));
+    }
+    const md = await r.text();
+    document.getElementById('guide-body').innerHTML = renderMarkdown(md);
+    document.getElementById('guide-body').scrollTop = 0;
+  } catch (e) {
+    document.getElementById('guide-body').innerHTML =
+      `<p style="color:var(--red)">failed to load: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function closeGuide(ev) {
+  if (ev && ev.target && ev.target.id !== 'guide-overlay'
+      && !ev.currentTarget.classList.contains('guide-close')
+      && ev.type === 'click') {
+    // Click was inside something — only close if it was on overlay or close button
+    if (ev.target.id !== 'guide-overlay' && ev.currentTarget.tagName !== 'BUTTON') return;
+  }
+  document.getElementById('guide-overlay').classList.remove('open');
+  document.getElementById('guide-panel').classList.remove('open');
+  document.getElementById('guide-panel').setAttribute('aria-hidden', 'true');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeGuide();
+});
 
 function tvLink(symbol, label='↗ TV') {
   return `<a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}" target="_blank" class="tv-link">${label}</a>`;

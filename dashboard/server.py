@@ -32,7 +32,14 @@ LOG_DIR = ROOT / "logs"
 HEARTBEAT_LOG = LOG_DIR / "heartbeat.log"
 INTRADAY_LOG = LOG_DIR / "intraday_alerts.log"
 DATA_DIR = ROOT / "data"
+DOCS_DIR = ROOT / "docs"
 SETTINGS_FILE = ROOT / "config" / "settings.json"
+
+# Whitelist of guides exposed to the UI. Anything not in here returns 404 —
+# prevents path traversal AND keeps the panel's chooser well-defined.
+GUIDES = {
+    "tradingview": "TRADINGVIEW_GUIDE.md",
+}
 
 # Only these keys are mutable via the toggle endpoint. Everything else has to
 # go through editing settings.json directly (deliberate friction).
@@ -506,6 +513,30 @@ def _spawn_trigger(trigger_id: str) -> dict:
     }
     _LAST_TRIGGERED[trigger_id] = meta
     return meta
+
+
+@app.route("/api/guide/<name>", methods=["GET"])
+def get_guide(name: str):
+    """Serve a markdown guide as plain text. Whitelist enforced."""
+    fname = GUIDES.get(name.lower())
+    if fname is None:
+        return jsonify({
+            "error": f"unknown guide '{name}'",
+            "available": sorted(GUIDES.keys()),
+        }), 404
+    path = DOCS_DIR / fname
+    if not path.exists():
+        return jsonify({"error": f"guide file missing: {fname}"}), 500
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as e:
+        return jsonify({"error": f"read failed: {e}"}), 500
+    return text, 200, {"Content-Type": "text/markdown; charset=utf-8"}
+
+
+@app.route("/api/guide", methods=["GET"])
+def list_guides():
+    return jsonify({"available": sorted(GUIDES.keys())})
 
 
 @app.route("/api/run/<trigger_id>", methods=["POST"])
