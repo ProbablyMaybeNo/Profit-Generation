@@ -508,6 +508,62 @@ def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
 
 
+def _coerce_max_daily_loss_pct(raw) -> Optional[float]:
+    """Settings value may be a positive percent (e.g. 2.0 = 2%) or None.
+    Negative / zero / non-numeric → None (= disabled)."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    return v
+
+
+def _drawdown_circuit_breaker(settings: dict, account: dict) -> Optional[dict]:
+    """Return a dict describing the trip when daily loss has reached the
+    configured threshold; None otherwise.
+
+    Reads:
+      - settings.risk.max_daily_loss_pct (positive percent, e.g. 2.0).
+      - account.portfolio_value (current equity).
+      - account.equity_at_open or account.last_equity (yesterday's close
+        as proxy when the broker doesn't expose intraday opening equity).
+
+    When account data is missing, returns None so the auto-trader doesn't
+    block on a transient API hiccup.
+    """
+    threshold = _coerce_max_daily_loss_pct(
+        (settings.get("risk") or {}).get("max_daily_loss_pct"),
+    )
+    if threshold is None:
+        return None
+    if not account:
+        return None
+    pv = account.get("portfolio_value")
+    open_equity = account.get("equity_at_open") or account.get("last_equity")
+    try:
+        pv = float(pv) if pv is not None else None
+        open_equity = float(open_equity) if open_equity is not None else None
+    except (TypeError, ValueError):
+        return None
+    if pv is None or open_equity is None or open_equity <= 0:
+        return None
+    daily_pl_pct = (pv - open_equity) / open_equity * 100.0
+    if daily_pl_pct > -threshold:
+        return None
+    return {
+        "daily_pl_pct": round(daily_pl_pct, 4),
+        "threshold_pct": threshold,
+        "portfolio_value": pv,
+        "equity_at_open": open_equity,
+        "reason": (
+            f"daily P/L {daily_pl_pct:.2f}% ≤ -{threshold:.2f}% threshold "
+            f"({pv:.2f} from {open_equity:.2f})"
+        ),
+    }
+
+
 def _max_pct_per_symbol(settings: dict) -> float:
     """settings.risk.max_pct_per_symbol → float in (0, 1]. Falls back to
     the default when missing / out of range."""
@@ -573,11 +629,14 @@ def _concentration_block_map(
       - For each symbol, count the existing open-position notional plus
         new entries in sharpe-desc order until the cap is hit.
       - Each rejected entry yields a SKIP_CONCENTRATION_CAP action.
-      - When portfolio_value is unknown, the cap can't be evaluated and
-        no blocks are issued (the upstream pipeline keeps its current
-        behavior).
+      - When portfolio_value is unknown OR the user hasn't opted into
+        max_pct_per_symbol, no blocks are issued.
     """
     if not portfolio_value or portfolio_value <= 0:
+        return {}
+    has_cap_setting = (settings.get("risk") or {}).get("max_pct_per_symbol") \
+        is not None or "max_pct_per_symbol" in settings
+    if not has_cap_setting:
         return {}
     pct = _max_pct_per_symbol(settings)
     cap = pct * float(portfolio_value)
@@ -754,27 +813,32 @@ def process_signals(
         (asof.isoformat(),),
     ).fetchall()
 
-    # portfolio_value is needed by Kelly sizing AND by the per-symbol
-    # concentration cap. We fetch it once per pipeline invocation so both
-    # consumers see the same number; "fixed" sizing without a configured
-    # cap (= 0/None pct) silently skips the call when no account_summary_fn
-    # is provided.
+    # portfolio_value is needed by Kelly sizing, by the per-symbol
+    # concentration cap, AND by the daily drawdown circuit breaker. We
+    # fetch the account summary once per pipeline invocation so all three
+    # consumers see the same number.
     needs_kelly = str(settings.get("sizing_method") or "").lower() == "kelly"
     has_cap_setting = (settings.get("risk") or {}).get("max_pct_per_symbol") \
         is not None or "max_pct_per_symbol" in settings
+    has_drawdown_setting = (settings.get("risk") or {}).get(
+        "max_daily_loss_pct") is not None
     portfolio_value: Optional[float] = None
-    if needs_kelly or has_cap_setting:
+    account_summary: Dict = {}
+    if needs_kelly or has_cap_setting or has_drawdown_setting:
         fn = account_summary_fn or (
             (lambda: get_account_summary()) if not dry_run else None
         )
         if fn is not None:
             try:
-                acct = fn() or {}
-                pv = acct.get("portfolio_value")
+                account_summary = fn() or {}
+                pv = account_summary.get("portfolio_value")
                 portfolio_value = float(pv) if pv is not None else None
             except Exception as e:
                 log(f"account_summary lookup failed: {e}", "WARNING")
                 portfolio_value = None
+                account_summary = {}
+
+    drawdown_block = _drawdown_circuit_breaker(settings, account_summary)
 
     concentration_blocks = _concentration_block_map(
         conn, settings, sigs, portfolio_value=portfolio_value,
@@ -783,6 +847,15 @@ def process_signals(
     actions: List[dict] = []
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
+            if drawdown_block is not None:
+                actions.append({
+                    "action": "SKIP_DAILY_DRAWDOWN",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    **drawdown_block,
+                })
+                continue
             block = concentration_blocks.get(sig["id"])
             if block is not None:
                 actions.append(block)
