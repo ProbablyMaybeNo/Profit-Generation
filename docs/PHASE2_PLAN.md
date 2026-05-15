@@ -30,10 +30,11 @@ the box.
   - **Notes:** TradingView's `/scripts/` page is server-rendered HTML — `requests` + BeautifulSoup is enough. Pine source lives at `/script/<id>/`. Filter to strategies only (not indicators) via the page's tag filters.
   - **Completed:** 2026-05-15 · commit `da4b19d`
 
-- [ ] **2.1.2a LLM-as-source strategy generator** (replaces deprecated Reddit scraper — Reddit closed self-service API access 2026-05)
+- [x] **2.1.2a LLM-as-source strategy generator** (replaces deprecated Reddit scraper — Reddit closed self-service API access 2026-05)
   - **Deliverable:** `scripts/llm_strategy_generator.py` + `tests/test_llm_strategy_generator.py`
   - **Acceptance:** asks Ollama (default `qwen2.5-coder:14b`) to generate N candidate trading strategies in a category, each as JSON `{strategy_id, title, entry_rules, exit_rules, risk_management}`. Validates JSON shape, dedupes by strategy_id against existing records.jsonl entries, writes accepted candidates as UNTESTED. CLI flags: `--category` (e.g. "mean-reversion", "breakout", "momentum"), `--count` (default 10, hard cap 50 per run), `--avoid` (comma-list of techniques to exclude — e.g. "Bollinger,RSI,MACD"), `--model`, `--temperature` (default 0.7 for variety). Prompt MUST require: concrete numeric entry/exit rules (not vague), no look-ahead bias, daily-bar oriented, JSON list output only. Tests: prompt construction, malformed-JSON graceful skip, dedupe against existing records, --avoid honored, count cap enforced.
   - **Notes:** Reuse the Ollama plumbing from `monitoring/llm_codegen.py` (`_ollama_post`). Variety is the point — temperature 0.7, NOT 0.1. The validator (existing `batch_validate` pipeline) is the quality filter; this script just emits candidates.
+  - **Completed:** 2026-05-15 · commit `92ce661`
 
 - [ ] **2.1.2b GitHub repo strategy scraper**
   - **Deliverable:** `scripts/scrape_github_strategies.py` + `tests/test_scrape_github_strategies.py`
