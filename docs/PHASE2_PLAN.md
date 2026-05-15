@@ -77,9 +77,10 @@ the box.
   - **Completed:** 2026-05-15 · commit `304e192`
   - **Notes:** VIX slicing reads from a `macro` table planned in milestone 2.5.1; until that ships, the slicer reports `vix_unavailable=True` and the dashboard shows "waiting on FRED VIX overlay". Day-of-week + regime slicing live now.
 
-- [ ] **2.2.4 Correlation matrix**
+- [x] **2.2.4 Correlation matrix**
   - **Deliverable:** `/api/strategy_correlation` endpoint + dashboard heatmap section + tests
   - **Acceptance:** computes pairwise correlation of daily P&L across active strategies (from outcomes table aggregated by exit_ts date). Renders as inline SVG heatmap. Hover → cell value. Above 0.7 correlation gets red border (suggests redundancy). Tests: identity matrix when N=1, perfect correlation when same strategy twice, math correctness.
+  - **Completed:** 2026-05-15 · commit `6b513eb`
 
 - [ ] **2.2.5 Realized-vs-theoretical edge analysis**
   - **Deliverable:** `scripts/edge_diff.py` + dashboard widget
