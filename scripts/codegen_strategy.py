@@ -129,6 +129,82 @@ def _write_generated_file(fn_name: str, code: str, strategy_id: str,
     return path
 
 
+def codegen_record(
+    record: Dict,
+    *,
+    model: Optional[str] = None,
+    temperature: float = 0.1,
+    dry_run: bool = False,
+    source_url_override: str = "",
+) -> Dict:
+    """
+    Generate a compute_fn for one record. Pure function — does NOT touch
+    records.jsonl or trading.db (callers do that).
+
+    Returns:
+      {ok: bool, fn_name, code (str), path (Path or None),
+       error: Optional[str]}
+    """
+    extra = record.get("extra", {}) or {}
+    sid = extra.get("strategy_id")
+    if not sid:
+        return {"ok": False, "error": "record missing extra.strategy_id"}
+
+    entry = extra.get("entry_rules") or ""
+    exit_ = extra.get("exit_rules") or ""
+    risk = extra.get("risk_management") or ""
+    if not entry or not exit_:
+        return {"ok": False, "error": "record missing entry_rules or exit_rules"}
+
+    fn_name = llm_codegen.fn_name_from_strategy_id(sid)
+    try:
+        code = llm_codegen.generate_compute_fn(
+            fn_name, entry_rules=entry, exit_rules=exit_,
+            risk_management=risk, model=model, temperature=temperature,
+        )
+    except Exception as e:
+        return {"ok": False, "fn_name": fn_name, "error": f"codegen failed: {e!s:.300}"}
+
+    if dry_run:
+        return {"ok": True, "fn_name": fn_name, "code": code, "path": None}
+
+    path = _write_generated_file(
+        fn_name, code, sid,
+        source_url_override or record.get("url", ""),
+    )
+    return {"ok": True, "fn_name": fn_name, "code": code, "path": path}
+
+
+def _persist_codegen(record: Dict, result: Dict, records: list,
+                     is_new: bool) -> None:
+    """Update record + records.jsonl + trading.db with codegen output."""
+    extra = record.get("extra", {}) or {}
+    extra["compute_fn"] = result["fn_name"]
+    if result.get("path") is not None:
+        try:
+            rel = str(result["path"].relative_to(ROOT)).replace("\\", "/")
+        except ValueError:
+            rel = str(result["path"]).replace("\\", "/")
+        extra["code_paths"] = {**(extra.get("code_paths") or {}), "compute_fn": rel}
+    extra["last_updated_iso"] = date.today().isoformat()
+    record["extra"] = extra
+
+    if is_new:
+        records.append(record)
+    else:
+        sid = extra["strategy_id"]
+        for i, r in enumerate(records):
+            if (r.get("extra", {}) or {}).get("strategy_id") == sid:
+                records[i] = record
+                break
+    _save_records(records)
+    conn = db.init_db()
+    try:
+        db.upsert_strategy(conn, record)
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy-id", required=True)
@@ -163,49 +239,33 @@ def main():
               f"(use --new to create it)")
         return 3
 
+    # Apply CLI overrides into the record so the helper sees them.
     extra = record.get("extra", {}) or {}
-    entry = args.entry or extra.get("entry_rules") or ""
-    exit_ = args.exit_ or extra.get("exit_rules") or ""
-    risk = args.risk or extra.get("risk_management") or ""
+    if args.entry:
+        extra["entry_rules"] = args.entry
+    if args.exit_:
+        extra["exit_rules"] = args.exit_
+    if args.risk:
+        extra["risk_management"] = args.risk
+    record["extra"] = extra
 
-    fn_name = llm_codegen.fn_name_from_strategy_id(args.strategy_id)
-    print(f"generating {fn_name} via Ollama...")
-    code = llm_codegen.generate_compute_fn(
-        fn_name, entry_rules=entry, exit_rules=exit_,
-        risk_management=risk, model=args.model, temperature=args.temperature,
+    print(f"generating {llm_codegen.fn_name_from_strategy_id(args.strategy_id)} via Ollama...")
+    result = codegen_record(
+        record, model=args.model, temperature=args.temperature,
+        dry_run=args.dry_run, source_url_override=args.source_url,
     )
+    if not result["ok"]:
+        print(f"FAILED: {result.get('error')}")
+        return 4
 
     if args.dry_run:
         print("--- generated code (dry-run, not written) ---")
-        print(code)
+        print(result["code"])
         return 0
 
-    path = _write_generated_file(fn_name, code, args.strategy_id,
-                                 args.source_url or record.get("url", ""))
-    print(f"wrote {path}")
-
-    extra["compute_fn"] = fn_name
-    extra["code_paths"] = {**(extra.get("code_paths") or {}),
-                           "compute_fn": str(path.relative_to(ROOT)).replace("\\", "/")}
-    extra["last_updated_iso"] = date.today().isoformat()
-    record["extra"] = extra
-
-    if args.new:
-        records.append(record)
-    else:
-        for i, r in enumerate(records):
-            if (r.get("extra", {}) or {}).get("strategy_id") == args.strategy_id:
-                records[i] = record
-                break
-    _save_records(records)
-    print(f"updated records.jsonl")
-
-    conn = db.init_db()
-    try:
-        db.upsert_strategy(conn, record)
-    finally:
-        conn.close()
-    print(f"upserted strategy in trading.db")
+    print(f"wrote {result['path']}")
+    _persist_codegen(record, result, records, is_new=args.new)
+    print("updated records.jsonl + trading.db")
     return 0
 
 

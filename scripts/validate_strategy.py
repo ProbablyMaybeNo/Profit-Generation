@@ -34,7 +34,7 @@ import statistics
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -172,41 +172,43 @@ def _aggregate_verdict(per_symbol: Dict[str, Dict]) -> str:
     return "FAIL"
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--strategy-id", required=True)
-    parser.add_argument("--universe", required=True,
-                        help="comma-separated symbols, e.g. GDX,KRE,XHB")
-    parser.add_argument("--lookback-days", type=int, default=730)
-    parser.add_argument("--print-trades", action="store_true",
-                        help="print every trade for the largest-sample symbol")
-    parser.add_argument("--no-update-records", action="store_true",
-                        help="don't write the verdict back to records.jsonl")
-    args = parser.parse_args()
+def validate_strategy_record(
+    strategy_id: str,
+    universe: List[str],
+    *,
+    lookback_days: int = 730,
+    fn: Optional[Callable] = None,
+    bars_by_sym: Optional[Dict] = None,
+) -> Dict:
+    """
+    Run validation for a strategy. Pure function — does NOT touch
+    records.jsonl or trading.db (callers do that).
 
-    fn = _load_compute_fn(args.strategy_id)
-    symbols = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
-    if not symbols:
-        print("no symbols specified")
-        return 1
+    `fn` and `bars_by_sym` can be injected so a batch caller can prefetch
+    bars once across the universe and amortize yfinance cost.
 
-    from backtest.data import load_bars  # imported lazily so tests don't need yfinance
+    Returns:
+      {strategy_id, lookback_days, period, universe, per_symbol,
+       test_runs, overall_verdict}
+    """
     end = date.today()
-    start = end - timedelta(days=args.lookback_days)
-    print(f"loading {len(symbols)} symbols of daily bars "
-          f"{start.isoformat()} -> {end.isoformat()}...")
-    bars_by_sym = load_bars(symbols, start=start.isoformat(), end=end.isoformat(),
-                             interval="1d", source="yf")
-    missing = [s for s in symbols if s not in bars_by_sym]
-    if missing:
-        print(f"  missing bars: {missing}")
+    start = end - timedelta(days=lookback_days)
+    today_iso = end.isoformat()
+    period_str = f"{start.isoformat()} to {today_iso}"
+
+    if fn is None:
+        fn = _load_compute_fn(strategy_id)
+    if bars_by_sym is None:
+        from backtest.data import load_bars  # lazy import
+        bars_by_sym = load_bars(
+            universe, start=start.isoformat(), end=today_iso,
+            interval="1d", source="yf",
+        )
 
     per_symbol: Dict[str, Dict] = {}
     test_runs: List[Dict] = []
-    today_iso = end.isoformat()
-    period_str = f"{start.isoformat()} to {end.isoformat()}"
 
-    for sym in symbols:
+    for sym in universe:
         bars = bars_by_sym.get(sym)
         if bars is None or bars.empty or len(bars) < 30:
             per_symbol[sym] = {"verdict": "UNTESTED", "stats": _stats([]),
@@ -224,7 +226,7 @@ def main():
         verdict = _verdict_for(stats)
         per_symbol[sym] = {"verdict": verdict, "stats": stats, "trades": trades}
         test_runs.append({
-            "test_id": f"{args.strategy_id}-{sym}-validate-{today_iso}",
+            "test_id": f"{strategy_id}-{sym}-validate-{today_iso}",
             "date_iso": today_iso,
             "instrument": sym,
             "timeframe": "1d",
@@ -237,7 +239,57 @@ def main():
             "verdict": verdict,
         })
 
-    overall = _aggregate_verdict(per_symbol)
+    return {
+        "strategy_id": strategy_id,
+        "lookback_days": lookback_days,
+        "period": period_str,
+        "universe": universe,
+        "per_symbol": per_symbol,
+        "test_runs": test_runs,
+        "overall_verdict": _aggregate_verdict(per_symbol),
+    }
+
+
+def apply_verdict_to_record(record: Dict, result: Dict, universe_str: str) -> None:
+    """Mutate the record's `extra` block with verdict + test_runs from a result."""
+    extra = record.get("extra", {}) or {}
+    extra["tested"] = True
+    extra["test_runs"] = (extra.get("test_runs") or []) + result["test_runs"]
+    extra["current_verdict"] = result["overall_verdict"]
+    n_tot = sum(result["per_symbol"][s]["stats"]["n"] for s in result["per_symbol"])
+    extra["verdict_summary"] = (
+        f"validated {date.today().isoformat()} on {universe_str} "
+        f"({result['lookback_days']}d, {n_tot} trades total). "
+        f"overall={result['overall_verdict']}"
+    )
+    extra["last_updated_iso"] = date.today().isoformat()
+    record["extra"] = extra
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--strategy-id", required=True)
+    parser.add_argument("--universe", required=True,
+                        help="comma-separated symbols, e.g. GDX,KRE,XHB")
+    parser.add_argument("--lookback-days", type=int, default=730)
+    parser.add_argument("--print-trades", action="store_true",
+                        help="print every trade for the largest-sample symbol")
+    parser.add_argument("--no-update-records", action="store_true",
+                        help="don't write the verdict back to records.jsonl")
+    args = parser.parse_args()
+
+    symbols = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+    if not symbols:
+        print("no symbols specified")
+        return 1
+
+    print(f"loading {len(symbols)} symbols × {args.lookback_days}d daily bars...")
+    result = validate_strategy_record(
+        args.strategy_id, symbols, lookback_days=args.lookback_days,
+    )
+    per_symbol = result["per_symbol"]
+    overall = result["overall_verdict"]
+    test_runs = result["test_runs"]
     print()
     print(f"=== VALIDATION REPORT — {args.strategy_id} ===")
     print(f"{'symbol':<10} {'n':>4}  {'mean':>8}  {'WR':>6}  {'sharpe':>7}  "
@@ -268,17 +320,7 @@ def main():
         if record is None:
             print("warning: strategy not in records.jsonl; skipping verdict update")
         else:
-            extra = record.get("extra", {}) or {}
-            extra["tested"] = True
-            extra["test_runs"] = (extra.get("test_runs") or []) + test_runs
-            extra["current_verdict"] = overall
-            n_tot = sum(per_symbol[s]["stats"]["n"] for s in per_symbol)
-            extra["verdict_summary"] = (
-                f"validated {today_iso} on {','.join(symbols)} "
-                f"({args.lookback_days}d, {n_tot} trades total). overall={overall}"
-            )
-            extra["last_updated_iso"] = today_iso
-            record["extra"] = extra
+            apply_verdict_to_record(record, result, ",".join(symbols))
             _save_records(records)
             conn = db.init_db()
             try:
