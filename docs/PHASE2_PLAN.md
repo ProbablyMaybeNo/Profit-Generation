@@ -130,9 +130,10 @@ the box.
   - **Acceptance:** if 3 strategies want to buy KRE on the same day, only the highest-Sharpe gets the order — total notional in any one symbol across strategies stays ≤ `max_pct_per_symbol * portfolio_value` (default 30%). Tests: ranking + cap enforcement, single-strategy unaffected.
   - **Completed:** 2026-05-15 · commit `751be3f`
 
-- [ ] **2.4.2 Daily drawdown circuit breaker**
+- [x] **2.4.2 Daily drawdown circuit breaker**
   - **Deliverable:** auto_trader honors `risk.max_daily_loss_pct` (already in settings, currently unused)
   - **Acceptance:** auto-trader checks portfolio_value vs equity_at_open. If down ≥ max_daily_loss_pct, refuses ALL new entries (still processes exits). Resets next morning. Tests: trip / no-trip cases, exits still fire.
+  - **Completed:** 2026-05-15 · commit `91b4914`
 
 - [ ] **2.4.3 Strategy-level cool-down**
   - **Deliverable:** auto_trader checks recent N trades per strategy
