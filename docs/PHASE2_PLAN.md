@@ -66,9 +66,10 @@ the box.
   - **Acceptance:** endpoint returns `[(date, cumulative_return_pct)]` for the strategy's closed outcomes from `outcomes` table. Dashboard renders as inline SVG sparkline per active strategy in the EQUITY CURVES card. Click → modal with full-size SVG + drawdown overlay. No external charting library — plain SVG. Tests: empty case (no outcomes), single trade, multiple trades cumulative math correct.
   - **Completed:** 2026-05-15 · commit `2a9bc32`
 
-- [ ] **2.2.2 Walk-forward / out-of-sample analysis**
+- [x] **2.2.2 Walk-forward / out-of-sample analysis**
   - **Deliverable:** `scripts/walk_forward.py` + `tests/test_walk_forward.py`
   - **Acceptance:** for a strategy + universe, splits historical bars into N rolling windows (default: 6mo train / 3mo test, step 3mo). Computes per-window verdict. Strategy gets a `walk_forward_stable: bool` flag in records.jsonl based on whether ≥ 70% of test windows match the in-sample verdict. Tests: synthetic data with known stable + unstable strategies, window math correctness.
+  - **Completed:** 2026-05-15 · commit `5b8903f`
 
 - [ ] **2.2.3 Time-of-day / day-of-week / regime conditioning**
   - **Deliverable:** new analytics module `monitoring/edge_slicer.py` + dashboard endpoint + UI section
