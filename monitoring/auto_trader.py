@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
     "entry_time_offset_min": 0,
     "order_type": "market",
     "sizing_method": "fixed",
+    "stop_loss_atr_multiple": 0,
 }
 
 ORDER_TYPE_MARKET = "market"
@@ -308,8 +309,10 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     *, asof: Optional[date] = None,
                     sleep_fn=None, now_fn=None,
                     data_client=None,
-                    portfolio_value: Optional[float] = None) -> dict:
+                    portfolio_value: Optional[float] = None,
+                    bars_fetcher: Optional[Callable] = None) -> dict:
     from monitoring import sizing as sizing_mod
+    from monitoring import stops as stops_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
     eligible, stats = _is_eligible(conn, sid, settings)
     if not eligible:
@@ -371,8 +374,19 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             if effective_order_type == ORDER_TYPE_LIMIT_INSIDE_SPREAD
             else ""
         )
+        stop_info = _maybe_attach_stop(
+            conn, client, settings, sig,
+            entry_fill=float(sig["close"] or 0),
+            qty=qty, client_order_id=client_order_id,
+            bars_fetcher=bars_fetcher, dry_run=True,
+        )
+        stop_note = (
+            f" stop @ ${stop_info['stop_price']:.4f}"
+            if stop_info and stop_info.get("stop_price") is not None else ""
+        )
         log(f"[DRY-RUN] BUY {qty} {sym} @ ~${sig['close']:.2f} "
-            f"(~${qty * sig['close']:.2f}) for {sid}{ot_note}{offset_note}",
+            f"(~${qty * sig['close']:.2f}) for {sid}{ot_note}{offset_note}"
+            f"{stop_note}",
             "INFO")
         return {"action": "DRY_BUY", "strategy_id": sid, "symbol": sym,
                 "qty": qty, "price": sig["close"], "signal_id": sig["id"],
@@ -382,7 +396,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "order_type": effective_order_type,
                 "limit_price": limit_price,
                 "requested_order_type": requested_order_type,
-                "sizing": sizing}
+                "sizing": sizing,
+                "stop": stop_info}
 
     if target_utc is not None:
         waited = _sleep_until(target_utc, now_fn=now_fn, sleep_fn=sleep_fn)
@@ -410,13 +425,14 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
                 "error": str(e)[:200]}
 
+    entry_fill = float(getattr(order, "filled_avg_price", 0) or 0) or None
     db.record_paper_trade(conn, {
         "alpaca_order_id": str(getattr(order, "id", "")),
         "signal_id": sig["id"],
         "strategy_id": sid, "symbol": sym, "side": "buy", "qty": qty,
         "order_type": effective_order_type,
         "limit_price": limit_price,
-        "fill_price": float(getattr(order, "filled_avg_price", 0) or 0) or None,
+        "fill_price": entry_fill,
         "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
         "status": str(getattr(order, "status", "submitted")),
         "notes": f"auto-entry on bar_ts={sig['bar_ts']}"
@@ -428,6 +444,16 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         f"({effective_order_type})",
         "SUCCESS",
     )
+
+    # Optional ATR-based stop attached alongside the entry.
+    stop_info = _maybe_attach_stop(
+        conn, client, settings, sig,
+        entry_fill=entry_fill or float(sig["close"] or 0),
+        qty=qty,
+        client_order_id=client_order_id,
+        bars_fetcher=bars_fetcher,
+    )
+
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
             "order_id": str(order.id), "signal_id": sig["id"],
             "client_order_id": client_order_id,
@@ -436,7 +462,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "order_type": effective_order_type,
             "limit_price": limit_price,
             "requested_order_type": requested_order_type,
-            "sizing": sizing}
+            "sizing": sizing,
+            "stop": stop_info}
 
 
 def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
@@ -478,6 +505,96 @@ def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
             "order_id": str(order.id), "signal_id": sig["id"]}
 
 
+def _maybe_attach_stop(
+    conn, client, settings: dict, sig,
+    *, entry_fill: float, qty: int,
+    client_order_id: Optional[str],
+    bars_fetcher: Optional[Callable],
+    dry_run: bool = False,
+) -> Optional[dict]:
+    """Compute + (if not dry-run) submit an ATR-based stop. Returns
+    a dict describing the stop, or None when stops are disabled / not
+    actionable.
+
+    The returned dict shape:
+      {"requested_multiple": N,
+       "atr": float | None,
+       "stop_price": float | None,
+       "status": "disabled" | "no_bars" | "no_stop" | "submitted"
+                  | "submit_failed" | "dry_run",
+       "order_id": str | None,
+       "stop_order_client_id": str | None,
+       "error": str | None}
+    """
+    from monitoring import stops as stops_mod
+    multiple = stops_mod._coerce_multiple(settings.get("stop_loss_atr_multiple"))
+    if multiple <= 0:
+        return None
+    info: dict = {
+        "requested_multiple": multiple,
+        "atr": None,
+        "stop_price": None,
+        "status": "disabled",
+        "order_id": None,
+        "stop_order_client_id": None,
+        "error": None,
+    }
+    if bars_fetcher is None:
+        info["status"] = "no_bars"
+        return info
+    try:
+        bars = bars_fetcher(sig["symbol"])
+    except Exception as e:
+        info["status"] = "no_bars"
+        info["error"] = str(e)[:200]
+        return info
+    atr = stops_mod.compute_atr(bars)
+    info["atr"] = atr
+    stop_price = stops_mod.stop_price_for(entry_fill, atr, multiple)
+    info["stop_price"] = stop_price
+    if stop_price is None:
+        info["status"] = "no_stop"
+        return info
+    stop_cid = (client_order_id + "-stop")[:MAX_CLIENT_ORDER_ID_LEN] \
+        if client_order_id else None
+    info["stop_order_client_id"] = stop_cid
+    if dry_run:
+        info["status"] = "dry_run"
+        return info
+    try:
+        stop_order = stops_mod.submit_atr_stop(
+            client, symbol=sig["symbol"], qty=qty,
+            stop_price=stop_price, client_order_id=stop_cid,
+        )
+    except Exception as e:
+        log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
+            "ERROR")
+        info["status"] = "submit_failed"
+        info["error"] = str(e)[:200]
+        return info
+    info["order_id"] = str(getattr(stop_order, "id", ""))
+    info["status"] = "submitted"
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": info["order_id"],
+        "signal_id": sig["id"],
+        "strategy_id": sig["strategy_id"], "symbol": sig["symbol"],
+        "side": "sell", "qty": qty,
+        "order_type": "stop",
+        "stop_price": stop_price,
+        "submitted_at": str(getattr(stop_order, "submitted_at", _utc_now())),
+        "status": str(getattr(stop_order, "status", "submitted")),
+        "notes": f"ATR({stops_mod.DEFAULT_ATR_PERIOD})={atr} × {multiple} "
+                 f"= stop @ ${stop_price}; "
+                 f"linked to entry signal_id={sig['id']}",
+    })
+    log(
+        f"STOP SELL {qty} {sig['symbol']} @ ${stop_price} "
+        f"(ATR={atr} × {multiple})",
+        "SUCCESS",
+    )
+    return info
+
+
 def process_signals(
     conn,
     *,
@@ -489,6 +606,7 @@ def process_signals(
     now_fn=None,
     data_client=None,
     account_summary_fn: Optional[Callable] = None,
+    bars_fetcher: Optional[Callable] = None,
 ) -> dict:
     """Walk today's '1d' signals; submit Alpaca paper market orders per eligibility + dedupe.
 
@@ -546,6 +664,7 @@ def process_signals(
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
                 data_client=data_client,
                 portfolio_value=portfolio_value,
+                bars_fetcher=bars_fetcher,
             ))
         elif sig["signal_type"] == "long_exit":
             actions.append(_process_exit(conn, client, settings, sig, dry_run))
