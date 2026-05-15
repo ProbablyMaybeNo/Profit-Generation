@@ -205,6 +205,79 @@
     font-style: italic;
   }
 
+  /* Equity curves */
+  .equity-row {
+    display: grid;
+    grid-template-columns: 1fr 180px 110px 110px 110px;
+    gap: 10px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--grid);
+    cursor: pointer;
+    transition: background 80ms ease;
+  }
+  .equity-row:hover { background: rgba(255,255,255,0.025); }
+  .equity-row .strat { font-weight: 500; color: var(--text-hi); }
+  .equity-row .num { font-variant-numeric: tabular-nums; text-align: right; font-size: 12px; }
+  .equity-row .num.dim { color: var(--dim); }
+  .equity-row svg.sparkline { width: 100%; height: 28px; display: block; }
+  .equity-row svg.sparkline path.line { stroke: var(--green); stroke-width: 1.2; fill: none; }
+  .equity-row svg.sparkline path.line.neg { stroke: var(--red); }
+  .equity-row svg.sparkline path.fill { fill: rgba(0,255,136,0.06); stroke: none; }
+  .equity-row svg.sparkline path.fill.neg { fill: rgba(255,68,85,0.06); }
+  .equity-row svg.sparkline line.zero { stroke: var(--dimmer); stroke-width: 0.5; stroke-dasharray: 2 2; }
+
+  .curve-modal {
+    position: fixed; inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .curve-modal[hidden] { display: none; }
+  .curve-modal-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.65);
+  }
+  .curve-modal-card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    width: min(960px, 92vw);
+    max-height: 86vh;
+    overflow: auto;
+    padding: 16px 18px 18px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  }
+  .curve-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    margin-bottom: 14px;
+  }
+  .curve-modal-head strong { color: var(--text-hi); font-size: 14px; letter-spacing: 0.04em; }
+  .curve-modal-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 18px;
+    width: 28px; height: 28px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .curve-modal-close:hover { background: var(--surface-2); }
+  .curve-modal-body svg.curve-full { width: 100%; height: 320px; display: block; }
+  .curve-modal-body svg.curve-full path.line { stroke: var(--green); stroke-width: 1.4; fill: none; }
+  .curve-modal-body svg.curve-full path.line.neg { stroke: var(--red); }
+  .curve-modal-body svg.curve-full path.dd { fill: rgba(255,68,85,0.16); stroke: var(--red-dim); stroke-width: 0.5; }
+  .curve-modal-body svg.curve-full line.axis { stroke: var(--dimmer); stroke-width: 0.5; }
+  .curve-modal-body svg.curve-full text.axis-label { fill: var(--dim); font-size: 10px; font-family: var(--font); }
+  .curve-modal-body .curve-stats { display: flex; gap: 18px; color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .curve-modal-body .curve-stats .pair span.lbl { color: var(--dimmer); margin-right: 6px; }
+  .curve-modal-body .curve-stats .pair span.val { color: var(--text-hi); }
+
   /* Signal pills */
   .stype { font-weight: 600; padding: 0 6px; font-size: 11px; }
   .stype.entry { color: var(--green); background: rgba(0,255,136,0.07); }
@@ -408,15 +481,15 @@
     font-size: 11px;
     width: 100%;
     table-layout: fixed;
-    display: block;
-    overflow-x: auto;
   }
-  .guide-body table thead, .guide-body table tbody { display: table; width: 100%; table-layout: fixed; }
   .guide-body th, .guide-body td {
     border: 1px solid var(--grid);
     padding: 4px 7px;
     text-align: left;
     vertical-align: top;
+    /* Override the global `td/th { white-space: nowrap }` rule (~line 180)
+       which was preventing prose tables from wrapping inside the panel. */
+    white-space: normal;
     word-break: break-word;
     overflow-wrap: anywhere;
   }
@@ -577,6 +650,24 @@
   <div class="card">
     <h2>strategy edge — closed outcomes (1d) <span class="count" id="edge-count"></span></h2>
     <div id="strategy-edge" class="loading">loading...</div>
+  </div>
+
+  <!-- Equity curves -->
+  <div class="card">
+    <h2>equity curves — cumulative return per strategy <span class="count" id="curves-count"></span></h2>
+    <div id="equity-curves" class="loading">loading...</div>
+  </div>
+
+  <!-- Equity-curve modal -->
+  <div id="curve-modal" class="curve-modal" hidden>
+    <div class="curve-modal-backdrop" data-close-modal></div>
+    <div class="curve-modal-card">
+      <div class="curve-modal-head">
+        <strong id="curve-modal-title">equity curve</strong>
+        <button class="curve-modal-close" data-close-modal aria-label="close">×</button>
+      </div>
+      <div id="curve-modal-body" class="curve-modal-body">loading...</div>
+    </div>
   </div>
 
   <!-- Open positions -->
@@ -1065,6 +1156,190 @@ function renderEdge(s) {
   el.innerHTML = h;
 }
 
+function buildSparkline(points) {
+  if (!points.length) return '';
+  const W = 180, H = 28;
+  const xs = points.map((_, i) => points.length === 1 ? W / 2 : (i / (points.length - 1)) * W);
+  const ys = points.map(p => p.cum_pct);
+  const yMin = Math.min(0, ...ys);
+  const yMax = Math.max(0, ...ys);
+  const yRange = (yMax - yMin) || 1;
+  const proj = (y) => H - ((y - yMin) / yRange) * H;
+  const zeroY = proj(0);
+  const linePath = points.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.cum_pct).toFixed(2)}`
+  ).join(' ');
+  const fillPath = linePath
+    + ` L${xs[xs.length - 1].toFixed(2)},${zeroY.toFixed(2)}`
+    + ` L${xs[0].toFixed(2)},${zeroY.toFixed(2)} Z`;
+  const finalPct = ys[ys.length - 1];
+  const cls = finalPct >= 0 ? '' : 'neg';
+  return `<svg class="sparkline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <line class="zero" x1="0" y1="${zeroY.toFixed(2)}" x2="${W}" y2="${zeroY.toFixed(2)}" />
+    <path class="fill ${cls}" d="${fillPath}" />
+    <path class="line ${cls}" d="${linePath}" />
+  </svg>`;
+}
+
+function buildFullCurve(curve) {
+  const points = curve.points || [];
+  if (!points.length) return '<div class="empty">no closed trades yet.</div>';
+  const W = 880, H = 320, PAD_L = 50, PAD_R = 12, PAD_T = 14, PAD_B = 26;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const xs = points.map((_, i) =>
+    PAD_L + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW)
+  );
+  const cums = points.map(p => p.cum_pct);
+  const dds  = points.map(p => p.drawdown_pct);
+  const yMin = Math.min(0, ...cums, ...dds);
+  const yMax = Math.max(0, ...cums);
+  const yRange = (yMax - yMin) || 1;
+  const proj = (y) => PAD_T + plotH - ((y - yMin) / yRange) * plotH;
+  const zeroY = proj(0);
+
+  const linePath = points.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.cum_pct).toFixed(2)}`
+  ).join(' ');
+  const ddPath = points.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.drawdown_pct).toFixed(2)}`
+  ).join(' ')
+    + ` L${xs[xs.length - 1].toFixed(2)},${zeroY.toFixed(2)}`
+    + ` L${xs[0].toFixed(2)},${zeroY.toFixed(2)} Z`;
+
+  const finalPct = cums[cums.length - 1];
+  const lineCls = finalPct >= 0 ? '' : 'neg';
+
+  // y-axis ticks at min / 0 / max
+  const tickVals = Array.from(new Set([yMin, 0, yMax].map(v => +v.toFixed(2))));
+  const ticks = tickVals.map(v =>
+    `<line class="axis" x1="${PAD_L}" y1="${proj(v).toFixed(2)}" x2="${W - PAD_R}" y2="${proj(v).toFixed(2)}" />
+     <text class="axis-label" x="${PAD_L - 6}" y="${(proj(v) + 4).toFixed(2)}" text-anchor="end">${v.toFixed(1)}%</text>`
+  ).join('');
+  // first / mid / last x-axis date labels
+  const labelIdx = points.length === 1
+    ? [0]
+    : (points.length === 2 ? [0, points.length - 1]
+                            : [0, Math.floor(points.length / 2), points.length - 1]);
+  const xLabels = labelIdx.map(i =>
+    `<text class="axis-label" x="${xs[i].toFixed(2)}" y="${(H - 8).toFixed(2)}" text-anchor="middle">${escapeHtml(points[i].date || '')}</text>`
+  ).join('');
+
+  const stats = `<div class="curve-stats">
+    <div class="pair"><span class="lbl">trades</span><span class="val">${curve.n_trades}</span></div>
+    <div class="pair"><span class="lbl">final</span><span class="val ${finalPct >= 0 ? 'pos' : 'neg'}">${fmtPct(finalPct)}</span></div>
+    <div class="pair"><span class="lbl">max drawdown</span><span class="val neg">${fmtPct(curve.max_drawdown_pct)}</span></div>
+  </div>`;
+
+  return `<svg class="curve-full" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    ${ticks}
+    <path class="dd" d="${ddPath}" />
+    <path class="line ${lineCls}" d="${linePath}" />
+    ${xLabels}
+  </svg>${stats}`;
+}
+
+let _equityCurveCache = {};
+
+function renderEquityCurves(s) {
+  const el = document.getElementById('equity-curves');
+  const strategies = (s.strategy_edge || []).map(r => r.strategy_id);
+  document.getElementById('curves-count').textContent = `${strategies.length} active`;
+  if (!strategies.length) {
+    el.innerHTML = '<div class="empty">no active strategies with closed outcomes.</div>';
+    return;
+  }
+  // Render rows synchronously with placeholders; fill in sparklines as curves load.
+  let h = '';
+  for (const sid of strategies) {
+    h += `<div class="equity-row" data-sid="${escapeHtml(sid)}" role="button" tabindex="0">
+      <div class="strat">${escapeHtml(shortStrat(sid))}</div>
+      <div class="spark-cell"><svg class="sparkline" viewBox="0 0 180 28"></svg></div>
+      <div class="num dim cum-cell">…</div>
+      <div class="num dim dd-cell">…</div>
+      <div class="num dim n-cell">…</div>
+    </div>`;
+  }
+  el.innerHTML = h;
+
+  // Wire clicks + keyboard
+  el.querySelectorAll('.equity-row').forEach(row => {
+    const sid = row.getAttribute('data-sid');
+    row.addEventListener('click', () => openCurveModal(sid));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCurveModal(sid); }
+    });
+  });
+
+  // Fetch each strategy's curve and replace the placeholders.
+  for (const sid of strategies) {
+    fetch(`/api/equity_curve/${encodeURIComponent(sid)}`, { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+      .then(curve => {
+        _equityCurveCache[sid] = curve;
+        const row = el.querySelector(`.equity-row[data-sid="${CSS.escape(sid)}"]`);
+        if (!row) return;
+        const sparkCell = row.querySelector('.spark-cell');
+        if (sparkCell) sparkCell.innerHTML = buildSparkline(curve.points || []);
+        const cumCell = row.querySelector('.cum-cell');
+        if (cumCell) {
+          cumCell.textContent = fmtPct(curve.final_pct);
+          cumCell.className = `num ${pctClass(curve.final_pct)} cum-cell`;
+        }
+        const ddCell = row.querySelector('.dd-cell');
+        if (ddCell) {
+          ddCell.textContent = fmtPct(curve.max_drawdown_pct);
+          ddCell.className = 'num neg dd-cell';
+        }
+        const nCell = row.querySelector('.n-cell');
+        if (nCell) {
+          nCell.textContent = `${curve.n_trades} trades`;
+          nCell.className = 'num dim n-cell';
+        }
+      })
+      .catch(() => {
+        const row = el.querySelector(`.equity-row[data-sid="${CSS.escape(sid)}"]`);
+        if (row) {
+          const sparkCell = row.querySelector('.spark-cell');
+          if (sparkCell) sparkCell.innerHTML = '<span class="empty">curve unavailable</span>';
+        }
+      });
+  }
+}
+
+function openCurveModal(sid) {
+  const modal = document.getElementById('curve-modal');
+  document.getElementById('curve-modal-title').textContent = `equity curve — ${shortStrat(sid)}`;
+  const body = document.getElementById('curve-modal-body');
+  body.innerHTML = 'loading...';
+  modal.hidden = false;
+  const cached = _equityCurveCache[sid];
+  const ready = cached
+    ? Promise.resolve(cached)
+    : fetch(`/api/equity_curve/${encodeURIComponent(sid)}`, { cache: 'no-store' })
+        .then(r => r.json());
+  ready.then(curve => {
+    _equityCurveCache[sid] = curve;
+    body.innerHTML = buildFullCurve(curve);
+  }).catch(e => {
+    body.innerHTML = `<div class="empty">curve fetch failed: ${escapeHtml(e.message)}</div>`;
+  });
+}
+
+function closeCurveModal() {
+  const modal = document.getElementById('curve-modal');
+  if (!modal) return;
+  modal.hidden = true;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-close-modal')) {
+    closeCurveModal();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCurveModal();
+});
+
 function renderOpenPositions(s) {
   const el = document.getElementById('open-positions');
   const rows = s.open_positions || [];
@@ -1186,6 +1461,7 @@ async function refresh() {
     renderReport(s);
     renderAccount(s);
     renderEdge(s);
+    renderEquityCurves(s);
     renderOpenPositions(s);
     renderPaperTrades(s);
     renderSignals(s);
