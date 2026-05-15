@@ -12,6 +12,7 @@ when external APIs (Alpaca, Polygon) are unreachable.
 import json
 import os
 import statistics
+import subprocess
 import sys
 import tempfile
 from datetime import date, datetime
@@ -459,6 +460,74 @@ def auto_trade_toggle():
         "previous": prev,
         "current": value,
         "auto_trade": auto,
+    })
+
+
+# ----- Manual trigger registry -----
+# Maps trigger_id → list of args fed to `python -m`. Anything not in here is
+# rejected (no arbitrary subprocess execution from a POST body).
+TRIGGER_REGISTRY: dict[str, list[str]] = {
+    "daily_report":   ["monitoring.daily_report"],
+    "intraday_scan":  ["monitoring.intraday_monitor", "--once", "--no-market-check"],
+    "auto_trader":    ["monitoring.auto_trader"],
+}
+
+# Process handles + last-launch metadata, in-memory only.
+_LAST_TRIGGERED: dict[str, dict] = {}
+
+
+def _spawn_trigger(trigger_id: str) -> dict:
+    """Spawn the registered command in a detached subprocess. Returns metadata.
+    Uses `subprocess.Popen` looked up at call time so tests can monkeypatch it.
+    """
+    args = TRIGGER_REGISTRY[trigger_id]
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    log_dir = LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"trigger_{trigger_id}.log"
+    log_handle = open(log_path, "ab")
+    started_at = datetime.now().isoformat(timespec="seconds")
+    log_handle.write(("\n=== triggered " + started_at + " ===\n").encode("utf-8"))
+    log_handle.flush()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", *args],
+        cwd=str(ROOT), env=env,
+        stdout=log_handle, stderr=log_handle,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                       | getattr(subprocess, "DETACHED_PROCESS", 0),
+    )
+    meta = {
+        "trigger_id": trigger_id,
+        "args": args,
+        "pid": proc.pid,
+        "started_at": started_at,
+        "log_path": str(log_path),
+    }
+    _LAST_TRIGGERED[trigger_id] = meta
+    return meta
+
+
+@app.route("/api/run/<trigger_id>", methods=["POST"])
+def manual_trigger(trigger_id: str):
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    if trigger_id not in TRIGGER_REGISTRY:
+        return jsonify({
+            "error": f"unknown trigger; allowed: {sorted(TRIGGER_REGISTRY.keys())}"
+        }), 404
+    try:
+        meta = _spawn_trigger(trigger_id)
+    except Exception as e:
+        return jsonify({"error": f"spawn failed: {e}"}), 500
+    return jsonify({"ok": True, **meta}), 202
+
+
+@app.route("/api/run", methods=["GET"])
+def manual_trigger_status():
+    return jsonify({
+        "available": sorted(TRIGGER_REGISTRY.keys()),
+        "last_triggered": _LAST_TRIGGERED,
     })
 
 

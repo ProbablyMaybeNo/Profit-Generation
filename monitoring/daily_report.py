@@ -338,7 +338,7 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
                 close=e.get("close"),
                 bar_interval="1d",
             )
-        db.record_daily_report(
+        status = db.record_daily_report(
             conn,
             report_date=report.report_date.isoformat(),
             market_regime=report.market_regime,
@@ -351,6 +351,12 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
             has_notable_pattern=report.has_notable_pattern,
             markdown=markdown,
         )
+        if status == "skipped_downgrade":
+            from config.utils import log
+            log(f"daily_reports row for {report.report_date} NOT overwritten "
+                f"— this run had fewer fires/watchlist than the existing row "
+                f"(probable yfinance hiccup). Re-run with force to override.",
+                "WARNING")
         return outcome_tracker.reconcile_signals(conn)
     finally:
         conn.close()

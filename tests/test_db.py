@@ -117,7 +117,7 @@ def test_snapshot_upsert(conn):
 
 
 def test_record_daily_report_round_trip(conn):
-    db.record_daily_report(
+    s1 = db.record_daily_report(
         conn,
         report_date="2026-05-13",
         market_regime="choppy",
@@ -129,7 +129,7 @@ def test_record_daily_report_round_trip(conn):
         symbols_watched=["SPY", "QQQ"],
         markdown="# hi",
     )
-    db.record_daily_report(
+    s2 = db.record_daily_report(
         conn,
         report_date="2026-05-13",
         market_regime="trending_up",
@@ -140,6 +140,8 @@ def test_record_daily_report_round_trip(conn):
         tags=["gap-up", "high-volume"],
         symbols_watched=["SPY", "QQQ", "IWM"],
     )
+    assert s1 == "inserted"
+    assert s2 == "updated"
     rows = conn.execute("SELECT * FROM daily_reports").fetchall()
     assert len(rows) == 1
     r = rows[0]
@@ -148,6 +150,59 @@ def test_record_daily_report_round_trip(conn):
     assert r["fires_count"] == 3
     assert r["markdown"] == "# hi"
     assert json.loads(r["tags_json"]) == ["gap-up", "high-volume"]
+
+
+def test_record_daily_report_skips_downgrade(conn):
+    """Defensive guard: a re-run with fewer fires must not clobber the high-water row."""
+    db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="trending_up",
+        importance=4, fires_count=8, watchlist_count=13, notable_movers_count=10,
+        tags=["high-volume"], symbols_watched=list("ABCDEFGHIJKLM"),
+    )
+    status = db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="mixed",
+        importance=1, fires_count=0, watchlist_count=0, notable_movers_count=0,
+        tags=["low-volume"], symbols_watched=[],
+    )
+    assert status == "skipped_downgrade"
+    r = conn.execute("SELECT * FROM daily_reports WHERE report_date='2026-05-15'").fetchone()
+    assert r["fires_count"] == 8
+    assert r["importance"] == 4
+    assert r["market_regime"] == "trending_up"
+
+
+def test_record_daily_report_force_overrides_downgrade_guard(conn):
+    db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="trending_up",
+        importance=4, fires_count=8, watchlist_count=13, notable_movers_count=10,
+        tags=[], symbols_watched=list("ABCDEFGHIJKLM"),
+    )
+    status = db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="mixed",
+        importance=1, fires_count=0, watchlist_count=0, notable_movers_count=0,
+        tags=[], symbols_watched=[], force=True,
+    )
+    assert status == "updated"
+    r = conn.execute("SELECT * FROM daily_reports WHERE report_date='2026-05-15'").fetchone()
+    assert r["fires_count"] == 0
+    assert r["importance"] == 1
+
+
+def test_record_daily_report_allows_upgrade(conn):
+    """A re-run with MORE fires should still overwrite (no force needed)."""
+    db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="mixed",
+        importance=2, fires_count=2, watchlist_count=13, notable_movers_count=3,
+        tags=[], symbols_watched=list("ABCDEFGHIJKLM"),
+    )
+    status = db.record_daily_report(
+        conn, report_date="2026-05-15", market_regime="trending_up",
+        importance=4, fires_count=8, watchlist_count=13, notable_movers_count=10,
+        tags=[], symbols_watched=list("ABCDEFGHIJKLM"),
+    )
+    assert status == "updated"
+    r = conn.execute("SELECT * FROM daily_reports WHERE report_date='2026-05-15'").fetchone()
+    assert r["fires_count"] == 8
 
 
 def test_news_dedupe_per_symbol(conn):

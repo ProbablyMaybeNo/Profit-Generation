@@ -380,8 +380,27 @@ def record_daily_report(
     has_notable_pattern: bool = False,
     notion_page_id: Optional[str] = None,
     markdown: Optional[str] = None,
-) -> None:
-    """Upsert the daily-report metadata row."""
+    force: bool = False,
+) -> str:
+    """
+    Upsert the daily-report metadata row. Returns 'inserted', 'updated',
+    or 'skipped_downgrade'.
+
+    Defensive guard: if a row already exists for `report_date` AND the
+    incoming `fires_count` or `watchlist_count` is LOWER than the existing
+    row's, the write is skipped to protect against transient data-source
+    failures (yfinance returning empty frames, partial fetches, etc.).
+    Pass `force=True` to bypass.
+    """
+    existing = conn.execute(
+        "SELECT fires_count, watchlist_count FROM daily_reports WHERE report_date=?",
+        (report_date,),
+    ).fetchone()
+    if existing is not None and not force:
+        if (int(fires_count) < existing["fires_count"]
+                or int(watchlist_count) < existing["watchlist_count"]):
+            return "skipped_downgrade"
+
     with conn:
         conn.execute(
             """
@@ -419,6 +438,7 @@ def record_daily_report(
                 _utc_now_iso(),
             ),
         )
+    return "inserted" if existing is None else "updated"
 
 
 def insert_news(conn: sqlite3.Connection, item: Dict[str, Any]) -> Optional[int]:

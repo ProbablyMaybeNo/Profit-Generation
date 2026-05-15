@@ -373,6 +373,23 @@
     margin-top: 6px;
   }
 
+  /* Manual triggers */
+  .trigger-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .trigger-row:last-child { border-bottom: none; }
+  .trigger-name { color: var(--text-hi); font-weight: 600; font-size: 13px; }
+  .trigger-desc { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+  .trigger-last { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .trigger-status { color: var(--amber); font-size: 11px; margin-top: 2px; }
+  .trigger-status.ok { color: var(--green); }
+  .trigger-status.err { color: var(--red); }
+
   /* TV link beside symbols in tables */
   .tv-link {
     color: var(--dim);
@@ -415,6 +432,12 @@
   <div class="card" id="control-card">
     <h2>auto-trader · control <span class="count" id="control-mode-pill"></span></h2>
     <div id="control" class="loading">loading...</div>
+  </div>
+
+  <!-- MANUAL TRIGGERS -->
+  <div class="card">
+    <h2>manual triggers <span class="count">spawns subprocess · feedback via Telegram + Notion + DB</span></h2>
+    <div id="triggers"></div>
   </div>
 
   <!-- Top row: report + account -->
@@ -503,6 +526,66 @@ function escapeHtml(s) {
 
 function tvLink(symbol, label='↗ TV') {
   return `<a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}" target="_blank" class="tv-link">${label}</a>`;
+}
+
+const TRIGGERS = [
+  {id: 'daily_report',  name: 'Run daily report now',
+   desc: 'Snapshot + fires + news + outcomes + Notion post + Telegram summary + auto-trader pass.'},
+  {id: 'intraday_scan', name: 'Run intraday scan now',
+   desc: 'Synthesize today’s in-progress bar + project EOD fires; appends to log.'},
+  {id: 'auto_trader',   name: 'Run auto-trader now (dry-run honors settings)',
+   desc: 'Walk today’s 1d signals; submit (or log) paper orders.'},
+];
+
+async function fireTrigger(triggerId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'spawning...'; }
+  const statusEl = document.getElementById(`trigger-status-${triggerId}`);
+  if (statusEl) { statusEl.className = 'trigger-status'; statusEl.textContent = 'spawning...'; }
+  try {
+    const r = await fetch(`/api/run/${triggerId}`, {method: 'POST', cache: 'no-store'});
+    const body = await r.json();
+    if (r.status === 202) {
+      if (statusEl) {
+        statusEl.className = 'trigger-status ok';
+        const ts = (body.started_at || '').replace('T', ' ');
+        statusEl.textContent = `spawned pid=${body.pid} at ${ts} — watch Telegram + Notion`;
+      }
+      localStorage.setItem(`trigger_last_${triggerId}`, body.started_at || new Date().toISOString());
+    } else {
+      if (statusEl) { statusEl.className = 'trigger-status err';
+        statusEl.textContent = `error: ${body.error || ('http '+r.status)}`; }
+    }
+  } catch (e) {
+    if (statusEl) { statusEl.className = 'trigger-status err';
+      statusEl.textContent = 'error: ' + e.message; }
+  } finally {
+    if (btn) {
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'run now'; }, 3000);
+    }
+  }
+}
+
+function renderTriggers() {
+  const el = document.getElementById('triggers');
+  let h = '';
+  for (const t of TRIGGERS) {
+    const last = localStorage.getItem(`trigger_last_${t.id}`);
+    const lastLine = last
+      ? `last triggered ${last.replace('T', ' ').slice(0, 19)}`
+      : 'never triggered from this browser';
+    h += `<div class="trigger-row">
+      <div>
+        <div class="trigger-name">${escapeHtml(t.name)}</div>
+        <div class="trigger-desc">${escapeHtml(t.desc)}</div>
+        <div class="trigger-last">${escapeHtml(lastLine)}</div>
+        <div class="trigger-status" id="trigger-status-${t.id}"></div>
+      </div>
+      <div>
+        <button class="ctrl-btn" onclick="fireTrigger('${t.id}', this)">run now</button>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = h;
 }
 
 async function toggleAutoTrade(key, value) {
@@ -838,6 +921,7 @@ async function refresh() {
     renderHeader(s);
     renderActionQueue(s);
     renderControl(s);
+    renderTriggers();
     renderReport(s);
     renderAccount(s);
     renderEdge(s);
