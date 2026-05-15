@@ -1,5 +1,5 @@
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -156,7 +156,7 @@ def _mk_client():
 def stub_submit(monkeypatch):
     """Replace _submit_market_order so the alpaca-py import never runs."""
     submitted = []
-    def fake_submit(client, *, symbol, qty, side):
+    def fake_submit(client, *, symbol, qty, side, client_order_id=None):
         submitted.append((symbol, qty, side))
         order = MagicMock()
         order.id = f"alpaca-order-{len(submitted)}"
@@ -287,3 +287,188 @@ def test_alpaca_failure_logged_not_raised(isolated_db, winner_settings, monkeypa
     assert "alpaca down" in actions[0]["error"]
     n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
     assert n == 0
+
+
+# ----- entry_time_offset_min (2.3.1) -----
+
+def test_coerce_offset_min_defaults():
+    assert at._coerce_offset_min(None) == 0
+    assert at._coerce_offset_min(0) == 0
+    assert at._coerce_offset_min(-5) == 0
+    assert at._coerce_offset_min("garbage") == 0
+    assert at._coerce_offset_min("15") == 15
+    assert at._coerce_offset_min(15) == 15
+
+
+def test_coerce_offset_min_clamped_to_max():
+    out = at._coerce_offset_min(at.MAX_OFFSET_MIN + 1000)
+    assert out == at.MAX_OFFSET_MIN
+
+
+def test_target_execution_utc_uses_market_open_plus_offset():
+    target = at._target_execution_utc(date(2026, 5, 14), 30)
+    # 13:30 UTC + 30min = 14:00 UTC
+    assert target.hour == 14
+    assert target.minute == 0
+    assert target.date() == date(2026, 5, 14)
+
+
+def test_build_client_order_id_shape():
+    cid = at._build_client_order_id(
+        strategy_id="winner", symbol="GDX", side="buy",
+        bar_ts="2026-05-14", target_utc=at._target_execution_utc(
+            date(2026, 5, 14), 30),
+    )
+    assert cid.startswith("ato-")
+    assert "winner" in cid
+    assert "GDX" in cid
+    assert "-b-" in cid
+    assert "2026-05-14" in cid
+    assert "t1400" in cid
+    assert len(cid) <= at.MAX_CLIENT_ORDER_ID_LEN
+
+
+def test_build_client_order_id_no_offset_omits_t_block():
+    cid = at._build_client_order_id(
+        strategy_id="winner", symbol="GDX", side="buy",
+        bar_ts="2026-05-14", target_utc=None,
+    )
+    assert "-t" not in cid[-6:]
+    assert len(cid) <= at.MAX_CLIENT_ORDER_ID_LEN
+
+
+def test_build_client_order_id_trims_long_strategy_id():
+    long_sid = "z" * 200
+    cid = at._build_client_order_id(
+        strategy_id=long_sid, symbol="GDX", side="buy",
+        bar_ts="2026-05-14",
+        target_utc=at._target_execution_utc(date(2026, 5, 14), 30),
+    )
+    assert len(cid) <= at.MAX_CLIENT_ORDER_ID_LEN
+    # Suffix preserved.
+    assert cid.endswith("t1400")
+
+
+def test_sleep_until_past_target_no_sleep():
+    sleeps = []
+    past = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    waited = at._sleep_until(
+        past,
+        now_fn=lambda: datetime(2026, 5, 14, 14, 0, tzinfo=timezone.utc),
+        sleep_fn=lambda s: sleeps.append(s),
+    )
+    assert waited == 0
+    assert sleeps == []
+
+
+def test_sleep_until_future_target_sleeps_once():
+    sleeps = []
+    target = datetime(2026, 5, 14, 14, 30, tzinfo=timezone.utc)
+    waited = at._sleep_until(
+        target,
+        now_fn=lambda: datetime(2026, 5, 14, 14, 0, tzinfo=timezone.utc),
+        sleep_fn=lambda s: sleeps.append(s),
+    )
+    assert waited == 30 * 60
+    assert sleeps == [30 * 60]
+
+
+def test_offset_zero_does_not_sleep_or_set_client_order_id(
+    isolated_db, winner_settings, stub_submit, monkeypatch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    sleeps = []
+    settings = {**winner_settings, "dry_run": False,
+                "entry_time_offset_min": 0}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings, client=_mk_client(),
+        sleep_fn=lambda s: sleeps.append(s),
+        now_fn=lambda: datetime(2026, 5, 14, 14, 0, tzinfo=timezone.utc),
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "BUY"
+    assert actions[0]["entry_time_offset_min"] == 0
+    assert actions[0]["target_execution_utc"] is None
+    assert sleeps == []  # no sleep when offset=0
+
+
+def test_offset_positive_sleeps_and_submits_with_client_order_id(
+    isolated_db, winner_settings, monkeypatch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    # Custom stub_submit that captures kwargs.
+    captured = {}
+    def fake_submit(client, *, symbol, qty, side, client_order_id=None):
+        captured["client_order_id"] = client_order_id
+        order = MagicMock()
+        order.id = "alpaca-order-1"
+        order.status = "accepted"
+        order.submitted_at = "2026-05-14T14:30:00Z"
+        return order
+    monkeypatch.setattr(at, "_submit_market_order", fake_submit)
+
+    sleeps = []
+    settings = {**winner_settings, "dry_run": False,
+                "entry_time_offset_min": 30}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings, client=_mk_client(),
+        sleep_fn=lambda s: sleeps.append(s),
+        now_fn=lambda: datetime(2026, 5, 14, 13, 30, tzinfo=timezone.utc),
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "BUY"
+    assert actions[0]["entry_time_offset_min"] == 30
+    assert actions[0]["target_execution_utc"].endswith("14:00:00+00:00")
+    assert "t1400" in actions[0]["client_order_id"]
+    # Slept 30 minutes once (from 13:30 to 14:00 UTC).
+    assert sleeps == [30 * 60]
+    assert captured["client_order_id"] == actions[0]["client_order_id"]
+
+
+def test_offset_dry_run_reports_target_without_sleeping(
+    isolated_db, winner_settings,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    sleeps = []
+    settings = {**winner_settings, "dry_run": True,
+                "entry_time_offset_min": 15}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings,
+        sleep_fn=lambda s: sleeps.append(s),
+        now_fn=lambda: datetime(2026, 5, 14, 13, 30, tzinfo=timezone.utc),
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "DRY_BUY"
+    assert actions[0]["entry_time_offset_min"] == 15
+    assert "13:45" in actions[0]["target_execution_utc"]
+    # Dry-run never sleeps.
+    assert sleeps == []
+    # client_order_id is computed even on dry-run for log traceability.
+    assert "t1345" in actions[0]["client_order_id"]
+
+
+def test_offset_negative_clamped_to_zero(isolated_db, winner_settings, stub_submit):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    settings = {**winner_settings, "dry_run": True,
+                "entry_time_offset_min": -10}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["entry_time_offset_min"] == 0
+    assert actions[0]["target_execution_utc"] is None

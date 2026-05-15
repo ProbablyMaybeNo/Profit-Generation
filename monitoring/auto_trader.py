@@ -23,7 +23,8 @@ import argparse
 import json
 import statistics
 import sys
-from datetime import date, datetime, timezone
+import time
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -41,7 +42,17 @@ DEFAULT_SETTINGS = {
     "min_sharpe_ish": 0.10,
     "max_position_usd": 1000,
     "skip_intraday_signals": True,
+    "entry_time_offset_min": 0,
 }
+
+# US Eastern offset relative to UTC during market hours. The auto-trader
+# only operates on EOD '1d' fires so we don't need precise DST handling
+# — the offset is used to schedule a sleep relative to the user's clock,
+# and the worst case is a 1h drift twice a year that the user can
+# observe in the order log.
+MARKET_OPEN_UTC = dtime(13, 30, 0)  # 09:30 ET ≈ 13:30 UTC (standard time)
+MAX_OFFSET_MIN = 360  # 6 hours — anything more is a config typo.
+MAX_CLIENT_ORDER_ID_LEN = 128
 
 
 def _utc_now() -> str:
@@ -119,18 +130,96 @@ def _calc_qty(price: Optional[float], max_position_usd: float) -> int:
     return int(max_position_usd // price)
 
 
-def _submit_market_order(client, *, symbol: str, qty: int, side: str):
+def _coerce_offset_min(raw) -> int:
+    """Read settings.entry_time_offset_min defensively. Negative → 0;
+    above MAX_OFFSET_MIN → clamped + warning."""
+    try:
+        v = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    if v <= 0:
+        return 0
+    if v > MAX_OFFSET_MIN:
+        log(
+            f"entry_time_offset_min={v} exceeds cap {MAX_OFFSET_MIN}; "
+            f"clamping",
+            "WARNING",
+        )
+        return MAX_OFFSET_MIN
+    return v
+
+
+def _target_execution_utc(asof: date, offset_min: int) -> datetime:
+    """Market open + offset_min for the asof date, in UTC."""
+    base = datetime.combine(asof, MARKET_OPEN_UTC).replace(tzinfo=timezone.utc)
+    return base + timedelta(minutes=offset_min)
+
+
+def _build_client_order_id(
+    *, strategy_id: str, symbol: str, side: str,
+    bar_ts: str, target_utc: Optional[datetime],
+) -> str:
+    """Build a deterministic, traceable client_order_id.
+
+    Format: "ato-<sid>-<sym>-<side>-<bar>-t<HHMM>". Trimmed to 128 chars
+    (Alpaca's limit) by truncating the strategy_id middle if needed.
+    The target HHMM block is in UTC.
+    """
+    side_short = "b" if side.lower() == "buy" else "s"
+    bar_short = (bar_ts or "")[:10]
+    t_block = ""
+    if target_utc is not None:
+        t_block = f"-t{target_utc.strftime('%H%M')}"
+    sid = strategy_id or "x"
+    sym = symbol or "x"
+    prefix = "ato"
+    fixed = f"{prefix}--{sym}-{side_short}-{bar_short}{t_block}"
+    budget = MAX_CLIENT_ORDER_ID_LEN - len(fixed)
+    if budget <= 0:
+        # Pathological: keep the suffix, drop the strategy.
+        out = f"{prefix}-{sym}-{side_short}-{bar_short}{t_block}"
+    else:
+        sid_trimmed = sid if len(sid) <= budget else sid[: max(budget - 1, 1)] + "~"
+        out = f"{prefix}-{sid_trimmed}-{sym}-{side_short}-{bar_short}{t_block}"
+    return out[:MAX_CLIENT_ORDER_ID_LEN]
+
+
+def _sleep_until(target_utc: datetime,
+                 *, now_fn=None, sleep_fn=None) -> float:
+    """Block until `target_utc`. Returns seconds waited (>= 0). Mocks pluggable
+    for tests. If target is already past, returns 0 without sleeping."""
+    now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+    sleep_fn = sleep_fn or time.sleep
+    now = now_fn()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    delta = (target_utc - now).total_seconds()
+    if delta <= 0:
+        return 0.0
+    sleep_fn(delta)
+    return delta
+
+
+def _submit_market_order(
+    client, *, symbol: str, qty: int, side: str,
+    client_order_id: Optional[str] = None,
+):
     from alpaca.trading.requests import MarketOrderRequest
     from alpaca.trading.enums import OrderSide, TimeInForce
-    req = MarketOrderRequest(
+    kwargs = dict(
         symbol=symbol, qty=qty,
         side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
     )
+    if client_order_id:
+        kwargs["client_order_id"] = client_order_id
+    req = MarketOrderRequest(**kwargs)
     return client.submit_order(req)
 
 
-def _process_entry(conn, client, settings: dict, sig, dry_run: bool) -> dict:
+def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
+                    *, asof: Optional[date] = None,
+                    sleep_fn=None, now_fn=None) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
     eligible, stats = _is_eligible(conn, sid, settings)
     if not eligible:
@@ -144,14 +233,43 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool) -> dict:
         return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
                 "price": sig["close"], "max_usd": settings.get("max_position_usd")}
 
+    offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
+    target_utc = (
+        _target_execution_utc(asof or date.today(), offset_min)
+        if offset_min > 0 else None
+    )
+    client_order_id = _build_client_order_id(
+        strategy_id=sid, symbol=sym, side="buy",
+        bar_ts=sig["bar_ts"], target_utc=target_utc,
+    )
+
     if dry_run:
+        offset_note = (
+            f" (would sleep until {target_utc.isoformat()})"
+            if target_utc is not None else ""
+        )
         log(f"[DRY-RUN] BUY {qty} {sym} @ ~${sig['close']:.2f} "
-            f"(~${qty * sig['close']:.2f}) for {sid}", "INFO")
+            f"(~${qty * sig['close']:.2f}) for {sid}{offset_note}", "INFO")
         return {"action": "DRY_BUY", "strategy_id": sid, "symbol": sym,
-                "qty": qty, "price": sig["close"], "signal_id": sig["id"]}
+                "qty": qty, "price": sig["close"], "signal_id": sig["id"],
+                "client_order_id": client_order_id,
+                "target_execution_utc": target_utc.isoformat() if target_utc else None,
+                "entry_time_offset_min": offset_min}
+
+    if target_utc is not None:
+        waited = _sleep_until(target_utc, now_fn=now_fn, sleep_fn=sleep_fn)
+        if waited > 0:
+            log(
+                f"entry_time_offset_min={offset_min}: slept {waited:.0f}s "
+                f"for {sid}/{sym} until {target_utc.isoformat()}",
+                "INFO",
+            )
 
     try:
-        order = _submit_market_order(client, symbol=sym, qty=qty, side="buy")
+        order = _submit_market_order(
+            client, symbol=sym, qty=qty, side="buy",
+            client_order_id=client_order_id,
+        )
     except Exception as e:
         log(f"order submit failed for {sid}/{sym}: {e}", "ERROR")
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
@@ -164,11 +282,15 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool) -> dict:
         "order_type": "market",
         "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
         "status": str(getattr(order, "status", "submitted")),
-        "notes": f"auto-entry on bar_ts={sig['bar_ts']}",
+        "notes": f"auto-entry on bar_ts={sig['bar_ts']}"
+                 + (f"; client_order_id={client_order_id}" if offset_min > 0 else ""),
     })
     log(f"BUY {qty} {sym} order submitted: {order.id}", "SUCCESS")
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
-            "order_id": str(order.id), "signal_id": sig["id"]}
+            "order_id": str(order.id), "signal_id": sig["id"],
+            "client_order_id": client_order_id,
+            "target_execution_utc": target_utc.isoformat() if target_utc else None,
+            "entry_time_offset_min": offset_min}
 
 
 def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
@@ -217,6 +339,8 @@ def process_signals(
     settings: Optional[dict] = None,
     client=None,
     client_factory: Callable = get_alpaca_client,
+    sleep_fn=None,
+    now_fn=None,
 ) -> dict:
     """Walk today's '1d' signals; submit Alpaca paper market orders per eligibility + dedupe.
 
@@ -248,7 +372,10 @@ def process_signals(
     actions: List[dict] = []
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
-            actions.append(_process_entry(conn, client, settings, sig, dry_run))
+            actions.append(_process_entry(
+                conn, client, settings, sig, dry_run,
+                asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
+            ))
         elif sig["signal_type"] == "long_exit":
             actions.append(_process_exit(conn, client, settings, sig, dry_run))
 
