@@ -160,6 +160,112 @@ def test_strategy_id_filter(isolated_records, stub_llm):
     assert summary["per_strategy"][0]["strategy_id"] == "B"
 
 
+def test_promote_flag_routes_PASS_through_promoter(isolated_records, stub_llm):
+    """When --promote is set, PASS strategies get sent to the promoter."""
+    _seed_record(isolated_records, strategy_id="winner")
+    calls = []
+
+    def fake_promoter(*, strategy_id, compute_fn, active_on, module,
+                      dry_run=False, reseed=True):
+        calls.append({
+            "strategy_id": strategy_id,
+            "compute_fn": compute_fn,
+            "active_on": list(active_on),
+            "module": module,
+            "dry_run": dry_run,
+            "reseed": reseed,
+        })
+        return {"tracked_action": "added", "module_action": "added"}
+
+    # The stub-llm/bars combo trivially yields entries on every bar — but
+    # the result of validate_strategy_record drives the actual verdict. We
+    # patch it directly so we KNOW we'll hit the PASS branch.
+    import scripts.batch_validate as bv_mod
+    original = bv_mod.vs.validate_strategy_record
+
+    def fake_validate(strategy_id, universe, *, lookback_days=730,
+                      bars_by_sym=None, fn=None):
+        return {
+            "strategy_id": strategy_id,
+            "lookback_days": lookback_days,
+            "period": "p",
+            "universe": list(universe),
+            "per_symbol": {
+                u: {"verdict": "PASS",
+                    "stats": {"n": 30, "mean": 0.5, "win_rate": 0.6,
+                              "sharpe_ish": 0.4, "total_return_pct": 5.0},
+                    "trades": []}
+                for u in universe
+            },
+            "test_runs": [],
+            "overall_verdict": "PASS",
+        }
+
+    bv_mod.vs.validate_strategy_record = fake_validate
+    try:
+        summary = bv.batch_run(
+            universe=["GDX", "KRE"], lookback_days=60,
+            bars_loader=_bars_loader_factory({"GDX", "KRE"}),
+            promote=True,
+            promoter=fake_promoter,
+        )
+    finally:
+        bv_mod.vs.validate_strategy_record = original
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["strategy_id"] == "winner"
+    assert call["active_on"] == ["GDX", "KRE"]
+    assert call["module"].startswith("strategies.generated.")
+    assert call["reseed"] is False  # batch reseeds itself
+    o = summary["per_strategy"][0]
+    assert o["promotion"]["tracked_action"] == "added"
+
+
+def test_promote_flag_skips_non_passing(isolated_records, stub_llm):
+    """A FAIL verdict must NOT trigger promotion."""
+    _seed_record(isolated_records, strategy_id="loser")
+    calls = []
+
+    def fake_promoter(**kwargs):
+        calls.append(kwargs)
+        return {"tracked_action": "added", "module_action": "added"}
+
+    import scripts.batch_validate as bv_mod
+    original = bv_mod.vs.validate_strategy_record
+
+    def fake_validate(strategy_id, universe, *, lookback_days=730,
+                      bars_by_sym=None, fn=None):
+        return {
+            "strategy_id": strategy_id,
+            "lookback_days": lookback_days,
+            "period": "p",
+            "universe": list(universe),
+            "per_symbol": {
+                u: {"verdict": "FAIL",
+                    "stats": {"n": 30, "mean": -0.5, "win_rate": 0.3,
+                              "sharpe_ish": -0.4, "total_return_pct": -5.0},
+                    "trades": []}
+                for u in universe
+            },
+            "test_runs": [],
+            "overall_verdict": "FAIL",
+        }
+
+    bv_mod.vs.validate_strategy_record = fake_validate
+    try:
+        bv.batch_run(
+            universe=["GDX"], lookback_days=60,
+            bars_loader=_bars_loader_factory({"GDX"}),
+            promote=True,
+            promoter=fake_promoter,
+        )
+    finally:
+        bv_mod.vs.validate_strategy_record = original
+
+    assert calls == []  # no promotion attempts for FAIL
+
+
 def test_codegen_failure_marks_record_FAIL(isolated_records, monkeypatch):
     _seed_record(isolated_records, strategy_id="bad-codegen")
     def boom(*a, **kw):

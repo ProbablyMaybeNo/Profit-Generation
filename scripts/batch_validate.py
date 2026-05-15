@@ -89,6 +89,9 @@ def batch_run(
     strategy_id_filter: Optional[str] = None,
     model: Optional[str] = None,
     bars_loader=None,
+    promote: bool = False,
+    promote_dry_run: bool = False,
+    promoter=None,
 ) -> Dict:
     """
     Returns a summary dict: {targets, by_verdict, codegen_failures, errors,
@@ -184,6 +187,38 @@ def batch_run(
         outcome.update({"action": "validated", "verdict": verdict,
                         "per_symbol": {s: result["per_symbol"][s]["verdict"]
                                        for s in result["per_symbol"]}})
+
+        if promote and verdict in ("PASS", "PASS_WITH_NUANCE"):
+            passing = sorted(
+                s for s, info in result["per_symbol"].items()
+                if info["verdict"] == "PASS"
+            )
+            if passing:
+                if promoter is None:
+                    from scripts import promote_strategy as ps
+                    promoter = ps.promote
+                compute_fn = (r.get("extra") or {}).get("compute_fn")
+                if not compute_fn:
+                    from monitoring import llm_codegen
+                    compute_fn = llm_codegen.fn_name_from_strategy_id(sid)
+                module = f"strategies.generated.{_safe_filename(sid)}"
+                try:
+                    promo = promoter(
+                        strategy_id=sid,
+                        compute_fn=compute_fn,
+                        active_on=passing,
+                        module=module,
+                        dry_run=promote_dry_run,
+                        reseed=False,  # batch reseeds itself below
+                    )
+                    outcome["promotion"] = {
+                        "tracked_action": promo.get("tracked_action"),
+                        "module_action": promo.get("module_action"),
+                        "active_on": passing,
+                    }
+                except Exception as e:
+                    outcome["promotion"] = {"error": str(e)[:200]}
+
         per_strategy.append(outcome)
         by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
 
@@ -224,6 +259,11 @@ def main():
     parser.add_argument("--strategy-id", default=None,
                         help="restrict to a single strategy_id (overrides --max/--since)")
     parser.add_argument("--model", default=None, help="override OLLAMA_MODEL")
+    parser.add_argument("--promote", action="store_true",
+                        help="auto-promote strategies whose verdict is "
+                             "PASS/PASS_WITH_NUANCE (mutates monitoring/config.py)")
+    parser.add_argument("--promote-dry-run", action="store_true",
+                        help="with --promote, show would-be edits without writing")
     args = parser.parse_args()
 
     universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
@@ -238,6 +278,8 @@ def main():
         skip_codegen=args.skip_codegen,
         strategy_id_filter=args.strategy_id,
         model=args.model,
+        promote=args.promote,
+        promote_dry_run=args.promote_dry_run,
     )
 
     print()

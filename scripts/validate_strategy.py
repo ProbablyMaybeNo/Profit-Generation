@@ -276,12 +276,29 @@ def main():
                         help="print every trade for the largest-sample symbol")
     parser.add_argument("--no-update-records", action="store_true",
                         help="don't write the verdict back to records.jsonl")
+    parser.add_argument("--promote", action="store_true",
+                        help="on PASS/PASS_WITH_NUANCE, add strategy to "
+                             "monitoring.config.TRACKED_STRATEGIES and reseed trading.db")
+    parser.add_argument("--demote", action="store_true",
+                        help="reverse a prior promotion for this strategy_id "
+                             "(does not validate)")
+    parser.add_argument("--promote-dry-run", action="store_true",
+                        help="with --promote/--demote, do not write files")
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
     if not symbols:
         print("no symbols specified")
         return 1
+
+    if args.demote:
+        from scripts import promote_strategy as ps
+        summary = ps.demote(
+            strategy_id=args.strategy_id,
+            dry_run=args.promote_dry_run,
+        )
+        print(json.dumps(summary, indent=2))
+        return 0
 
     print(f"loading {len(symbols)} symbols × {args.lookback_days}d daily bars...")
     result = validate_strategy_record(
@@ -328,6 +345,35 @@ def main():
             finally:
                 conn.close()
             print(f"\nupdated records.jsonl + trading.db with verdict={overall}")
+
+    if args.promote:
+        if overall not in ("PASS", "PASS_WITH_NUANCE"):
+            print(f"\n--promote skipped: verdict is {overall}, not PASS/PASS_WITH_NUANCE")
+        else:
+            from scripts import promote_strategy as ps
+            passing = sorted(
+                sym for sym, info in per_symbol.items()
+                if info["verdict"] == "PASS"
+            )
+            if not passing:
+                print("\n--promote skipped: no individual symbol PASSed")
+            else:
+                record = _find_record(_load_records(), args.strategy_id) or {}
+                compute_fn = (record.get("extra") or {}).get("compute_fn")
+                if not compute_fn:
+                    # Fall back to the codegen-derived name.
+                    from monitoring import llm_codegen
+                    compute_fn = llm_codegen.fn_name_from_strategy_id(args.strategy_id)
+                module = f"strategies.generated.{_safe_filename(args.strategy_id)}"
+                summary = ps.promote(
+                    strategy_id=args.strategy_id,
+                    compute_fn=compute_fn,
+                    active_on=passing,
+                    module=module,
+                    dry_run=args.promote_dry_run,
+                )
+                print("\n--- PROMOTION ---")
+                print(json.dumps(summary, indent=2))
     return 0
 
 
