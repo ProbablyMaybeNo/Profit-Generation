@@ -52,9 +52,10 @@ the box.
   - **Acceptance:** when verdict is PASS or PASS_WITH_NUANCE, the flag triggers: (1) edit `monitoring/config.py` TRACKED_STRATEGIES list to add the strategy with `active_on=[symbols where it PASSed]` + `compute=<fn_name>`, (2) write `monitoring.intraday_monitor.COMPUTE_FN_MODULES` entry if the strategy lives outside the existing modules, (3) reseed trading.db. Idempotent — re-promoting an already-promoted strategy is a no-op. Dashboard reflects the new active strategy on next refresh. Tests: promotion is reversible via `--demote`, idempotent re-runs, dry-run flag.
   - **Completed:** 2026-05-15 · commit `223cd29`
 
-- [ ] **2.1.6 Source-attribution & dedupe**
+- [x] **2.1.6 Source-attribution & dedupe**
   - **Deliverable:** `scripts/dedupe_records.py` + tests
   - **Acceptance:** uses `nomic-embed-text` (already on Ollama) to embed each record's `entry_rules + exit_rules`. Cosine-similarity above 0.92 → mark as duplicates and merge (keep the one with the longest source URL chain). Writes `extra.merged_from = [list of original strategy_ids]`. Idempotent.
+  - **Completed:** 2026-05-15 · commit `e2cfac9`
 
 ---
 
