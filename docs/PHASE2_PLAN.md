@@ -36,10 +36,11 @@ the box.
   - **Notes:** Reuse the Ollama plumbing from `monitoring/llm_codegen.py` (`_ollama_post`). Variety is the point — temperature 0.7, NOT 0.1. The validator (existing `batch_validate` pipeline) is the quality filter; this script just emits candidates.
   - **Completed:** 2026-05-15 · commit `92ce661`
 
-- [ ] **2.1.2b GitHub repo strategy scraper**
+- [x] **2.1.2b GitHub repo strategy scraper**
   - **Deliverable:** `scripts/scrape_github_strategies.py` + `tests/test_scrape_github_strategies.py`
   - **Acceptance:** searches GitHub REST API for repos matching configurable queries (default: `"trading strategy"`, `"algorithmic trading"`, `"pine script strategy"`), filters to `stars >= 30` and `pushed_at >= 1y ago`. For each matching repo: fetches README + heuristically-named strategy files (matches `*strategy*.py`, `*.pine`, `strategies/*.py` up to 3 files per repo), runs the combined text through Ollama for extraction (same prompt shape as 2.1.2a), writes results to records.jsonl as UNTESTED with source_url = repo URL. CLI flags: `--query`, `--min-stars` (default 30), `--max-repos` (default 20), `--since-pushed-days` (default 365). Dedupe by repo URL across runs. Tests: GitHub API mocking, README + strategy-file extraction, LLM result shape, dedupe, rate-limit honoring.
   - **Notes:** Use `requests` against `api.github.com`. Authenticated calls allow 5000 req/hr — supports a `github` section in `credentials.json` with `token` field (Personal Access Token, public_repo scope only). Unauthenticated falls back to 60 req/hr (still enough for `--max-repos 20`). The agent should NOT add the credentials section — surface for user to add a token if missing, OR proceed in unauthenticated mode if user prefers. Polite User-Agent header required.
+  - **Completed:** 2026-05-15 · commit `4fd899f`
 
 - [ ] **2.1.3 Quantitative-blog scrapers**
   - **Deliverable:** `scripts/scrape_quantocracy.py` + `scripts/scrape_quantpedia.py` + tests
