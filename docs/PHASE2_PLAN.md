@@ -82,9 +82,10 @@ the box.
   - **Acceptance:** computes pairwise correlation of daily P&L across active strategies (from outcomes table aggregated by exit_ts date). Renders as inline SVG heatmap. Hover → cell value. Above 0.7 correlation gets red border (suggests redundancy). Tests: identity matrix when N=1, perfect correlation when same strategy twice, math correctness.
   - **Completed:** 2026-05-15 · commit `6b513eb`
 
-- [ ] **2.2.5 Realized-vs-theoretical edge analysis**
+- [x] **2.2.5 Realized-vs-theoretical edge analysis**
   - **Deliverable:** `scripts/edge_diff.py` + dashboard widget
   - **Acceptance:** for each strategy with paper_trades, compare backtest expected return per signal vs actual paper-trade fills (using fill_price - entry_price). Surface "backtest says +0.97% but paper fills are giving us +0.42% — slippage is eating 56% of edge" per strategy. Writes report to `logs/edge_diff_YYYY-MM-DD.json`.
+  - **Completed:** 2026-05-15 · commit `bd1adee`
 
 - [ ] **2.2.6 News-sentiment overlay on outcomes**
   - **Deliverable:** `scripts/news_sentiment_overlay.py` + dashboard widget
