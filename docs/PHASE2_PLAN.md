@@ -87,9 +87,10 @@ the box.
   - **Acceptance:** for each strategy with paper_trades, compare backtest expected return per signal vs actual paper-trade fills (using fill_price - entry_price). Surface "backtest says +0.97% but paper fills are giving us +0.42% — slippage is eating 56% of edge" per strategy. Writes report to `logs/edge_diff_YYYY-MM-DD.json`.
   - **Completed:** 2026-05-15 · commit `bd1adee`
 
-- [ ] **2.2.6 News-sentiment overlay on outcomes**
+- [x] **2.2.6 News-sentiment overlay on outcomes**
   - **Deliverable:** `scripts/news_sentiment_overlay.py` + dashboard widget
   - **Acceptance:** for each closed outcome, look up news on the symbol within ±1 day of entry_ts. Aggregate sentiment from `news.sentiment` JSON. Slice outcomes by entry-day sentiment (positive/neutral/negative) and report mean return per slice per strategy. Dashboard shows "trades into negative-sentiment days return +X% vs +Y% on neutral days" per strategy.
+  - **Completed:** 2026-05-15 · commit `f64ad3f`
 
 - [ ] **2.2.7 Forward expectations**
   - **Deliverable:** `/api/strategy_forecast/<strategy_id>` + dashboard widget
