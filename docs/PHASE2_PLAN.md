@@ -111,9 +111,10 @@ the box.
   - **Acceptance:** when set to limit_inside_spread, fetches latest bid/ask via Alpaca data API, submits limit at mid-price, with `time_in_force=DAY`. Records both `limit_price` and `fill_price` in paper_trades. Tests: order construction, mid-price math, market fallback if no quote available.
   - **Completed:** 2026-05-15 · commit `82ac428`
 
-- [ ] **2.3.3 Position sizing by Kelly fraction**
+- [x] **2.3.3 Position sizing by Kelly fraction**
   - **Deliverable:** `monitoring/sizing.py` + `auto_trade.sizing_method = "fixed" | "kelly"` setting
   - **Acceptance:** Kelly mode reads strategy's historical win_rate + avg_win + avg_loss from outcomes table, computes Kelly fraction (capped at 25% for safety), sizes the order to `min(max_position_usd, kelly_fraction * portfolio_value)`. Default still "fixed". Tests: Kelly math correctness on canned win_rate/payoff, cap honored.
+  - **Completed:** 2026-05-15 · commit `8d41c74`
 
 - [ ] **2.3.4 ATR-based stop-loss**
   - **Deliverable:** `auto_trade.stop_loss_atr_multiple` setting + auto_trader honors it
