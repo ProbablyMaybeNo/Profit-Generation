@@ -420,6 +420,7 @@ def main():
     parser.add_argument("--news-limit", type=int, default=5)
     parser.add_argument("--no-notion", action="store_true", help="Skip Notion auto-post")
     parser.add_argument("--no-telegram", action="store_true", help="Skip Telegram summary")
+    parser.add_argument("--no-trade", action="store_true", help="Skip auto-trader (paper orders)")
     args = parser.parse_args()
 
     as_of = date.fromisoformat(args.date)
@@ -429,6 +430,22 @@ def main():
         finalize_report(report)  # rescore now that news is loaded
     markdown = render_markdown(report)
     persist_report(report, markdown=markdown)
+
+    if not args.no_trade:
+        try:
+            from monitoring import auto_trader
+            from data import db as _db
+            _conn = _db.init_db()
+            try:
+                trade_result = auto_trader.process_signals(_conn, asof=as_of)
+            finally:
+                _conn.close()
+            from config.utils import log
+            log(f"auto_trader: status={trade_result['status']} "
+                f"actions={len(trade_result.get('actions', []))}", "INFO")
+        except Exception as e:
+            from config.utils import log
+            log(f"auto_trader failed (non-fatal): {e}", "WARNING")
 
     page_id = None
     if not args.no_notion:

@@ -12,5 +12,15 @@
     "max_orders_per_day": 50,
     "allow_shorts": false
   },
+  "auto_trade": {
+    "enabled": false,
+    "dry_run": true,
+    "min_outcomes": 30,
+    "min_mean_ret_pct": 0.0,
+    "min_sharpe_ish": 0.10,
+    "max_position_usd": 1000,
+    "skip_intraday_signals": true,
+    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish)."
+  },
   "notes": "These are non-secret settings. Edit freely."
 }
