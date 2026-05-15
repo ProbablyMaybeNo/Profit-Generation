@@ -8,8 +8,10 @@ REM different EOD trigger time.
 
 echo Registering TradingSystem\DailyReport with Windows Task Scheduler...
 
+REM Note: cmd /c wrapper — schtasks's path-with-spaces handling on a bare
+REM .bat target is flaky; cmd /c parses the quoted path reliably.
 schtasks /create /tn "TradingSystem\DailyReport" ^
-  /tr "\"D:\AI-Workstation\Antigravity\apps\Profit Generation\schedulers\run_daily.bat\"" ^
+  /tr "cmd /c \"D:\AI-Workstation\Antigravity\apps\Profit Generation\schedulers\run_daily.bat\"" ^
   /sc weekly /d MON,TUE,WED,THU,FRI ^
   /st 14:30 ^
   /sd 01/01/2026 ^

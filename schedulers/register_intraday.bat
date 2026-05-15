@@ -6,8 +6,10 @@ REM ticks exit immediately without doing work.
 
 echo Registering TradingSystem\Intraday with Windows Task Scheduler...
 
+REM Note: cmd /c wrapper — schtasks's path-with-spaces handling on a bare
+REM .bat target is flaky; cmd /c parses the quoted path reliably.
 schtasks /create /tn "TradingSystem\Intraday" ^
-  /tr "\"D:\AI-Workstation\Antigravity\apps\Profit Generation\schedulers\run_intraday.bat\"" ^
+  /tr "cmd /c \"D:\AI-Workstation\Antigravity\apps\Profit Generation\schedulers\run_intraday.bat\"" ^
   /sc minute /mo 15 ^
   /sd 01/01/2026 ^
   /ru "%USERNAME%" ^

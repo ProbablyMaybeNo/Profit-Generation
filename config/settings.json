@@ -13,7 +13,7 @@
     "allow_shorts": false
   },
   "auto_trade": {
-    "enabled": false,
+    "enabled": true,
     "dry_run": true,
     "min_outcomes": 30,
     "min_mean_ret_pct": 0.0,
