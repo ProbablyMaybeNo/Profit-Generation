@@ -71,9 +71,11 @@ the box.
   - **Acceptance:** for a strategy + universe, splits historical bars into N rolling windows (default: 6mo train / 3mo test, step 3mo). Computes per-window verdict. Strategy gets a `walk_forward_stable: bool` flag in records.jsonl based on whether ≥ 70% of test windows match the in-sample verdict. Tests: synthetic data with known stable + unstable strategies, window math correctness.
   - **Completed:** 2026-05-15 · commit `5b8903f`
 
-- [ ] **2.2.3 Time-of-day / day-of-week / regime conditioning**
+- [x] **2.2.3 Time-of-day / day-of-week / regime conditioning**
   - **Deliverable:** new analytics module `monitoring/edge_slicer.py` + dashboard endpoint + UI section
   - **Acceptance:** for each active strategy, slice closed outcomes by day-of-week (Mon/Tue/.../Fri), by VIX quartile (need FRED VIX series), by market regime tag (from snapshot's regime field). Dashboard table: strategy × slice → (n, mean, sharpe). Surfaces "this strategy only works on Mondays" type insights. Tests: synthetic outcomes with known day-of-week bias get correctly sliced.
+  - **Completed:** 2026-05-15 · commit `304e192`
+  - **Notes:** VIX slicing reads from a `macro` table planned in milestone 2.5.1; until that ships, the slicer reports `vix_unavailable=True` and the dashboard shows "waiting on FRED VIX overlay". Day-of-week + regime slicing live now.
 
 - [ ] **2.2.4 Correlation matrix**
   - **Deliverable:** `/api/strategy_correlation` endpoint + dashboard heatmap section + tests
