@@ -615,6 +615,18 @@ def edge_diff():
         conn.close()
 
 
+@app.route("/api/news_sentiment_overlay", methods=["GET"])
+def news_sentiment_overlay():
+    """Per-strategy outcome returns sliced by entry-day news sentiment
+    (positive / neutral / negative / no_news)."""
+    from monitoring import news_sentiment_overlay as nso
+    conn = db.init_db()
+    try:
+        return jsonify(nso.compute_overlay(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/guide/<name>", methods=["GET"])
 def get_guide(name: str):
     """Serve a markdown guide as plain text. Whitelist enforced."""

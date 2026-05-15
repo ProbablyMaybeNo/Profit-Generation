@@ -325,6 +325,40 @@
   .edge-diff-cap-mid { color: var(--text); }
   .edge-diff-cap-lo { color: var(--red); }
 
+  /* News-sentiment overlay */
+  .sent-overlay-strat { margin-bottom: 14px; }
+  .sent-overlay-strat:last-child { margin-bottom: 0; }
+  .sent-overlay-strat h3 {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 8px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--grid);
+  }
+  table.sent-overlay { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.sent-overlay th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 10px;
+    padding: 4px 6px;
+  }
+  table.sent-overlay td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--grid);
+    color: var(--text);
+  }
+  table.sent-overlay td.r { text-align: right; }
+  table.sent-overlay td.sent-pos { color: var(--green); }
+  table.sent-overlay td.sent-neg { color: var(--red); }
+  table.sent-overlay td.sent-neu { color: var(--text); }
+  table.sent-overlay td.sent-none { color: var(--dim); font-style: italic; }
+
   /* Edge slices */
   .slice-section { margin-bottom: 18px; }
   .slice-section:last-child { margin-bottom: 0; }
@@ -751,6 +785,12 @@
   <div class="card">
     <h2>edge diff — backtest vs paper fills <span class="count" id="edge-diff-count"></span></h2>
     <div id="edge-diff" class="loading">loading...</div>
+  </div>
+
+  <!-- News-sentiment overlay -->
+  <div class="card">
+    <h2>news sentiment overlay — outcome by entry-day mood <span class="count" id="sent-overlay-count"></span></h2>
+    <div id="news-sentiment-overlay" class="loading">loading...</div>
   </div>
 
   <!-- Open positions -->
@@ -1562,6 +1602,70 @@ function renderEdgeDiff() {
     });
 }
 
+function sentimentCellClass(bucket) {
+  if (bucket === 'positive') return 'sent-pos';
+  if (bucket === 'negative') return 'sent-neg';
+  if (bucket === 'no_news') return 'sent-none';
+  return 'sent-neu';
+}
+
+function renderNewsSentimentOverlay() {
+  const el = document.getElementById('news-sentiment-overlay');
+  const count = document.getElementById('sent-overlay-count');
+  fetch('/api/news_sentiment_overlay', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+    .then(d => {
+      const rows = d.rows || [];
+      const nStrats = new Set(rows.map(r => r.strategy_id)).size;
+      count.textContent = `${nStrats} strats · ${d.n_trades_total} trades · ±${d.window_days}d`;
+      if (d.news_unavailable) {
+        el.innerHTML = '<div class="empty">no news with sentiment in the db — run scripts/news_sentiment_overlay.py after the daily news fetch has populated insights.</div>';
+        return;
+      }
+      if (!rows.length) {
+        el.innerHTML = '<div class="empty">no closed outcomes with parseable news yet.</div>';
+        return;
+      }
+      const byStrat = {};
+      for (const r of rows) {
+        (byStrat[r.strategy_id] ||= []).push(r);
+      }
+      const order = (d.buckets && d.buckets.length) ? d.buckets : ['positive', 'neutral', 'negative', 'no_news'];
+      const orderIdx = Object.fromEntries(order.map((b, i) => [b, i]));
+      let html = '';
+      for (const sid of Object.keys(byStrat).sort()) {
+        const list = byStrat[sid].slice().sort(
+          (a, b) => (orderIdx[a.sentiment] ?? 99) - (orderIdx[b.sentiment] ?? 99)
+        );
+        html += `<div class="sent-overlay-strat"><h3>${escapeHtml(shortStrat(sid))}</h3>`;
+        html += '<table class="sent-overlay"><thead><tr>'
+          + '<th>sentiment</th>'
+          + '<th class="r">n</th>'
+          + '<th class="r">mean</th>'
+          + '<th class="r">win%</th>'
+          + '<th class="r">best</th>'
+          + '<th class="r">worst</th>'
+          + '</tr></thead><tbody>';
+        for (const r of list) {
+          const cls = sentimentCellClass(r.sentiment);
+          html += '<tr>'
+            + `<td class="${cls}">${escapeHtml(r.sentiment.replace(/_/g, ' '))}</td>`
+            + `<td class="r">${r.n}</td>`
+            + `<td class="r ${pctClass(r.mean)}">${fmtPct(r.mean)}</td>`
+            + `<td class="r">${(r.win_rate * 100).toFixed(0)}%</td>`
+            + `<td class="r ${pctClass(r.max)}">${fmtPct(r.max)}</td>`
+            + `<td class="r ${pctClass(r.min)}">${fmtPct(r.min)}</td>`
+            + '</tr>';
+        }
+        html += '</tbody></table></div>';
+      }
+      el.innerHTML = html;
+    })
+    .catch(e => {
+      el.innerHTML = `<div class="empty">news-sentiment overlay failed: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
 function renderEdgeSlices() {
   const el = document.getElementById('edge-slices');
   fetch('/api/edge_slices', { cache: 'no-store' })
@@ -1741,6 +1845,7 @@ async function refresh() {
     renderEdgeSlices();
     renderStrategyCorrelation();
     renderEdgeDiff();
+    renderNewsSentimentOverlay();
     renderOpenPositions(s);
     renderPaperTrades(s);
     renderSignals(s);
