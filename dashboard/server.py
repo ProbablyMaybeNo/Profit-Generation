@@ -578,6 +578,19 @@ def equity_curve(strategy_id: str):
         conn.close()
 
 
+@app.route("/api/edge_slices", methods=["GET"])
+def edge_slices():
+    """Per-strategy edge sliced by day-of-week, market regime, and VIX
+    quartile. The rollup is computed against trading.db on every call —
+    fast enough at this dataset size, and avoids stale-cache issues."""
+    from monitoring import edge_slicer  # local import, optional dep on db
+    conn = db.init_db()
+    try:
+        return jsonify(edge_slicer.compute_edge_slices(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/guide/<name>", methods=["GET"])
 def get_guide(name: str):
     """Serve a markdown guide as plain text. Whitelist enforced."""
