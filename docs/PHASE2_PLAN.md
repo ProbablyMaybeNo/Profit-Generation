@@ -24,10 +24,11 @@ the box.
   - **Acceptance:** walks records.jsonl, codegens any UNTESTED record, validates across configurable universe, writes verdict back. Pre-fetches bars once. CLI flags: `--max`, `--since`, `--universe`, `--lookback-days`, `--force`, `--skip-codegen`, `--strategy-id`, `--model`.
   - **Completed:** 2026-05-15 · commit `c8970d0`
 
-- [ ] **2.1.1 TradingView Pine library scraper**
+- [x] **2.1.1 TradingView Pine library scraper**
   - **Deliverable:** `scripts/scrape_tradingview.py` + `tests/test_scrape_tradingview.py`
   - **Acceptance:** scrapes 10+ public Pine scripts from TradingView's public scripts page (https://www.tradingview.com/scripts/), extracts title + author + description + Pine source code, writes UNTESTED records to records.jsonl using the existing schema. Respects rate limits (max 1 req/sec). Caches via `config.cache.cached`. Skips strategies already in records.jsonl (dedupe by source URL). Tests: HTML parsing, dedupe, rate-limit honoring, malformed-script graceful skip.
   - **Notes:** TradingView's `/scripts/` page is server-rendered HTML — `requests` + BeautifulSoup is enough. Pine source lives at `/script/<id>/`. Filter to strategies only (not indicators) via the page's tag filters.
+  - **Completed:** 2026-05-15 · commit `da4b19d`
 
 - [ ] **2.1.2 Reddit strategy scraper**
   - **Deliverable:** `scripts/scrape_reddit_strategies.py` + tests
