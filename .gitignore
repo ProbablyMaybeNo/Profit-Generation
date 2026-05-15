@@ -1,0 +1,11 @@
+config/credentials.json
+data/*.db
+data/cache.db
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+.env
+venv/
+*.log

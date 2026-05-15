@@ -1,0 +1,85 @@
+symbol,strategy,name,n_signals,fills,trades,total_return_pct,cagr_pct,sharpe,max_dd_pct,win_rate_pct
+XLE,BUY_AND_HOLD,Buy & Hold,1,1,0,133.78,5.84,0.35,-70.92,0.0
+XLE,buy-5day-low,Buy on 5-day Low,455,420,210,31.74,1.86,0.2,-50.6,65.7
+XLE,3-bar-low,3-Bar Low,592,307,153,138.61,5.98,0.38,-59.42,69.3
+XLE,3-bar-low-200ema,3-Bar Low + 200 EMA filter,278,199,99,45.43,2.53,0.23,-60.66,70.7
+XLE,bb-reversal-ibs,BB Reversal + IBS,118,152,76,-22.67,-1.7,-0.12,-44.73,59.2
+XLE,avg-hl-range-ibs,Avg HL Range + IBS,76,76,38,-26.82,-2.06,-0.13,-55.55,65.8
+XLE,turn-of-month-25,Turn of the Month (>=25),178,219,109,56.4,3.03,0.33,-22.96,61.5
+XLE,consec-below-sma5,3 bars below SMA(5),901,530,265,68.72,3.56,0.31,-49.99,64.2
+XLE,turn-around-tuesday,Turn-around Tuesday,161,280,140,-23.68,-1.79,-0.07,-48.33,57.9
+XLE,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,86,156,78,18.95,1.17,0.19,-19.32,60.3
+XLE,consec-bearish-3,3 consecutive bearish,434,394,197,36.92,2.12,0.22,-44.96,65.5
+XLE,4bar-momentum-reversal,4-Bar Momentum Reversal,770,464,232,-18.53,-1.36,-0.01,-64.48,65.5
+XOP,BUY_AND_HOLD,Buy & Hold,1,1,0,-5.23,-0.36,0.18,-89.86,0.0
+XOP,buy-5day-low,Buy on 5-day Low,477,420,210,-14.89,-1.07,0.07,-72.78,63.8
+XOP,3-bar-low,3-Bar Low,629,285,142,-26.73,-2.06,0.08,-85.14,63.4
+XOP,3-bar-low-200ema,3-Bar Low + 200 EMA filter,234,159,79,66.98,3.48,0.28,-33.61,63.3
+XOP,bb-reversal-ibs,BB Reversal + IBS,120,152,76,21.52,1.31,0.17,-36.05,64.5
+XOP,avg-hl-range-ibs,Avg HL Range + IBS,72,76,38,15.39,0.96,0.14,-48.49,76.3
+XOP,turn-of-month-25,Turn of the Month (>=25),172,220,110,21.84,1.33,0.16,-51.66,66.4
+XOP,consec-below-sma5,3 bars below SMA(5),954,540,270,21.05,1.28,0.18,-70.68,64.8
+XOP,turn-around-tuesday,Turn-around Tuesday,180,300,150,-26.32,-2.02,0.01,-69.69,63.3
+XOP,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,79,142,71,50.91,2.79,0.33,-27.2,64.8
+XOP,consec-bearish-3,3 consecutive bearish,438,398,199,-43.7,-3.76,-0.06,-79.09,65.3
+XOP,4bar-momentum-reversal,4-Bar Momentum Reversal,773,474,237,-27.82,-2.15,0.01,-64.56,62.0
+XBI,BUY_AND_HOLD,Buy & Hold,1,1,0,407.07,11.45,0.5,-63.82,0.0
+XBI,buy-5day-low,Buy on 5-day Low,434,424,212,282.31,9.37,0.61,-36.0,66.5
+XBI,3-bar-low,3-Bar Low,571,283,141,96.27,4.61,0.31,-50.6,65.2
+XBI,3-bar-low-200ema,3-Bar Low + 200 EMA filter,308,211,105,77.57,3.91,0.29,-39.84,64.8
+XBI,bb-reversal-ibs,BB Reversal + IBS,99,130,65,40.03,2.27,0.27,-17.1,63.1
+XBI,avg-hl-range-ibs,Avg HL Range + IBS,50,48,24,12.94,0.82,0.13,-20.87,70.8
+XBI,turn-of-month-25,Turn of the Month (>=25),173,206,103,91.48,4.43,0.37,-34.5,67.0
+XBI,consec-below-sma5,3 bars below SMA(5),879,554,277,426.71,11.74,0.72,-29.64,70.4
+XBI,turn-around-tuesday,Turn-around Tuesday,162,292,146,136.72,5.92,0.49,-28.7,69.2
+XBI,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,91,172,86,71.11,3.65,0.48,-17.59,66.3
+XBI,consec-bearish-3,3 consecutive bearish,378,356,178,151.83,6.36,0.47,-43.18,69.1
+XBI,4bar-momentum-reversal,4-Bar Momentum Reversal,731,480,240,439.55,11.92,0.77,-30.78,70.4
+KRE,BUY_AND_HOLD,Buy & Hold,1,1,0,265.27,9.04,0.44,-54.83,0.0
+KRE,buy-5day-low,Buy on 5-day Low,426,424,212,142.99,6.11,0.45,-35.76,69.8
+KRE,3-bar-low,3-Bar Low,566,315,157,247.79,8.68,0.47,-54.27,68.8
+KRE,3-bar-low-200ema,3-Bar Low + 200 EMA filter,300,227,113,10.99,0.7,0.13,-50.52,67.3
+KRE,bb-reversal-ibs,BB Reversal + IBS,110,134,67,-8.5,-0.59,-0.01,-33.91,56.7
+KRE,avg-hl-range-ibs,Avg HL Range + IBS,54,62,31,-10.44,-0.73,-0.02,-41.5,67.7
+KRE,turn-of-month-25,Turn of the Month (>=25),153,196,98,-31.71,-2.52,-0.1,-44.91,60.2
+KRE,consec-below-sma5,3 bars below SMA(5),858,526,263,155.91,6.48,0.46,-45.49,69.6
+KRE,turn-around-tuesday,Turn-around Tuesday,147,270,135,18.0,1.11,0.15,-33.11,65.9
+KRE,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,80,150,75,17.73,1.1,0.18,-23.57,65.3
+KRE,consec-bearish-3,3 consecutive bearish,373,378,189,143.43,6.12,0.48,-29.51,72.5
+KRE,4bar-momentum-reversal,4-Bar Momentum Reversal,727,454,227,47.28,2.62,0.24,-49.8,70.9
+XME,BUY_AND_HOLD,Buy & Hold,1,1,0,27.2,1.62,0.21,-82.69,0.0
+XME,buy-5day-low,Buy on 5-day Low,503,430,215,2.66,0.18,0.1,-53.14,58.6
+XME,3-bar-low,3-Bar Low,642,295,147,27.3,1.63,0.19,-78.24,62.6
+XME,3-bar-low-200ema,3-Bar Low + 200 EMA filter,262,191,95,118.91,5.37,0.37,-30.7,64.2
+XME,bb-reversal-ibs,BB Reversal + IBS,103,142,71,5.79,0.38,0.09,-36.86,66.2
+XME,avg-hl-range-ibs,Avg HL Range + IBS,79,80,40,5.8,0.38,0.09,-22.97,70.0
+XME,turn-of-month-25,Turn of the Month (>=25),174,228,114,193.12,7.45,0.59,-24.46,71.9
+XME,consec-below-sma5,3 bars below SMA(5),980,556,278,75.82,3.84,0.3,-62.98,62.9
+XME,turn-around-tuesday,Turn-around Tuesday,171,292,146,-14.0,-1.0,0.0,-38.75,59.6
+XME,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,74,136,68,32.5,1.9,0.31,-15.11,61.8
+XME,consec-bearish-3,3 consecutive bearish,440,384,192,20.95,1.28,0.16,-44.07,62.5
+XME,4bar-momentum-reversal,4-Bar Momentum Reversal,844,482,241,84.39,4.17,0.32,-42.74,66.0
+GDX,BUY_AND_HOLD,Buy & Hold,1,1,0,-19.35,-1.43,0.15,-80.27,0.0
+GDX,buy-5day-low,Buy on 5-day Low,520,483,241,121.45,5.45,0.37,-47.05,64.7
+GDX,3-bar-low,3-Bar Low,662,327,163,159.97,6.59,0.36,-70.11,64.4
+GDX,3-bar-low-200ema,3-Bar Low + 200 EMA filter,206,171,85,55.59,3.0,0.24,-52.33,63.5
+GDX,bb-reversal-ibs,BB Reversal + IBS,102,132,66,48.82,2.69,0.28,-30.29,59.1
+GDX,avg-hl-range-ibs,Avg HL Range + IBS,100,108,54,96.41,4.61,0.44,-25.53,75.9
+GDX,turn-of-month-25,Turn of the Month (>=25),192,240,120,86.46,4.25,0.31,-41.65,58.3
+GDX,consec-below-sma5,3 bars below SMA(5),1050,579,289,78.4,3.94,0.29,-60.04,64.0
+GDX,turn-around-tuesday,Turn-around Tuesday,172,309,154,4.91,0.32,0.1,-50.25,63.6
+GDX,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,64,119,59,19.53,1.2,0.16,-35.32,71.2
+GDX,consec-bearish-3,3 consecutive bearish,402,399,199,45.83,2.55,0.23,-53.09,63.3
+GDX,4bar-momentum-reversal,4-Bar Momentum Reversal,898,513,256,91.34,4.43,0.32,-36.23,68.0
+XHB,BUY_AND_HOLD,Buy & Hold,1,1,0,671.6,14.62,0.65,-49.35,0.0
+XHB,buy-5day-low,Buy on 5-day Low,437,446,223,266.83,9.07,0.69,-35.76,71.3
+XHB,3-bar-low,3-Bar Low,585,311,155,504.78,12.77,0.68,-46.16,79.4
+XHB,3-bar-low-200ema,3-Bar Low + 200 EMA filter,369,251,125,147.65,6.24,0.43,-48.95,78.4
+XHB,bb-reversal-ibs,BB Reversal + IBS,98,122,61,17.85,1.1,0.17,-31.51,63.9
+XHB,avg-hl-range-ibs,Avg HL Range + IBS,57,52,26,-18.22,-1.33,-0.11,-33.62,61.5
+XHB,turn-of-month-25,Turn of the Month (>=25),159,213,106,80.41,4.02,0.44,-23.66,69.8
+XHB,consec-below-sma5,3 bars below SMA(5),833,530,265,128.35,5.67,0.45,-41.69,67.5
+XHB,turn-around-tuesday,Turn-around Tuesday,154,286,143,96.08,4.6,0.5,-24.12,67.8
+XHB,turn-around-tuesday-200sma,Turn-around Tue + 200 SMA,95,188,94,54.08,2.93,0.44,-24.13,71.3
+XHB,consec-bearish-3,3 consecutive bearish,362,382,191,290.04,9.52,0.8,-25.35,70.7
+XHB,4bar-momentum-reversal,4-Bar Momentum Reversal,701,454,227,97.53,4.65,0.41,-27.91,67.8

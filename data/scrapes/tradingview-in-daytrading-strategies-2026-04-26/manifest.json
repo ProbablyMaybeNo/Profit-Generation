@@ -1,0 +1,57 @@
+{
+  "bundle_name": "tradingview-in-daytrading-strategies-2026-04-26",
+  "schema_version": "1.0",
+  "generated_at": "2026-04-28T19:11:42.931192+00:00",
+  "generated_by": "build.py (Claude Code interactive session)",
+  "record_count": 14,
+  "verdict_counts": {
+    "FAIL": 5,
+    "PASS_WITH_NUANCE": 6,
+    "MARGINAL": 3
+  },
+  "schema_fields": {
+    "base": [
+      "url",
+      "title",
+      "author",
+      "description",
+      "source",
+      "date_scraped",
+      "tags"
+    ],
+    "extra_required": [
+      "agent_summary",
+      "description_full_readable"
+    ],
+    "extra_strategy": [
+      "strategy_id",
+      "methodology_family",
+      "instruments",
+      "timeframes",
+      "core_concepts",
+      "entry_rules",
+      "exit_rules",
+      "risk_management",
+      "tested",
+      "test_runs",
+      "current_verdict",
+      "verdict_summary",
+      "failure_modes",
+      "improvement_hypotheses",
+      "code_paths",
+      "data_artifacts",
+      "first_logged_iso",
+      "last_updated_iso"
+    ]
+  },
+  "verdict_vocab": [
+    "UNTESTED",
+    "PASS",
+    "PASS_WITH_NUANCE",
+    "MARGINAL",
+    "FAIL",
+    "DEPRECATED"
+  ],
+  "consumer_notes": "records.jsonl is the source of truth. records.csv and manifest.json are derived — regenerate with `py -3.13 build.py` after editing records.jsonl. CSV uses UTF-8 BOM for Excel compatibility. Test runs are nested in extra.test_runs; best_sharpe/best_pf/best_win_rate_pct in CSV are aggregates across runs. See README.md for full schema and workflow.",
+  "errors": []
+}

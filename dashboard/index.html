@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading System Dashboard</title>
+<style>
+  :root {
+    --bg: #0d0f11;
+    --surface: #131619;
+    --border: #1e2328;
+    --green: #00ff88;
+    --amber: #ffb700;
+    --red: #ff4455;
+    --blue: #4488ff;
+    --dim: #6b7280;
+    --text: #d1d5db;
+    --font: 'Cascadia Code', 'Courier New', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* TOP STATUS BAR */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 10px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.red   { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+  .dot.amber { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+  #system-status { font-size: 14px; font-weight: bold; }
+  #system-status.online  { color: var(--green); }
+  #system-status.offline { color: var(--red); }
+
+  #market-badge {
+    padding: 2px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  #market-badge.open   { background: rgba(0,255,136,0.12); color: var(--green); border: 1px solid var(--green); }
+  #market-badge.closed { background: rgba(255,68,85,0.12);  color: var(--red);   border: 1px solid var(--red); }
+
+  #last-updated { margin-left: auto; color: var(--dim); font-size: 11px; }
+
+  /* MAIN LAYOUT */
+  .page { max-width: 1400px; margin: 0 auto; padding: 20px 24px; }
+
+  /* METRICS ROW */
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px 22px;
+  }
+
+  .metric-label {
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: var(--green);
+    letter-spacing: -1px;
+  }
+
+  /* STRATEGY GRID */
+  .section-title {
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .strategies-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  .strategy-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    color: var(--dim);
+    font-style: italic;
+  }
+
+  /* LOG FEED */
+  .log-feed {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .log-line {
+    padding: 2px 0;
+    color: var(--dim);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .log-line:first-child { color: var(--text); }
+
+  .error-msg {
+    color: var(--red);
+    padding: 20px;
+    font-size: 14px;
+  }
+
+  /* CLOCK ROW */
+  .clock-info {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .clock-info span { color: var(--text); }
+</style>
+</head>
+<body>
+
+<div id="status-bar">
+  <div>
+    <span class="dot" id="sys-dot"></span>
+    <span id="system-status">CONNECTING...</span>
+  </div>
+  <div id="market-badge" class="closed">MARKET —</div>
+  <div id="last-updated">Last updated: —</div>
+</div>
+
+<div class="page">
+  <div class="metrics-row">
+    <div class="metric-card">
+      <div class="metric-label">Portfolio Value</div>
+      <div class="metric-value" id="metric-portfolio">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Cash</div>
+      <div class="metric-value" id="metric-cash">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Buying Power</div>
+      <div class="metric-value" id="metric-buying-power">—</div>
+    </div>
+  </div>
+
+  <div class="clock-info">
+    <div>Heartbeat: <span id="hb-last">—</span></div>
+    <div>Minutes ago: <span id="hb-minutes">—</span></div>
+  </div>
+
+  <div class="section-title">Active Strategies</div>
+  <div class="strategies-grid" id="strategies-grid">
+    <div class="strategy-card">No strategies loaded — ready for deployment</div>
+  </div>
+
+  <div class="section-title">Recent Heartbeat Log</div>
+  <div class="log-feed" id="log-feed">
+    <div class="log-line">Waiting for data...</div>
+  </div>
+</div>
+
+<script>
+  function fmt(n) {
+    if (n === null || n === undefined) return '—';
+    return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+
+      if (data.error) {
+        document.getElementById('system-status').textContent = 'ALPACA UNREACHABLE';
+        document.getElementById('system-status').className = 'offline';
+        document.getElementById('sys-dot').className = 'dot red';
+        document.getElementById('log-feed').innerHTML = `<div class="error-msg">${data.error}</div>`;
+        return;
+      }
+
+      // System status (based on heartbeat age)
+      const minAgo = data.heartbeat.minutes_ago;
+      const isOnline = minAgo !== null && minAgo < 20;
+      document.getElementById('system-status').textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+      document.getElementById('system-status').className = isOnline ? 'online' : 'offline';
+      document.getElementById('sys-dot').className = 'dot ' + (isOnline ? 'green' : 'red');
+
+      // Market badge
+      const badge = document.getElementById('market-badge');
+      badge.textContent = data.market_open ? 'MARKET OPEN' : 'MARKET CLOSED';
+      badge.className = 'market-badge ' + (data.market_open ? 'open' : 'closed');
+
+      // Metrics
+      document.getElementById('metric-portfolio').textContent = fmt(data.account.portfolio_value);
+      document.getElementById('metric-cash').textContent = fmt(data.account.cash);
+      document.getElementById('metric-buying-power').textContent = fmt(data.account.buying_power);
+
+      // Heartbeat
+      document.getElementById('hb-last').textContent = data.heartbeat.last_seen || '—';
+      document.getElementById('hb-minutes').textContent = minAgo !== null ? minAgo : '—';
+
+      // Strategies
+      const grid = document.getElementById('strategies-grid');
+      if (data.active_strategies.length === 0) {
+        grid.innerHTML = '<div class="strategy-card">No strategies loaded — ready for deployment</div>';
+      } else {
+        grid.innerHTML = data.active_strategies.map(s =>
+          `<div class="strategy-card"><span style="color:var(--green)">●</span> ${s}</div>`
+        ).join('');
+      }
+
+      // Logs
+      const feed = document.getElementById('log-feed');
+      if (data.recent_logs.length === 0) {
+        feed.innerHTML = '<div class="log-line">No heartbeat entries yet.</div>';
+      } else {
+        feed.innerHTML = data.recent_logs.map((l, i) =>
+          `<div class="log-line">${l}</div>`
+        ).join('');
+      }
+
+      // Last updated
+      document.getElementById('last-updated').textContent =
+        'Last updated: ' + new Date().toLocaleTimeString();
+
+    } catch (e) {
+      document.getElementById('system-status').textContent = 'ERROR';
+      document.getElementById('system-status').className = 'offline';
+      document.getElementById('sys-dot').className = 'dot red';
+      console.error(e);
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 30000);
+</script>
+</body>
+</html>

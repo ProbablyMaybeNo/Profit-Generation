@@ -1,0 +1,5 @@
+label,symbol,trades,fills,total_return_pct,cagr_pct,sharpe,max_dd_pct,win_rate_pct
+BUY_AND_HOLD,SPY,0,1,22.64,22.22,1.7,-9.52,0.0
+orbo-bidirectional,SPY,496,501,-12.81,-12.6,-1.66,-13.61,52.8
+orbo-long-only,SPY,191,382,-12.93,-12.72,-2.6,-13.97,34.0
+orb-pivots-long-only,SPY,85,170,-4.81,-4.73,-1.27,-6.52,38.8

@@ -1,0 +1,16 @@
+{
+  "timezone": "America/New_York",
+  "market_open": "09:30",
+  "market_close": "16:00",
+  "dashboard_port": 8080,
+  "log_level": "INFO",
+  "paper_trading": true,
+  "risk": {
+    "max_position_usd": 1000,
+    "max_daily_loss_pct": 2.0,
+    "max_open_positions": 10,
+    "max_orders_per_day": 50,
+    "allow_shorts": false
+  },
+  "notes": "These are non-secret settings. Edit freely."
+}
