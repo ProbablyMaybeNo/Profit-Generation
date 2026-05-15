@@ -407,8 +407,11 @@
     margin: 8px 0;
     font-size: 11px;
     width: 100%;
-    table-layout: auto;
+    table-layout: fixed;
+    display: block;
+    overflow-x: auto;
   }
+  .guide-body table thead, .guide-body table tbody { display: table; width: 100%; table-layout: fixed; }
   .guide-body th, .guide-body td {
     border: 1px solid var(--grid);
     padding: 4px 7px;
