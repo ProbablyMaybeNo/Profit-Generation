@@ -61,9 +61,10 @@ the box.
 
 ## 2.2 Better trade insights
 
-- [ ] **2.2.1 Per-strategy equity curves on dashboard**
+- [x] **2.2.1 Per-strategy equity curves on dashboard**
   - **Deliverable:** new `/api/equity_curve/<strategy_id>` endpoint + new dashboard section + tests
   - **Acceptance:** endpoint returns `[(date, cumulative_return_pct)]` for the strategy's closed outcomes from `outcomes` table. Dashboard renders as inline SVG sparkline per active strategy in the EQUITY CURVES card. Click → modal with full-size SVG + drawdown overlay. No external charting library — plain SVG. Tests: empty case (no outcomes), single trade, multiple trades cumulative math correct.
+  - **Completed:** 2026-05-15 · commit `2a9bc32`
 
 - [ ] **2.2.2 Walk-forward / out-of-sample analysis**
   - **Deliverable:** `scripts/walk_forward.py` + `tests/test_walk_forward.py`
