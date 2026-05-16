@@ -51,6 +51,7 @@ DEFAULT_SETTINGS = {
     "stop_loss_atr_multiple": 0,
     "cool_down_losers": 3,
     "cool_down_days": 5,
+    "earnings_veto_days": 2,
 }
 
 ORDER_TYPE_MARKET = "market"
@@ -693,6 +694,34 @@ def _cool_down_state(
     }
 
 
+DEFAULT_EARNINGS_VETO_DAYS = 2
+
+
+def _coerce_earnings_veto_days(raw) -> int:
+    """Trading-day window for earnings veto. 0/negative = disabled."""
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EARNINGS_VETO_DAYS
+    if v < 0:
+        return 0
+    return v
+
+
+def _earnings_veto(
+    conn, symbol: str, settings: dict, *, asof: Optional[date] = None,
+) -> Optional[dict]:
+    """Return a veto descriptor when `symbol` is inside the earnings window,
+    or None when no upcoming earnings are recorded / veto is disabled."""
+    window = _coerce_earnings_veto_days(settings.get("earnings_veto_days"))
+    if window <= 0:
+        return None
+    from monitoring import earnings_calendar
+    return earnings_calendar.is_within_earnings_window(
+        conn, symbol, asof=asof, window_trading_days=window,
+    )
+
+
 def _max_pct_per_symbol(settings: dict) -> float:
     """settings.risk.max_pct_per_symbol → float in (0, 1]. Falls back to
     the default when missing / out of range."""
@@ -975,6 +1004,7 @@ def process_signals(
 
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
+    earnings_cache: Dict[str, Optional[dict]] = {}
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
             if drawdown_block is not None:
@@ -984,6 +1014,21 @@ def process_signals(
                     "symbol": sig["symbol"],
                     "signal_id": sig["id"],
                     **drawdown_block,
+                })
+                continue
+            sym = sig["symbol"]
+            if sym not in earnings_cache:
+                earnings_cache[sym] = _earnings_veto(
+                    conn, sym, settings, asof=asof,
+                )
+            ev = earnings_cache[sym]
+            if ev is not None:
+                actions.append({
+                    "action": "SKIP_EARNINGS_WEEK",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sym,
+                    "signal_id": sig["id"],
+                    **ev,
                 })
                 continue
             sid = sig["strategy_id"]

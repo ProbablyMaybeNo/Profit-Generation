@@ -194,6 +194,16 @@ _DDL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS earnings (
+        symbol         TEXT NOT NULL,
+        earnings_date  TEXT NOT NULL,
+        source         TEXT,
+        fetched_at     TEXT NOT NULL,
+        PRIMARY KEY(symbol, earnings_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_earnings_symbol_date ON earnings(symbol, earnings_date)",
+    """
     CREATE TABLE IF NOT EXISTS macro (
         series_id   TEXT NOT NULL,
         bar_date    TEXT NOT NULL,
@@ -586,6 +596,44 @@ def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optio
             ),
         )
         return cur.lastrowid if cur.rowcount else None
+
+
+def upsert_earnings_date(
+    conn: sqlite3.Connection,
+    *,
+    symbol: str,
+    earnings_date: str,
+    source: Optional[str] = None,
+) -> Optional[int]:
+    """Insert an earnings date. Idempotent on (symbol, earnings_date).
+
+    Returns 1 if the row was newly inserted, 0 if it already existed.
+    """
+    if not symbol or not earnings_date:
+        return 0
+    with conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO earnings (symbol, earnings_date, source, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            (symbol, earnings_date, source, _utc_now_iso()),
+        )
+        if cur.rowcount == 0:
+            return 0
+    return 1
+
+
+def next_earnings_date_on_or_after(
+    conn: sqlite3.Connection, symbol: str, asof_iso: str,
+) -> Optional[str]:
+    """Return the earliest earnings_date for `symbol` on or after `asof_iso`,
+    or None when no future event is recorded."""
+    row = conn.execute(
+        "SELECT earnings_date FROM earnings "
+        " WHERE symbol=? AND earnings_date >= ? "
+        " ORDER BY earnings_date ASC LIMIT 1",
+        (symbol, asof_iso),
+    ).fetchone()
+    return row["earnings_date"] if row else None
 
 
 def upsert_macro_value(
