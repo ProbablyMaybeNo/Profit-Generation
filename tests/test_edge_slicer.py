@@ -251,14 +251,12 @@ def test_fetch_vix_by_date_returns_empty_when_table_missing(isolated_db):
 
 def test_fetch_vix_by_date_reads_macro_table(isolated_db):
     conn = db.init_db()
-    conn.execute(
-        "CREATE TABLE macro (series_id TEXT, bar_date TEXT, value REAL, "
-        "PRIMARY KEY (series_id, bar_date))"
-    )
-    conn.execute("INSERT INTO macro VALUES ('VIXCLS', '2026-05-11', 18.2)")
-    conn.execute("INSERT INTO macro VALUES ('VIXCLS', '2026-05-12', 22.5)")
-    conn.execute("INSERT INTO macro VALUES ('T10Y2Y', '2026-05-11', 0.34)")
-    conn.commit()
+    db.upsert_macro_value(conn, series_id="VIXCLS",
+                          bar_date="2026-05-11", value=18.2)
+    db.upsert_macro_value(conn, series_id="VIXCLS",
+                          bar_date="2026-05-12", value=22.5)
+    db.upsert_macro_value(conn, series_id="T10Y2Y",
+                          bar_date="2026-05-11", value=0.34)
     out = es.fetch_vix_by_date(conn)
     assert out == {"2026-05-11": 18.2, "2026-05-12": 22.5}
     conn.close()

@@ -194,6 +194,16 @@ _DDL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS macro (
+        series_id   TEXT NOT NULL,
+        bar_date    TEXT NOT NULL,
+        value       REAL,
+        fetched_at  TEXT NOT NULL,
+        PRIMARY KEY(series_id, bar_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_macro_series_date ON macro(series_id, bar_date)",
+    """
     CREATE TABLE IF NOT EXISTS meta (
         key    TEXT PRIMARY KEY,
         value  TEXT NOT NULL
@@ -576,6 +586,55 @@ def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optio
             ),
         )
         return cur.lastrowid if cur.rowcount else None
+
+
+def upsert_macro_value(
+    conn: sqlite3.Connection,
+    *,
+    series_id: str,
+    bar_date: str,
+    value: Optional[float],
+) -> Optional[int]:
+    """Insert or update one macro datapoint. Idempotent on (series_id, bar_date).
+
+    Returns 1 if the row changed (insert or value update), 0 if it was a no-op.
+    NaN / None values silently skipped — the macro table is "last known good".
+    """
+    if value is None:
+        return 0
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if v != v:  # NaN
+        return 0
+    existing = conn.execute(
+        "SELECT value FROM macro WHERE series_id=? AND bar_date=?",
+        (series_id, bar_date),
+    ).fetchone()
+    if existing is not None and existing["value"] == v:
+        return 0
+    with conn:
+        conn.execute(
+            "INSERT INTO macro (series_id, bar_date, value, fetched_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(series_id, bar_date) DO UPDATE SET "
+            "    value=excluded.value, fetched_at=excluded.fetched_at",
+            (series_id, bar_date, v, _utc_now_iso()),
+        )
+    return 1
+
+
+def latest_macro_value(
+    conn: sqlite3.Connection, series_id: str
+) -> Optional[sqlite3.Row]:
+    """Return the most recent (bar_date, value, fetched_at) row for a series, or None."""
+    return conn.execute(
+        "SELECT series_id, bar_date, value, fetched_at FROM macro "
+        " WHERE series_id=? AND value IS NOT NULL "
+        " ORDER BY bar_date DESC LIMIT 1",
+        (series_id,),
+    ).fetchone()
 
 
 def upsert_pattern(conn: sqlite3.Connection, pattern: Dict[str, Any]) -> int:

@@ -377,6 +377,15 @@ def _state_paper_trades_today(conn) -> list:
     return [dict(r) for r in rows]
 
 
+def _state_macro_strip() -> list:
+    """Latest VIX / T10Y2Y / DXY rollup for the dashboard header strip."""
+    from monitoring import macro_fetcher
+    try:
+        return macro_fetcher.latest_snapshot()
+    except Exception:
+        return []
+
+
 def _state_intraday_tail(n: int = 10) -> list:
     if not INTRADAY_LOG.exists():
         return []
@@ -433,6 +442,7 @@ def state():
             "paper_trades_today": _state_paper_trades_today(conn),
             "auto_trade_settings": _read_auto_trade_settings(),
             "intraday_alerts_tail": _state_intraday_tail(),
+            "macro": _state_macro_strip(),
         })
     finally:
         conn.close()
@@ -586,6 +596,12 @@ def equity_curve(strategy_id: str):
         return jsonify(_state_equity_curve(conn, strategy_id))
     finally:
         conn.close()
+
+
+@app.route("/api/macro", methods=["GET"])
+def macro():
+    """Latest macro snapshot — VIX / T10Y2Y / DXY (broad dollar)."""
+    return jsonify({"series": _state_macro_strip()})
 
 
 @app.route("/api/edge_slices", methods=["GET"])

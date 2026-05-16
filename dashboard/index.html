@@ -89,6 +89,27 @@
   .dot.closed{ background: var(--red);   box-shadow: 0 0 6px var(--red-dim); }
   .dot.warn  { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
 
+  /* Macro strip — sits between header and first card */
+  .macro-strip {
+    display: flex;
+    gap: 18px;
+    align-items: baseline;
+    font-size: 12px;
+    color: var(--dim);
+    margin: -6px 0 14px 0;
+    padding: 6px 0 10px 0;
+    border-bottom: 1px dashed var(--border);
+    flex-wrap: wrap;
+  }
+  .macro-strip .macro-item { display: inline-flex; gap: 6px; align-items: baseline; }
+  .macro-strip .macro-item .lbl { color: var(--dim); letter-spacing: 0.06em; }
+  .macro-strip .macro-item .val { color: var(--text-hi); font-size: 13px; }
+  .macro-strip .macro-item .val.pos { color: var(--green); }
+  .macro-strip .macro-item .val.neg { color: var(--red); }
+  .macro-strip .macro-item .val.warn { color: var(--amber); }
+  .macro-strip .macro-item .asof { color: var(--dim); font-size: 11px; }
+  .macro-strip .empty { color: var(--dim); font-style: italic; }
+
   /* Grid */
   .row {
     display: grid;
@@ -717,6 +738,11 @@
     </div>
   </header>
 
+  <!-- MACRO strip — VIX / T10Y2Y / DXY -->
+  <div class="macro-strip" id="macro-strip">
+    <span class="empty">macro: loading…</span>
+  </div>
+
   <!-- Guide slide-out panel (right side) -->
   <div class="guide-overlay" id="guide-overlay" onclick="closeGuide(event)"></div>
   <aside class="guide-panel" id="guide-panel" aria-hidden="true">
@@ -1209,6 +1235,60 @@ function renderHeader(s) {
     ms.innerHTML = '<span class="dot closed"></span>market closed';
   }
   document.getElementById('now').textContent = s.now ? s.now.replace('T', ' ') : '';
+}
+
+function macroValueClass(seriesId, value) {
+  if (value === null || value === undefined) return '';
+  if (seriesId === 'VIXCLS') {
+    if (value >= 28) return 'neg';
+    if (value <= 14) return 'pos';
+    return 'warn';
+  }
+  if (seriesId === 'T10Y2Y') {
+    if (value < 0) return 'neg';   // inverted yield curve
+    if (value < 0.25) return 'warn';
+    return 'pos';
+  }
+  if (seriesId === 'DTWEXBGS') {
+    return '';
+  }
+  return '';
+}
+
+function fmtMacroValue(seriesId, value) {
+  if (value === null || value === undefined) return '—';
+  if (seriesId === 'T10Y2Y') {
+    return (value >= 0 ? '+' : '') + Number(value).toFixed(2);
+  }
+  return Number(value).toFixed(1);
+}
+
+function renderMacro(s) {
+  const el = document.getElementById('macro-strip');
+  const items = s.macro || [];
+  if (!items.length) {
+    el.innerHTML = '<span class="empty">macro: no data — run <code>monitoring.macro_fetcher</code> to populate</span>';
+    return;
+  }
+  const anyAvailable = items.some(it => it.available);
+  if (!anyAvailable) {
+    el.innerHTML = '<span class="empty">macro: no data — run <code>monitoring.macro_fetcher</code> to populate</span>';
+    return;
+  }
+  let h = '';
+  for (const it of items) {
+    const cls = it.available ? macroValueClass(it.series_id, it.value) : '';
+    const val = it.available ? fmtMacroValue(it.series_id, it.value) : '—';
+    const asof = it.available && it.bar_date
+      ? `<span class="asof">${escapeHtml(it.bar_date)}</span>`
+      : '<span class="asof">no data</span>';
+    h += `<span class="macro-item">
+      <span class="lbl">${escapeHtml(it.label)}</span>
+      <span class="val ${cls}">${escapeHtml(val)}</span>
+      ${asof}
+    </span>`;
+  }
+  el.innerHTML = h;
 }
 
 function renderReport(s) {
@@ -1857,6 +1937,7 @@ async function refresh() {
     if (!r.ok) throw new Error('http ' + r.status);
     const s = await r.json();
     renderHeader(s);
+    renderMacro(s);
     renderActionQueue(s);
     renderControl(s);
     renderTriggers();
