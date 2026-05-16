@@ -389,6 +389,21 @@ def _state_paper_trades_today(conn) -> list:
     return [dict(r) for r in rows]
 
 
+def _state_tunnel_url() -> dict:
+    """Read data/tunnel_url.txt if present. Empty dict otherwise."""
+    path = DATA_DIR / "tunnel_url.txt"
+    if not path.exists():
+        return {"url": None, "updated_at": None, "available": False}
+    try:
+        url = path.read_text(encoding="utf-8").strip()
+        ts = datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+    except Exception:
+        return {"url": None, "updated_at": None, "available": False}
+    if not url:
+        return {"url": None, "updated_at": ts, "available": False}
+    return {"url": url, "updated_at": ts, "available": True}
+
+
 def _state_macro_strip() -> list:
     """Latest VIX / T10Y2Y / DXY rollup for the dashboard header strip."""
     from monitoring import macro_fetcher
@@ -455,6 +470,7 @@ def state():
             "auto_trade_settings": _read_auto_trade_settings(),
             "intraday_alerts_tail": _state_intraday_tail(),
             "macro": _state_macro_strip(),
+            "tv_tunnel": _state_tunnel_url(),
         })
     finally:
         conn.close()
@@ -614,6 +630,12 @@ def equity_curve(strategy_id: str):
 def macro():
     """Latest macro snapshot — VIX / T10Y2Y / DXY (broad dollar)."""
     return jsonify({"series": _state_macro_strip()})
+
+
+@app.route("/api/tunnel", methods=["GET"])
+def tunnel():
+    """Latest TradingView webhook tunnel URL from data/tunnel_url.txt."""
+    return jsonify(_state_tunnel_url())
 
 
 @app.route("/api/edge_slices", methods=["GET"])

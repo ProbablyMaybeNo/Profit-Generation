@@ -394,6 +394,37 @@
     cursor: help;
   }
   tr.row-degraded td.strat { color: var(--amber); }
+
+  .tv-tunnel-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .tv-tunnel-row .lbl { color: var(--dim); }
+  .tv-tunnel-url {
+    color: var(--green);
+    user-select: all;
+    word-break: break-all;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .tv-tunnel-copy {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .tv-tunnel-copy:hover { border-color: var(--green); color: var(--green); }
+  .tv-tunnel-hint {
+    color: var(--dim);
+    font-size: 11px;
+    margin-top: 6px;
+  }
   .forecast.fc-conf-lo  { color: var(--dimmer); font-style: italic; }
 
   /* News-sentiment overlay */
@@ -807,6 +838,12 @@
   <div class="card">
     <h2>manual triggers <span class="count">spawns subprocess · feedback via Telegram + Notion + DB</span></h2>
     <div id="triggers"></div>
+  </div>
+
+  <!-- TV WEBHOOK tunnel -->
+  <div class="card">
+    <h2>tv webhook · cloudflare tunnel <span class="count" id="tunnel-updated"></span></h2>
+    <div id="tv-tunnel" class="loading">loading...</div>
   </div>
 
   <!-- Top row: report + account -->
@@ -1263,6 +1300,36 @@ function renderActionQueue(s) {
   }
   h += '</div>';
   el.innerHTML = h;
+}
+
+function renderTunnel(s) {
+  const t = s.tv_tunnel || {};
+  const el = document.getElementById('tv-tunnel');
+  const updEl = document.getElementById('tunnel-updated');
+  if (!t.available || !t.url) {
+    el.innerHTML = '<div class="empty">no tunnel URL yet — run <code>schedulers\\start_tv_tunnel.bat</code> in another shell. The URL appears in <code>data/tunnel_url.txt</code> within ~5 seconds of launch.</div>';
+    updEl.textContent = '';
+    return;
+  }
+  updEl.textContent = t.updated_at || '';
+  const webhook = t.url.replace(/\/$/, '') + '/webhook';
+  el.innerHTML = `
+    <div class="tv-tunnel-row">
+      <span class="lbl">webhook URL:</span>
+      <span class="tv-tunnel-url" title="click to select; ctrl+c to copy">${escapeHtml(webhook)}</span>
+      <button class="tv-tunnel-copy" data-copy="${escapeHtml(webhook)}">copy</button>
+      <a href="${escapeHtml(t.url)}/health" target="_blank">health ↗</a>
+    </div>
+    <div class="tv-tunnel-hint">paste this into TradingView's alert webhook field. The URL changes each time the tunnel restarts.</div>
+  `;
+  for (const btn of el.querySelectorAll('.tv-tunnel-copy')) {
+    btn.addEventListener('click', async () => {
+      const v = btn.getAttribute('data-copy');
+      try { await navigator.clipboard.writeText(v); btn.textContent = 'copied'; }
+      catch (e) { btn.textContent = 'copy failed'; }
+      setTimeout(() => btn.textContent = 'copy', 1500);
+    });
+  }
 }
 
 function renderHeader(s) {
@@ -1980,6 +2047,7 @@ async function refresh() {
     const s = await r.json();
     renderHeader(s);
     renderMacro(s);
+    renderTunnel(s);
     renderActionQueue(s);
     renderControl(s);
     renderTriggers();
