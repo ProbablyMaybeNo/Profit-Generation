@@ -179,9 +179,11 @@ the box.
   - **Completed:** 2026-05-15 · commit `81440de`
   - **Notes:** Telegram alerts deduped via `meta` table — a strategy must recover before re-alerting. Dashboard tints the row amber + adds the warning icon.
 
-- [ ] **2.6.3 Cross-validation weekly report**
+- [x] **2.6.3 Cross-validation weekly report**
   - **Deliverable:** `monitoring/cross_validation.py` + Notion page
   - **Acceptance:** weekly report comparing EOD '1d' signals vs intraday '1d-intraday' projections vs TV 'tv-webhook' signals. Identifies (strategy, symbol, date) tuples where the three sources disagree. Posts to Notion patterns DB. Tests: synthetic signals with known disagreements.
+  - **Completed:** 2026-05-15 · commit `879283f`
+  - **Notes:** Disagreement = ≥ 2 sources fired AND their signal_type sets differ. Absence-of-fire is NOT a disagreement on its own (can't distinguish "didn't fire" from "didn't observe" from the signals table). Posts via `notion_writer.post_pattern` with `pattern_type="cross-validation"`.
 
 - [ ] **2.6.4 Mobile-friendly dashboard**
   - **Deliverable:** CSS pass on `dashboard/index.html`
