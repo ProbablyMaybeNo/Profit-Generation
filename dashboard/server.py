@@ -79,6 +79,9 @@ def _today_iso() -> str:
 
 def _state_strategy_edge(conn) -> list:
     from monitoring import strategy_forecast as sf
+    from monitoring import strategy_health as sh
+    health_rows = sh.compute_strategy_health(conn)
+    health_by_sid = {h["strategy_id"]: h for h in health_rows}
     rows = conn.execute(
         "SELECT s.strategy_id, o.return_pct "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
@@ -96,8 +99,17 @@ def _state_strategy_edge(conn) -> list:
         sd = statistics.stdev(rets) if n > 1 else 0.0
         sharpe = (mean / sd) if sd > 0 else 0.0
         forecast = sf.compute_forecast(conn, sid)
+        health = health_by_sid.get(sid, {})
         out.append({
             "strategy_id": sid,
+            "health": {
+                "degraded": bool(health.get("degraded", False)),
+                "all_time_sharpe": health.get("all_time_sharpe", 0.0),
+                "last_n_sharpe": health.get("last_n_sharpe", 0.0),
+                "n_recent": health.get("n_recent", 0),
+                "ratio": health.get("ratio", 0.0),
+                "reason": health.get("reason", ""),
+            },
             "n": n,
             "mean_ret": round(mean, 3),
             "win_rate": round(wr, 4),

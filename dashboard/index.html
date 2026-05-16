@@ -356,6 +356,15 @@
   }
   .forecast.fc-conf-hi  { color: var(--text); }
   .forecast.fc-conf-mid { color: var(--dim); }
+
+  .health-warn {
+    display: inline-block;
+    color: var(--amber);
+    margin-left: 6px;
+    font-size: 13px;
+    cursor: help;
+  }
+  tr.row-degraded td.strat { color: var(--amber); }
   .forecast.fc-conf-lo  { color: var(--dimmer); font-style: italic; }
 
   /* News-sentiment overlay */
@@ -1363,8 +1372,12 @@ function renderEdge(s) {
     const confCls = conf === 'high' ? 'fc-conf-hi'
                     : conf === 'medium' ? 'fc-conf-mid'
                     : 'fc-conf-lo';
-    h += `<tr>
-      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}` +
+    const health = r.health || {};
+    const degradedBadge = health.degraded
+      ? `<span class="health-warn" title="${escapeHtml(health.reason || 'recent edge has decayed')}">⚠</span>`
+      : '';
+    h += `<tr${health.degraded ? ' class="row-degraded"' : ''}>
+      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}${degradedBadge}` +
       (fcSummary
         ? `<span class="forecast ${confCls}" title="confidence: ${escapeHtml(conf)} · ${fc.n_signals_observed || 0} signals over ${fc.observation_days || 0}d">${escapeHtml(fcSummary)}</span>`
         : '') +
