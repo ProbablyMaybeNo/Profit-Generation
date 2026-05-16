@@ -191,6 +191,8 @@ the box.
   - **Completed:** 2026-05-15 · commit `dbb6df0`
   - **Notes:** New 480px media query targets iPhone width. Cards become horizontally scrollable; tables use `min-width: 360px`; action queue collapses to single-column grid. Manual visual review still required.
 
-- [ ] **2.6.5 Cloudflare tunnel auto-setup for TV webhook**
+- [x] **2.6.5 Cloudflare tunnel auto-setup for TV webhook**
   - **Deliverable:** `schedulers/start_tv_tunnel.bat` + dashboard surface for tunnel URL
   - **Acceptance:** bat file starts cloudflared in named-tunnel mode, captures the URL, writes to `data/tunnel_url.txt`. Dashboard shows the URL in a TV WEBHOOK card with copy-to-clipboard button. Tests: skipped (external service).
+  - **Completed:** 2026-05-15 · commit `53166e6`
+  - **Notes:** Uses cloudflared quick-tunnel (not named tunnel) — keeps user setup to "install cloudflared + run the bat". URL is ephemeral; the dashboard card surfaces the file's mtime so the user knows when it last refreshed. The .bat itself isn't unit-tested (depends on cloudflared); the dashboard surface is.
