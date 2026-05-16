@@ -482,9 +482,18 @@ def main():
 
     if args.out:
         Path(args.out).write_text(out, encoding="utf-8")
-        print(f"Wrote: {args.out}")
+        _emit(f"Wrote: {args.out}")
     else:
-        print(out)
+        _emit(out)
+
+
+def _emit(text: str) -> None:
+    # colorama wraps sys.stdout on Windows and forces cp1252, choking on
+    # chars like Δ. Write UTF-8 bytes straight to the underlying buffer.
+    data = (text + "\n").encode("utf-8", errors="replace")
+    buf = getattr(sys.stdout, "buffer", None) or sys.__stdout__.buffer
+    buf.write(data)
+    buf.flush()
 
 
 if __name__ == "__main__":
