@@ -151,9 +151,11 @@ the box.
   - **Completed:** 2026-05-15 · commit `099ddec`
   - **Notes:** "DXY" maps to FRED `DTWEXBGS` (free broad-dollar index — FRED doesn't carry ICE-DXY directly). VIX-quartile slicing in edge_slicer activates the moment macro_fetcher runs — no slicer code change required, exactly as 2.2.3 anticipated.
 
-- [ ] **2.5.2 Earnings-week veto**
+- [x] **2.5.2 Earnings-week veto**
   - **Deliverable:** `monitoring/earnings_calendar.py` + auto_trader veto
   - **Acceptance:** fetches upcoming earnings dates per symbol (free source: yfinance has `Ticker.calendar`). Auto-trader skips entries on a symbol within 2 trading days of earnings. Tests: veto logic, calendar parsing.
+  - **Completed:** 2026-05-15 · commit `50ead07`
+  - **Notes:** New `earnings` table keyed on (symbol, earnings_date). Trading-day arithmetic reused from cool-down (snapshots.snapshot_date → fallback weekday-only). `earnings_veto_days=0` disables.
 
 - [ ] **2.5.3 Sentiment-based entry veto (currently only importance bumping)**
   - **Deliverable:** `auto_trade.veto_negative_sentiment` setting + auto_trader honors it
