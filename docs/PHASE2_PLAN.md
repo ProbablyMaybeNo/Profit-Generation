@@ -185,9 +185,11 @@ the box.
   - **Completed:** 2026-05-15 · commit `879283f`
   - **Notes:** Disagreement = ≥ 2 sources fired AND their signal_type sets differ. Absence-of-fire is NOT a disagreement on its own (can't distinguish "didn't fire" from "didn't observe" from the signals table). Posts via `notion_writer.post_pattern` with `pattern_type="cross-validation"`.
 
-- [ ] **2.6.4 Mobile-friendly dashboard**
+- [x] **2.6.4 Mobile-friendly dashboard**
   - **Deliverable:** CSS pass on `dashboard/index.html`
   - **Acceptance:** dashboard renders cleanly at 375px viewport (iPhone width). Action queue + open positions + Telegram-link visible without horizontal scroll. Other sections collapse / scroll cleanly. Tests: visual regression skipped — manually verify by user.
+  - **Completed:** 2026-05-15 · commit `dbb6df0`
+  - **Notes:** New 480px media query targets iPhone width. Cards become horizontally scrollable; tables use `min-width: 360px`; action queue collapses to single-column grid. Manual visual review still required.
 
 - [ ] **2.6.5 Cloudflare tunnel auto-setup for TV webhook**
   - **Deliverable:** `schedulers/start_tv_tunnel.bat` + dashboard surface for tunnel URL
