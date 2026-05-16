@@ -167,9 +167,11 @@ the box.
 
 ## 2.6 Quality of life
 
-- [ ] **2.6.1 Weekly digest to Notion**
+- [x] **2.6.1 Weekly digest to Notion**
   - **Deliverable:** `monitoring/weekly_digest.py` + schtask
   - **Acceptance:** Sunday 6pm PT, generates a markdown summary: "this week — N fires, M closed, X% return, top performer Y, biggest loser Z, new strategies added: [...]". Posts to Notion as a new page in the daily reports DB (with a different "Type" tag = "Weekly Digest"). Tests: aggregation math, markdown structure.
+  - **Completed:** 2026-05-15 · commit `f012df1`
+  - **Notes:** `register_weekly.bat` registers Sunday 18:00 PT schedule. Tagged via `Source = "weekly-digest"` + `Tags = ["Weekly Digest"]` so dashboard / daily-reports view can filter cleanly.
 
 - [ ] **2.6.2 Strategy degradation alert**
   - **Deliverable:** `monitoring/strategy_health.py` + Telegram + dashboard flag
