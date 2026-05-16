@@ -135,9 +135,11 @@ the box.
   - **Acceptance:** auto-trader checks portfolio_value vs equity_at_open. If down ≥ max_daily_loss_pct, refuses ALL new entries (still processes exits). Resets next morning. Tests: trip / no-trip cases, exits still fire.
   - **Completed:** 2026-05-15 · commit `91b4914`
 
-- [ ] **2.4.3 Strategy-level cool-down**
+- [x] **2.4.3 Strategy-level cool-down**
   - **Deliverable:** auto_trader checks recent N trades per strategy
   - **Acceptance:** if a strategy's last 3 closed outcomes were ALL losers, pause that strategy for 5 trading days. Re-arm automatically. Tests: 3-loser trigger, re-arm timing, mixed wins/losses don't trigger.
+  - **Completed:** 2026-05-15 · commit `8696381`
+  - **Notes:** Trading-day calendar reads from `snapshots.snapshot_date` (weekends + holidays skip naturally); falls back to weekday-only count when snapshots empty. `cool_down_losers=0` disables the gate.
 
 ---
 
