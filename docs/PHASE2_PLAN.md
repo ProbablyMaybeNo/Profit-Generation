@@ -157,9 +157,11 @@ the box.
   - **Completed:** 2026-05-15 · commit `50ead07`
   - **Notes:** New `earnings` table keyed on (symbol, earnings_date). Trading-day arithmetic reused from cool-down (snapshots.snapshot_date → fallback weekday-only). `earnings_veto_days=0` disables.
 
-- [ ] **2.5.3 Sentiment-based entry veto (currently only importance bumping)**
+- [x] **2.5.3 Sentiment-based entry veto (currently only importance bumping)**
   - **Deliverable:** `auto_trade.veto_negative_sentiment` setting + auto_trader honors it
   - **Acceptance:** when set, auto-trader skips long_entry signals on symbols with ≥ 2 negative-sentiment news items in the last 24h. Tests: veto trigger, threshold honored.
+  - **Completed:** 2026-05-15 · commit `c96d4e5`
+  - **Notes:** Off by default (`veto_negative_sentiment=false`). Threshold + window are settable via `negative_sentiment_threshold` and `negative_sentiment_window_hours`. Reuses `news_sentiment_overlay.extract_sentiment_labels` for parsing.
 
 ---
 
