@@ -138,7 +138,9 @@ def test_dry_run_skip_ineligible(isolated_db, winner_settings):
     db.record_signal(conn, strategy_id="loser", symbol="GDX",
                      bar_ts="2026-05-14", signal_type="long_entry",
                      close=70.0, bar_interval="1d")
-    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=winner_settings)
+    # Disable cool-down — this test asserts the edge-eligibility gate.
+    settings = {**winner_settings, "cool_down_losers": 0}
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=settings)
     losers = [a for a in res["actions"] if a["strategy_id"] == "loser"]
     assert len(losers) == 1
     assert losers[0]["action"] == "SKIP_INELIGIBLE"

@@ -287,7 +287,8 @@ def test_auto_trader_kelly_zero_edge_skips_with_sizing_zero(isolated_db):
     settings = {**_winner_settings(),
                 "min_mean_ret_pct": -10.0,  # loosen eligibility for the test
                 "min_sharpe_ish": -10.0,
-                "sizing_method": "kelly"}
+                "sizing_method": "kelly",
+                "cool_down_losers": 0}  # this test isolates the sizing path
     res = at.process_signals(
         conn, asof=date(2026, 5, 14), settings=settings,
         account_summary_fn=lambda: {"portfolio_value": 100_000.0},

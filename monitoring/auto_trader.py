@@ -49,6 +49,8 @@ DEFAULT_SETTINGS = {
     "order_type": "market",
     "sizing_method": "fixed",
     "stop_loss_atr_multiple": 0,
+    "cool_down_losers": 3,
+    "cool_down_days": 5,
 }
 
 ORDER_TYPE_MARKET = "market"
@@ -564,6 +566,133 @@ def _drawdown_circuit_breaker(settings: dict, account: dict) -> Optional[dict]:
     }
 
 
+DEFAULT_COOL_DOWN_LOSERS = 3
+DEFAULT_COOL_DOWN_DAYS = 5
+
+
+def _coerce_cool_down_losers(raw) -> int:
+    """Number of consecutive losers that triggers cool-down. 0/negative = disabled."""
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_COOL_DOWN_LOSERS
+    if v < 0:
+        return 0
+    return v
+
+
+def _coerce_cool_down_days(raw) -> int:
+    """Number of trading days to pause. 0/negative = disabled."""
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_COOL_DOWN_DAYS
+    if v < 0:
+        return 0
+    return v
+
+
+def _trading_days_between(conn, start_iso: str, end_iso: str) -> int:
+    """Count distinct trading-day dates strictly between start and end,
+    inclusive of end and exclusive of start. Uses snapshots.snapshot_date
+    as the trading-day calendar — it's populated by the daily report and
+    skips weekends/holidays naturally.
+
+    If snapshots is empty (test env / fresh install), falls back to a
+    weekday-only Mon-Fri count. Weekends still count as zero gap; holidays
+    are not honoured but the user notices once and overrides if needed.
+    """
+    try:
+        start = date.fromisoformat(start_iso[:10])
+        end = date.fromisoformat(end_iso[:10])
+    except (ValueError, TypeError):
+        return 0
+    if end <= start:
+        return 0
+    rows = conn.execute(
+        "SELECT DISTINCT snapshot_date FROM snapshots "
+        " WHERE snapshot_date > ? AND snapshot_date <= ? "
+        " ORDER BY snapshot_date ASC",
+        (start.isoformat(), end.isoformat()),
+    ).fetchall()
+    if rows:
+        return len(rows)
+    # Snapshot calendar unavailable — fall back to weekday count.
+    count = 0
+    cur = start + timedelta(days=1)
+    while cur <= end:
+        if cur.weekday() < 5:
+            count += 1
+        cur += timedelta(days=1)
+    return count
+
+
+def _last_n_closed_outcomes(conn, strategy_id: str, n: int) -> List[dict]:
+    """Return the strategy's most recent N closed 1d outcomes, newest first."""
+    if n <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT o.exit_ts, o.return_pct "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        "   AND s.bar_interval='1d' AND s.strategy_id=? "
+        " ORDER BY o.exit_ts DESC, o.signal_id DESC "
+        " LIMIT ?",
+        (strategy_id, int(n)),
+    ).fetchall()
+    return [{"exit_ts": r["exit_ts"], "return_pct": float(r["return_pct"])}
+            for r in rows]
+
+
+def _cool_down_state(
+    conn, strategy_id: str, settings: dict, *,
+    asof: Optional[date] = None,
+) -> Optional[dict]:
+    """Return a dict describing the cool-down trip for `strategy_id`, or None.
+
+    Triggers when the strategy's last `cool_down_losers` closed 1d outcomes
+    were ALL losers (return_pct <= 0). The pause lasts `cool_down_days`
+    trading days after the most-recent loser's exit_ts. Mixed wins/losses
+    in the trailing window do NOT trip. Re-arm happens automatically the
+    first day the trading-day gap exceeds the threshold.
+
+    Returns:
+      {"strategy_id": str, "losers_required": int, "pause_days": int,
+       "last_loser_exit_ts": str, "trading_days_since": int,
+       "trading_days_remaining": int, "reason": str}
+    """
+    losers_required = _coerce_cool_down_losers(settings.get("cool_down_losers"))
+    pause_days = _coerce_cool_down_days(settings.get("cool_down_days"))
+    if losers_required <= 0 or pause_days <= 0:
+        return None
+    outcomes = _last_n_closed_outcomes(conn, strategy_id, losers_required)
+    if len(outcomes) < losers_required:
+        return None
+    if not all(o["return_pct"] <= 0 for o in outcomes):
+        return None
+    last_loser = outcomes[0]
+    asof_d = asof or date.today()
+    days_since = _trading_days_between(
+        conn, last_loser["exit_ts"], asof_d.isoformat(),
+    )
+    if days_since >= pause_days:
+        return None
+    remaining = pause_days - days_since
+    return {
+        "strategy_id": strategy_id,
+        "losers_required": losers_required,
+        "pause_days": pause_days,
+        "last_loser_exit_ts": last_loser["exit_ts"],
+        "trading_days_since": days_since,
+        "trading_days_remaining": remaining,
+        "reason": (
+            f"last {losers_required} closed outcomes all losers; "
+            f"{remaining} trading day(s) remaining of "
+            f"{pause_days}-day pause"
+        ),
+    }
+
+
 def _max_pct_per_symbol(settings: dict) -> float:
     """settings.risk.max_pct_per_symbol → float in (0, 1]. Falls back to
     the default when missing / out of range."""
@@ -845,6 +974,7 @@ def process_signals(
     )
 
     actions: List[dict] = []
+    cool_down_cache: Dict[str, Optional[dict]] = {}
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
             if drawdown_block is not None:
@@ -854,6 +984,21 @@ def process_signals(
                     "symbol": sig["symbol"],
                     "signal_id": sig["id"],
                     **drawdown_block,
+                })
+                continue
+            sid = sig["strategy_id"]
+            if sid not in cool_down_cache:
+                cool_down_cache[sid] = _cool_down_state(
+                    conn, sid, settings, asof=asof,
+                )
+            cd = cool_down_cache[sid]
+            if cd is not None:
+                actions.append({
+                    "action": "SKIP_COOL_DOWN",
+                    "strategy_id": sid,
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    **cd,
                 })
                 continue
             block = concentration_blocks.get(sig["id"])
