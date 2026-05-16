@@ -123,6 +123,35 @@
     .row.split, .row.two, .row.three { grid-template-columns: 1fr; }
   }
 
+  /* Mobile — 480px and below (iPhone width is ~375px) */
+  @media (max-width: 480px) {
+    .container { padding: 12px 10px 40px; }
+    header { flex-wrap: wrap; gap: 8px; padding-bottom: 8px; margin-bottom: 12px; }
+    header h1 { font-size: 16px; }
+    header .meta { font-size: 11px; gap: 10px; }
+    .macro-strip { gap: 10px; font-size: 11px; }
+    .card { padding: 10px 10px; }
+    .card h2 { font-size: 10px; letter-spacing: 0.12em; flex-wrap: wrap; gap: 4px; }
+    .card h2 .count { font-size: 10px; }
+    /* Tables: never let them push the page wider than the card. */
+    .card { overflow-x: auto; }
+    table { font-size: 11px; min-width: 360px; }
+    table th, table td { padding: 3px 5px; }
+    /* Account card stacks per pair. */
+    .account-line { gap: 10px; }
+    .account-line .pair .val { font-size: 13px; }
+    /* Action queue: stack badge / body / actions vertically so the paste
+       string isn't crowded out by the badge column. */
+    .aq-item {
+      grid-template-columns: 1fr;
+      gap: 6px;
+      padding: 8px 10px;
+    }
+    .aq-actions { flex-wrap: wrap; gap: 6px; }
+    .aq-paste { font-size: 11px; word-break: break-word; max-width: 100%; }
+    .report-grid { font-size: 12px; }
+  }
+
   /* Card */
   .card {
     background: var(--surface);
