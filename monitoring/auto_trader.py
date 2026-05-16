@@ -52,6 +52,9 @@ DEFAULT_SETTINGS = {
     "cool_down_losers": 3,
     "cool_down_days": 5,
     "earnings_veto_days": 2,
+    "veto_negative_sentiment": False,
+    "negative_sentiment_threshold": 2,
+    "negative_sentiment_window_hours": 24,
 }
 
 ORDER_TYPE_MARKET = "market"
@@ -695,6 +698,93 @@ def _cool_down_state(
 
 
 DEFAULT_EARNINGS_VETO_DAYS = 2
+DEFAULT_NEGATIVE_SENTIMENT_THRESHOLD = 2
+DEFAULT_NEGATIVE_SENTIMENT_WINDOW_HOURS = 24
+
+
+def _coerce_negative_sentiment_threshold(raw) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_NEGATIVE_SENTIMENT_THRESHOLD
+    if v < 1:
+        return 1
+    return v
+
+
+def _coerce_negative_sentiment_window_hours(raw) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_NEGATIVE_SENTIMENT_WINDOW_HOURS
+    if v < 1:
+        return 1
+    return v
+
+
+def _count_negative_news_for_symbol(
+    conn, symbol: str, *, asof_dt: datetime, window_hours: int,
+) -> int:
+    """Count distinct news rows for `symbol` published within `window_hours`
+    of `asof_dt` whose sentiment payload contains at least one negative
+    label for this symbol.
+
+    asof_dt is interpreted as UTC. The news table stores published_utc
+    as ISO-8601 strings — a naïve lexical >= compare works for that format.
+    """
+    from monitoring.news_sentiment_overlay import extract_sentiment_labels
+    if asof_dt.tzinfo is None:
+        asof_dt = asof_dt.replace(tzinfo=timezone.utc)
+    cutoff = (asof_dt - timedelta(hours=window_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    upper = asof_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = conn.execute(
+        "SELECT id, sentiment FROM news "
+        " WHERE symbol=? AND sentiment IS NOT NULL "
+        "   AND published_utc >= ? AND published_utc <= ?",
+        (symbol, cutoff, upper),
+    ).fetchall()
+    negative = 0
+    for r in rows:
+        labels = extract_sentiment_labels(r["sentiment"], symbol)
+        if any(l == "negative" for l in labels):
+            negative += 1
+    return negative
+
+
+def _negative_sentiment_veto(
+    conn, symbol: str, settings: dict, *, asof: Optional[date] = None,
+) -> Optional[dict]:
+    """Return a veto descriptor when `symbol` has ≥ threshold negative-
+    sentiment news items in the last N hours, or None when disabled / clear."""
+    if not bool(settings.get("veto_negative_sentiment", False)):
+        return None
+    threshold = _coerce_negative_sentiment_threshold(
+        settings.get("negative_sentiment_threshold"),
+    )
+    window_hours = _coerce_negative_sentiment_window_hours(
+        settings.get("negative_sentiment_window_hours"),
+    )
+    if asof is None:
+        asof_dt = datetime.now(timezone.utc)
+    else:
+        asof_dt = datetime.combine(asof, dtime(23, 59, 59),
+                                    tzinfo=timezone.utc)
+    n_negative = _count_negative_news_for_symbol(
+        conn, symbol, asof_dt=asof_dt, window_hours=window_hours,
+    )
+    if n_negative < threshold:
+        return None
+    return {
+        "symbol": symbol,
+        "negative_count": n_negative,
+        "threshold": threshold,
+        "window_hours": window_hours,
+        "reason": (
+            f"{n_negative} negative-sentiment news item(s) in the last "
+            f"{window_hours}h (>= threshold {threshold})"
+        ),
+    }
+
 
 
 def _coerce_earnings_veto_days(raw) -> int:
@@ -1005,6 +1095,7 @@ def process_signals(
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
+    sentiment_cache: Dict[str, Optional[dict]] = {}
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
             if drawdown_block is not None:
@@ -1029,6 +1120,20 @@ def process_signals(
                     "symbol": sym,
                     "signal_id": sig["id"],
                     **ev,
+                })
+                continue
+            if sym not in sentiment_cache:
+                sentiment_cache[sym] = _negative_sentiment_veto(
+                    conn, sym, settings, asof=asof,
+                )
+            ns = sentiment_cache[sym]
+            if ns is not None:
+                actions.append({
+                    "action": "SKIP_NEGATIVE_SENTIMENT",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sym,
+                    "signal_id": sig["id"],
+                    **ns,
                 })
                 continue
             sid = sig["strategy_id"]

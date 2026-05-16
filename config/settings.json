@@ -23,7 +23,10 @@
     "cool_down_losers": 3,
     "cool_down_days": 5,
     "earnings_veto_days": 2,
-    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable."
+    "veto_negative_sentiment": false,
+    "negative_sentiment_threshold": 2,
+    "negative_sentiment_window_hours": 24,
+    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable. Negative-sentiment veto: when veto_negative_sentiment=true, skip entries on symbols with >= negative_sentiment_threshold negative-sentiment news items in the last negative_sentiment_window_hours hours (requires news.sentiment populated by news_fetcher)."
   },
   "notes": "These are non-secret settings. Edit freely."
 }
