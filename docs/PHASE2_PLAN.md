@@ -173,9 +173,11 @@ the box.
   - **Completed:** 2026-05-15 · commit `f012df1`
   - **Notes:** `register_weekly.bat` registers Sunday 18:00 PT schedule. Tagged via `Source = "weekly-digest"` + `Tags = ["Weekly Digest"]` so dashboard / daily-reports view can filter cleanly.
 
-- [ ] **2.6.2 Strategy degradation alert**
+- [x] **2.6.2 Strategy degradation alert**
   - **Deliverable:** `monitoring/strategy_health.py` + Telegram + dashboard flag
   - **Acceptance:** for each active strategy, compute last-30-trade Sharpe vs all-time Sharpe. If last-30 < 50% of all-time, fire a Telegram alert + flag in dashboard's strategy_edge table with a yellow warning icon. Tests: synthetic outcomes with known degradation.
+  - **Completed:** 2026-05-15 · commit `81440de`
+  - **Notes:** Telegram alerts deduped via `meta` table — a strategy must recover before re-alerting. Dashboard tints the row amber + adds the warning icon.
 
 - [ ] **2.6.3 Cross-validation weekly report**
   - **Deliverable:** `monitoring/cross_validation.py` + Notion page
