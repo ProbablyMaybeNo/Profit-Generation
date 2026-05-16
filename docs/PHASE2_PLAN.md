@@ -143,9 +143,11 @@ the box.
 
 ## 2.5 Macro / sentiment context
 
-- [ ] **2.5.1 FRED macro overlay**
+- [x] **2.5.1 FRED macro overlay**
   - **Deliverable:** `monitoring/macro_fetcher.py` + dashboard header strip
   - **Acceptance:** daily fetch of T10Y2Y (recession indicator), VIXCLS (vol), DXY (dollar). Stored in new `macro` table. Dashboard header shows "VIX 18.2 · T10Y2Y +0.34 · DXY 102.1" with color-coding. Tests: parser, dedupe by date.
+  - **Completed:** 2026-05-15 · commit `099ddec`
+  - **Notes:** "DXY" maps to FRED `DTWEXBGS` (free broad-dollar index — FRED doesn't carry ICE-DXY directly). VIX-quartile slicing in edge_slicer activates the moment macro_fetcher runs — no slicer code change required, exactly as 2.2.3 anticipated.
 
 - [ ] **2.5.2 Earnings-week veto**
   - **Deliverable:** `monitoring/earnings_calendar.py` + auto_trader veto
