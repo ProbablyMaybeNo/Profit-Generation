@@ -44,9 +44,10 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Acceptance:** documents the day-1-live procedure end-to-end: which strategy goes first (one ETF, single share size), how to monitor the first 5 fills in real-time, abort criteria, rollback to paper, sign-off checklist. Cross-references preflight, reconcile_positions, kill_switch. ≤ 10 procedures, each ≤ 5 steps.
   - **Completed:** 2026-05-17 by milestone-builder · commit f7b73fb
 
-- [ ] **4.1.4 Live-crypto smoke-test playbook**
+- [x] **4.1.4 Live-crypto smoke-test playbook**
   - **Deliverable:** `docs/CRYPTO_SMOKE_TEST.md` (NOT code)
   - **Acceptance:** mirror of 4.1.3 but for the crypto adapter built in 3.4.1. Notes BTC/USD vs ETH/USD spread differences, 24/7 monitoring expectations, minimum capital. ≤ 10 procedures.
+  - **Completed:** 2026-05-17 by milestone-builder · commit ab1f86f
 
 ---
 
