@@ -53,13 +53,15 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ## 4.2 Crypto leverage / margin
 
-- [ ] **4.2.1 Crypto leverage feasibility — research milestone**
+- [x] **4.2.1 Crypto leverage feasibility — research milestone**
   - **Deliverable:** `docs/CRYPTO_LEVERAGE_RESEARCH.md` (NOT code)
   - **Acceptance:** documents (a) which Alpaca crypto products support leverage at all, (b) maintenance margin formulas, (c) liquidation mechanics + funding rates, (d) which of our crypto strategies would actually benefit from leverage vs which would just amplify slippage burn, (e) regulatory + tax angle for leveraged crypto, (f) recommended go/no-go criteria. No code.
+  - **Completed:** 2026-05-17 by milestone-builder · commit d7911aa · **Verdict: NO-GO** (Alpaca doesn't offer; current strategies don't benefit; reg+tax overhead non-trivial).
 
-- [ ] **4.2.2 Leverage-aware sizing (conditional on 4.2.1 GO)**
+- [-] **4.2.2 Leverage-aware sizing (conditional on 4.2.1 GO)**
   - **Deliverable:** `monitoring/crypto_adapter.py` extended with `leverage` parameter + `crypto.max_leverage` setting (default 1.0)
   - **Acceptance:** ships only if 4.2.1 verdict is GO. Per-symbol leverage cap, liquidation-distance check before every entry (refuse entries within 20% of liquidation price), separate `crypto_leverage` action surfaced in process_signals result. Tests: liquidation math, refusal cases, default-to-1.0 fallback when 4.2.1 not yet greenlit.
+  - **Gated:** 2026-05-17 — 4.2.1 verdict is **NO-GO**. Per the milestone spec ("ships only if 4.2.1 verdict is GO"), no code shipped. Reopen if Alpaca adds margined crypto OR an intraday-scalp strategy class lands with N ≥ 100 closed paper outcomes.
 
 ---
 
