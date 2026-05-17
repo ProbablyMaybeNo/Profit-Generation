@@ -62,9 +62,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** per-strategy size scales with track record. Tier 0 (<5 closed outcomes) = $200, Tier 1 (5-19) = $500, Tier 2 (20-49) = $1000, Tier 3 (50+ with Sharpe > 0.3) = $2000. Caps configurable. Tests: tier boundary math, fallback when stats unavailable.
   - **Completed:** 2026-05-16 by milestone-builder · commit 6168f12 (14 tests, full boundary coverage, max_position_usd remains a hard ceiling)
 
-- [ ] **3.2.2 Portfolio drawdown auto-throttle**
+- [x] **3.2.2 Portfolio drawdown auto-throttle**
   - **Deliverable:** auto_trader inspects portfolio equity vs trailing 30-day peak
   - **Acceptance:** when current equity ≤ 95% of trailing peak, halve all position sizes globally. When ≤ 90%, quarter them. When ≤ 85%, trip the kill switch (writes kill_switch.json with reason). Recovers automatically when equity recovers above 97% of peak. Tests: synthetic equity curves through each threshold.
+  - **Completed:** 2026-05-16 by milestone-builder · commit ad5f2e0 (new equity_snapshots table, drawdown_throttle module, 21 tests; same-run halt via kill-switch integration)
 
 - [ ] **3.2.3 Concurrent open-position cap by strategy**
   - **Deliverable:** `risk.max_open_per_strategy` setting (default 3) + auto_trader honors it
