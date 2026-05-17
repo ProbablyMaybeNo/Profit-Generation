@@ -131,9 +131,10 @@ is exposed (3.2.4 onward).
   - **Notes:** Heavy hitters: PG-009 (intraday/TV signals never reconciled to outcomes — touches 3.1.4), PG-011 (dashboard + TV webhook auth), PG-013 (implicit shorts).
   - **Completed:** 2026-05-16 by milestone-builder · commit e333a19 (code fixes for PG-007/008/009/010/011/012/013/014/015/016; PG-003/004/005/006 documented as already-resolved; DEBUG REPORT.md deleted; 20 regression tests added; dashboard now 127.0.0.1-default; tv_webhook refuses to boot without secret)
 
-- [ ] **3.5.2 Backup & restore script**
+- [x] **3.5.2 Backup & restore script**
   - **Deliverable:** `scripts/backup.py` + nightly schtask
   - **Acceptance:** copies `data/trading.db`, `data/records.jsonl`, `config/settings.json` to `D:\Backups\profit-generation\YYYY-MM-DD\`. Keeps last 30 days, prunes older. Restore script reverses it. Tests: backup file integrity, prune logic.
+  - **Completed:** 2026-05-16 by milestone-builder · commit ddc069d (atomic sqlite .backup API; manifest.json per snapshot; 30-day rolling prune; restore with overwrite-guard default; \TradingSystem\Backup daily 22:30 schtask; 17 tests)
 
 - [ ] **3.5.3 Health endpoint on dashboard**
   - **Deliverable:** new `/api/health` returning JSON with all subsystem status
