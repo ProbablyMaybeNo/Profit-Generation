@@ -47,10 +47,11 @@ is exposed (3.2.4 onward).
   - **Acceptance:** queries Alpaca `list_positions()`, compares against `paper_trades` table (open positions = entries without matching exit). Reports any drift (symbol in Alpaca but not in our DB, or vice versa, or qty mismatch). Posts to Notion daily report as a section. Fires Telegram alert on any non-zero drift. Tests: synthetic drift cases, no-drift case.
   - **Completed:** 2026-05-16 by milestone-builder · commit 4c0d801 (nightly schtask at 21:00; section splice into daily_report markdown; 25 unit tests)
 
-- [ ] **3.1.5 Per-strategy live/paper segregation**
+- [x] **3.1.5 Per-strategy live/paper segregation**
   - **Deliverable:** `auto_trade.live_strategies` setting (list of strategy_ids) + auto_trader routes orders accordingly
   - **Acceptance:** strategies in `live_strategies` submit to a live Alpaca account; all others go to paper. Defaults to empty list (everything paper). Requires `config/credentials.json` to have separate `alpaca_live` section (only added by user; agent surfaces missing-key message). Tests: routing logic, missing live creds → graceful refusal to enter live mode.
   - **Notes:** Do NOT add live credentials in this milestone. The setting + routing logic ships paper-only. User flips on per-strategy basis when ready.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 8734749 (per-signal client resolver, lazy live-client caching, SKIP_LIVE_CREDS_MISSING action for graceful refusal)
 
 ---
 
