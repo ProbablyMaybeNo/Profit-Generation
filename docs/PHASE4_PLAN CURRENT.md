@@ -134,10 +134,11 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
   - **Notes:** Initial stop (entry-time ATR stop from 2.3.4) still applies until the trailing stop crosses above it. Then trailing takes over.
   - **Completed:** 2026-05-17 by milestone-builder · commit b5930ff
 
-- [ ] **4.6.2 Pyramiding logic in auto_trader**
+- [x] **4.6.2 Pyramiding logic in auto_trader**
   - **Deliverable:** `auto_trade.pyramiding` settings section + auto_trader add-on entry logic + `paper_trades` schema additions for tier tracking
   - **Acceptance:** when a position is already open and a new confirming signal fires from the same strategy + same direction + regime still trend-aligned, submit an *add-on* order. Add-on sizes follow a tier schedule (default `[1.0, 0.5, 0.25, 0.125]` — initial entry full size, then halving). Max-N tiers configurable (default 4). Each add-on logged with `pyramid_tier` column. The trailing stop applies to the *whole* aggregated position. Tests: tier sequencing, size math, regime-veto on add-ons, max-N cap, stop applies to aggregate.
   - **Notes:** Pyramiding is opt-in per strategy via `pyramidable: true` declaration in `TRACKED_STRATEGIES`. Mean-reversion strategies must NOT be pyramidable — there's no continuation thesis there.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 239e9de
 
 - [ ] **4.6.3 Trend-following strategy implementations**
   - **Deliverable:** `strategies/trend/` module with three implementations + validator runs through existing PASS/FAIL pipeline
