@@ -965,6 +965,13 @@ def manual_trigger_status():
     })
 
 
+# Public, sanitized, rate-limited read-only endpoints (milestone 4.4.1).
+# Registered LAST so private routes always win the route table.
+from dashboard import public_api as _public_api  # noqa: E402
+
+_public_api.register(app, db_module=db)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
