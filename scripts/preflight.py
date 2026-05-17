@@ -309,7 +309,21 @@ def main():
     parser = argparse.ArgumentParser(description="Pre-flight checks.")
     parser.add_argument("--json", action="store_true",
                         help="emit machine-readable JSON results")
+    parser.add_argument("--tunnel", action="store_true",
+                        help="run ONLY the tunnel_url freshness check "
+                             "(milestone 4.5.1). Exits 0 if "
+                             "data/tunnel_url.txt is < 24h old, non-zero "
+                             "otherwise. RUNBOOK Procedure 6 uses this "
+                             "instead of an inline Python one-liner.")
     args = parser.parse_args()
+    if args.tunnel:
+        result = check_tunnel_url()
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            tag = result["status"]
+            print(f"{tag}  tunnel_url  {result['detail']}")
+        sys.exit(0 if result["status"] == "PASS" else 1)
     results = run_all()
     if args.json:
         print(json.dumps(results, indent=2))

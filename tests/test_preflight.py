@@ -381,3 +381,78 @@ def test_run_all_captures_exceptions(monkeypatch):
     assert len(results) == 1
     assert results[0]["status"] == "FAIL"
     assert "whoops" in results[0]["detail"]
+
+
+# ---- --tunnel CLI flag (milestone 4.5.1) ----------------------------------
+
+def test_tunnel_flag_exit_zero_when_fresh(tmp_path, monkeypatch, capsys):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    f = data_dir / "tunnel_url.txt"
+    f.write_text("https://abc.trycloudflare.com", encoding="utf-8")
+    monkeypatch.setattr(pre, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["preflight.py", "--tunnel"])
+    with pytest.raises(SystemExit) as exc:
+        pre.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "PASS" in out
+    assert "tunnel_url" in out
+
+
+def test_tunnel_flag_exit_nonzero_when_stale(tmp_path, monkeypatch, capsys):
+    f = tmp_path / "tunnel_url.txt"
+    f.write_text("https://abc.trycloudflare.com", encoding="utf-8")
+    way_old = (datetime.now(timezone.utc) - timedelta(hours=48)).timestamp()
+    os.utime(f, (way_old, way_old))
+    monkeypatch.setattr(pre, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["preflight.py", "--tunnel"])
+    with pytest.raises(SystemExit) as exc:
+        pre.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+
+
+def test_tunnel_flag_exit_nonzero_when_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(pre, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["preflight.py", "--tunnel"])
+    with pytest.raises(SystemExit) as exc:
+        pre.main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+
+
+def test_tunnel_flag_json_emits_single_object(tmp_path, monkeypatch,
+                                                capsys):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    f = data_dir / "tunnel_url.txt"
+    f.write_text("https://abc.trycloudflare.com", encoding="utf-8")
+    monkeypatch.setattr(pre, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["preflight.py", "--tunnel", "--json"])
+    with pytest.raises(SystemExit) as exc:
+        pre.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    # Single object — not the list run_all() emits.
+    assert isinstance(parsed, dict)
+    assert parsed["check"] == "tunnel_url"
+    assert parsed["status"] == "PASS"
+
+
+def test_runbook_no_longer_references_inline_one_liner():
+    """4.5.1 acceptance: RUNBOOK Procedure 6 must use the new flag, not
+    the inline Python one-liner."""
+    runbook = (
+        Path(__file__).resolve().parents[1] / "docs" / "RUNBOOK.md"
+    ).read_text(encoding="utf-8")
+    assert "preflight.py --tunnel" in runbook
+    # The old one-liner is gone.
+    assert "from pathlib import Path; from datetime import datetime; p=Path('data/tunnel_url.txt')" not in runbook

@@ -96,8 +96,9 @@ Quick-tunnel URLs (`*.trycloudflare.com`) are ephemeral — they die with the
 `cloudflared` process and the next one gets a new URL. TradingView alerts
 hit the old URL until the alert's webhook is updated.
 
-1. Check freshness: `py -3.13 -c "from pathlib import Path; from datetime import datetime; p=Path('data/tunnel_url.txt'); import os; print(p.read_text().strip(), 'age_h=', round((datetime.now().timestamp()-os.path.getmtime(p))/3600, 1))"`.
-   The preflight script (`scripts/preflight.py`) FAILs if older than 24h.
+1. Check freshness: `py -3.13 scripts/preflight.py --tunnel` (exits 0
+   if `data/tunnel_url.txt` is < 24h old, non-zero + prints reason
+   otherwise — milestone 4.5.1).
 2. Confirm `cloudflared` is still running: `tasklist | findstr cloudflared`.
    If absent, `schedulers\start_tv_tunnel.bat` to relaunch.
 3. Read the new URL: `type data\tunnel_url.txt` — it's auto-written by the
