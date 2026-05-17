@@ -67,9 +67,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** when current equity ≤ 95% of trailing peak, halve all position sizes globally. When ≤ 90%, quarter them. When ≤ 85%, trip the kill switch (writes kill_switch.json with reason). Recovers automatically when equity recovers above 97% of peak. Tests: synthetic equity curves through each threshold.
   - **Completed:** 2026-05-16 by milestone-builder · commit ad5f2e0 (new equity_snapshots table, drawdown_throttle module, 21 tests; same-run halt via kill-switch integration)
 
-- [ ] **3.2.3 Concurrent open-position cap by strategy**
+- [x] **3.2.3 Concurrent open-position cap by strategy**
   - **Deliverable:** `risk.max_open_per_strategy` setting (default 3) + auto_trader honors it
   - **Acceptance:** if a strategy already has 3 open positions, refuse new entries from that strategy regardless of edge. Exits unaffected. Tests: cap enforcement, mixed-strategy unaffected.
+  - **Completed:** 2026-05-16 by milestone-builder · commit a4498cf (15 tests; in-run counter increments to respect cap across same-run signals)
 
 - [ ] **3.2.4 Multi-account capital allocation**
   - **Deliverable:** `config/accounts.json` (one entry per account: paper/live + capital_pct) + auto_trader splits orders proportionally
