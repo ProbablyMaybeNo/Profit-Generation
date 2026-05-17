@@ -124,7 +124,7 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bearish bounces). This section adds the opposite market mode — trend-following — so the system covers both regimes. The regime router (3.3.3) already exists to route capital between them automatically.
 
-- [ ] **4.6.1 Trailing stop engine**
+- [x] **4.6.1 Trailing stop engine**
   - **Deliverable:** `monitoring/trailing_stops.py` + `tests/test_trailing_stops.py` + auto_trader integration
   - **Acceptance:** three configurable formulas selectable per strategy via `trailing_stop.method` setting:
     - `atr_trail` — stop = highest_high_since_entry − (multiplier × ATR_14)
@@ -132,6 +132,7 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
     - `percent_trail` — stop = highest_high_since_entry × (1 − pct)
     Stop only moves UP for longs, DOWN for shorts (ratchet, never loosen). New `trailing_stops` table tracks current stop per open position; updated on every bar close. Auto-trader honors the trailing stop on exit eligibility check. Tests: monotonic-ratchet, formula correctness for each method, position-direction handling, no-update-on-flat-bar.
   - **Notes:** Initial stop (entry-time ATR stop from 2.3.4) still applies until the trailing stop crosses above it. Then trailing takes over.
+  - **Completed:** 2026-05-17 by milestone-builder · commit b5930ff
 
 - [ ] **4.6.2 Pyramiding logic in auto_trader**
   - **Deliverable:** `auto_trade.pyramiding` settings section + auto_trader add-on entry logic + `paper_trades` schema additions for tier tracking
