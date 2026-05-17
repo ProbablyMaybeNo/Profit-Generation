@@ -179,6 +179,8 @@ def validate_strategy_record(
     lookback_days: int = 730,
     fn: Optional[Callable] = None,
     bars_by_sym: Optional[Dict] = None,
+    interval: str = "1d",
+    source: Optional[str] = None,
 ) -> Dict:
     """
     Run validation for a strategy. Pure function — does NOT touch
@@ -187,14 +189,25 @@ def validate_strategy_record(
     `fn` and `bars_by_sym` can be injected so a batch caller can prefetch
     bars once across the universe and amortize yfinance cost.
 
+    `interval` controls the bar timeframe passed to the data loader and
+    is propagated into each test_run's `timeframe` field. The minimum-bar
+    threshold (30 for daily) is relaxed to 100 for sub-daily intervals so
+    short intraday windows still gate sensibly.
+
+    `source` overrides the bar-loader source ("yf" default for daily,
+    "alpaca" default for intraday since yfinance has no minute data).
+
     Returns:
-      {strategy_id, lookback_days, period, universe, per_symbol,
+      {strategy_id, lookback_days, period, universe, interval, per_symbol,
        test_runs, overall_verdict}
     """
     end = date.today()
     start = end - timedelta(days=lookback_days)
     today_iso = end.isoformat()
     period_str = f"{start.isoformat()} to {today_iso}"
+    is_intraday = interval != "1d"
+    bar_source = source or ("alpaca" if is_intraday else "yf")
+    min_bars_required = 100 if is_intraday else 30
 
     if fn is None:
         fn = _load_compute_fn(strategy_id)
@@ -202,7 +215,7 @@ def validate_strategy_record(
         from backtest.data import load_bars  # lazy import
         bars_by_sym = load_bars(
             universe, start=start.isoformat(), end=today_iso,
-            interval="1d", source="yf",
+            interval=interval, source=bar_source,
         )
 
     per_symbol: Dict[str, Dict] = {}
@@ -210,7 +223,7 @@ def validate_strategy_record(
 
     for sym in universe:
         bars = bars_by_sym.get(sym)
-        if bars is None or bars.empty or len(bars) < 30:
+        if bars is None or bars.empty or len(bars) < min_bars_required:
             per_symbol[sym] = {"verdict": "UNTESTED", "stats": _stats([]),
                                 "trades": [], "note": "no/insufficient bars"}
             continue
@@ -226,10 +239,10 @@ def validate_strategy_record(
         verdict = _verdict_for(stats)
         per_symbol[sym] = {"verdict": verdict, "stats": stats, "trades": trades}
         test_runs.append({
-            "test_id": f"{strategy_id}-{sym}-validate-{today_iso}",
+            "test_id": f"{strategy_id}-{sym}-validate-{today_iso}-{interval}",
             "date_iso": today_iso,
             "instrument": sym,
-            "timeframe": "1d",
+            "timeframe": interval,
             "period": period_str,
             "trades": stats["n"],
             "win_rate_pct": round(stats["win_rate"] * 100, 2),
@@ -244,6 +257,7 @@ def validate_strategy_record(
         "lookback_days": lookback_days,
         "period": period_str,
         "universe": universe,
+        "interval": interval,
         "per_symbol": per_symbol,
         "test_runs": test_runs,
         "overall_verdict": _aggregate_verdict(per_symbol),
@@ -272,6 +286,13 @@ def main():
     parser.add_argument("--universe", required=True,
                         help="comma-separated symbols, e.g. GDX,KRE,XHB")
     parser.add_argument("--lookback-days", type=int, default=730)
+    parser.add_argument("--interval", default="1d",
+                        help="bar timeframe (1d, 5m, 15m, 1h ...). "
+                             "Sub-daily intervals route through Alpaca "
+                             "by default and require shorter --lookback-days.")
+    parser.add_argument("--source", default=None,
+                        help="bar-loader source override (yf / alpaca). "
+                             "Defaults to yf for daily, alpaca for intraday.")
     parser.add_argument("--print-trades", action="store_true",
                         help="print every trade for the largest-sample symbol")
     parser.add_argument("--no-update-records", action="store_true",
@@ -300,9 +321,11 @@ def main():
         print(json.dumps(summary, indent=2))
         return 0
 
-    print(f"loading {len(symbols)} symbols × {args.lookback_days}d daily bars...")
+    print(f"loading {len(symbols)} symbols × {args.lookback_days}d "
+          f"{args.interval} bars...")
     result = validate_strategy_record(
         args.strategy_id, symbols, lookback_days=args.lookback_days,
+        interval=args.interval, source=args.source,
     )
     per_symbol = result["per_symbol"]
     overall = result["overall_verdict"]
