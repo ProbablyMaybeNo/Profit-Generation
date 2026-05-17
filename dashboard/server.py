@@ -17,6 +17,7 @@ import sys
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
+from typing import List, Optional
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -480,6 +481,157 @@ def state():
             "tv_tunnel": _state_tunnel_url(),
             "kill_switch": _state_kill_switch(),
         })
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# /api/health — UptimeRobot-style external poll target (3.5.3).
+# ---------------------------------------------------------------------------
+
+# Stale thresholds — once exceeded the health endpoint flips `ok` to False
+# and surfaces the offending subsystem in `degraded`.
+HEALTH_INTRADAY_STALE_MIN = 30           # last intraday scan
+HEALTH_DAILY_REPORT_STALE_HOURS = 36     # last daily_report row (allows weekends)
+HEALTH_TUNNEL_STALE_HOURS = 24           # last tunnel_url.txt update
+
+
+def _file_age_minutes(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
+    return int(age.total_seconds() // 60)
+
+
+def _file_age_hours(path: Path) -> Optional[float]:
+    mins = _file_age_minutes(path)
+    return round(mins / 60, 2) if mins is not None else None
+
+
+def _health_alpaca() -> str:
+    """ok | blocked | unreachable. 'blocked' covers account_blocked /
+    trading_blocked / pattern_day_trader. 'unreachable' is the safe
+    default when the API throws."""
+    try:
+        acct = get_account_summary()
+    except Exception:
+        return "unreachable"
+    if not acct:
+        return "unreachable"
+    status = (acct.get("status") or "").upper()
+    if any(acct.get(k) for k in ("account_blocked", "trading_blocked")):
+        return "blocked"
+    if status and status not in ("ACTIVE", "OK"):
+        return "blocked"
+    return "ok"
+
+
+def _health_db(conn) -> str:
+    """ok | broken. Pings the schema_version row in `meta`."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+    except Exception:
+        return "broken"
+    return "ok" if row is not None else "broken"
+
+
+def _health_daily_report_age_hours(conn) -> Optional[float]:
+    """Hours since the most recent daily_reports row's generated_at."""
+    try:
+        row = conn.execute(
+            "SELECT generated_at FROM daily_reports "
+            "ORDER BY report_date DESC LIMIT 1"
+        ).fetchone()
+    except Exception:
+        return None
+    if row is None or not row["generated_at"]:
+        return None
+    try:
+        gen = datetime.fromisoformat(str(row["generated_at"]).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    # Compute the delta in a tz-aware fashion to avoid utcnow() deprecation
+    # and DST traps. If `gen` came in as naive, assume UTC.
+    from datetime import timezone as _tz
+    if gen.tzinfo is None:
+        gen = gen.replace(tzinfo=_tz.utc)
+    delta = datetime.now(_tz.utc) - gen
+    return round(delta.total_seconds() / 3600, 2)
+
+
+def _health_open_positions(conn) -> int:
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM ("
+            "  SELECT signal_id FROM paper_trades "
+            "  WHERE side='buy' AND status NOT IN ('rejected','canceled') "
+            "  GROUP BY signal_id "
+            "  EXCEPT "
+            "  SELECT signal_id FROM paper_trades "
+            "  WHERE side='sell' AND status NOT IN ('rejected','canceled') "
+            "  GROUP BY signal_id"
+            ")"
+        ).fetchone()
+    except Exception:
+        return 0
+    return int(row["n"]) if row else 0
+
+
+@app.route("/api/health")
+def api_health():
+    """UptimeRobot-style external poll target.
+
+    Returns 200 with `{ok: bool, ...}` regardless of degradation — HTTP
+    code stays 200 so the monitor sees the JSON body; consumers parse
+    `ok` + `degraded` to decide what to alert on.
+    """
+    conn = db.init_db()
+    try:
+        intraday_age = _file_age_minutes(INTRADAY_LOG)
+        daily_age = _health_daily_report_age_hours(conn)
+        tunnel_age = _file_age_hours(DATA_DIR / "tunnel_url.txt")
+        ks_state = _state_kill_switch()
+        ks_engaged = bool(ks_state.get("live_trading_halted"))
+        alpaca = _health_alpaca()
+        db_status = _health_db(conn)
+        open_pos = _health_open_positions(conn)
+
+        degraded: List[str] = []
+        if alpaca != "ok":
+            degraded.append(f"alpaca:{alpaca}")
+        if db_status != "ok":
+            degraded.append(f"db:{db_status}")
+        # Intraday is only expected to be fresh during market hours.
+        if intraday_age is None:
+            degraded.append("intraday:no_log")
+        elif intraday_age > HEALTH_INTRADAY_STALE_MIN and market_is_open():
+            degraded.append(f"intraday:stale_{intraday_age}min")
+        if daily_age is None:
+            degraded.append("daily_report:none")
+        elif daily_age > HEALTH_DAILY_REPORT_STALE_HOURS:
+            degraded.append(f"daily_report:stale_{daily_age}h")
+        if tunnel_age is None:
+            degraded.append("tunnel:no_file")
+        elif tunnel_age > HEALTH_TUNNEL_STALE_HOURS:
+            degraded.append(f"tunnel:stale_{tunnel_age}h")
+        if ks_engaged:
+            degraded.append("kill_switch:engaged")
+
+        body = {
+            "ok": len(degraded) == 0,
+            "now": datetime.now().isoformat(timespec="seconds"),
+            "alpaca": alpaca,
+            "db": db_status,
+            "intraday_age_min": intraday_age,
+            "daily_report_age_h": daily_age,
+            "tunnel_age_h": tunnel_age,
+            "kill_switch": ks_engaged,
+            "open_positions": open_pos,
+            "degraded": degraded,
+        }
+        return jsonify(body), 200
     finally:
         conn.close()
 
