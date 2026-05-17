@@ -72,9 +72,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** if a strategy already has 3 open positions, refuse new entries from that strategy regardless of edge. Exits unaffected. Tests: cap enforcement, mixed-strategy unaffected.
   - **Completed:** 2026-05-16 by milestone-builder · commit a4498cf (15 tests; in-run counter increments to respect cap across same-run signals)
 
-- [ ] **3.2.4 Multi-account capital allocation**
+- [x] **3.2.4 Multi-account capital allocation**
   - **Deliverable:** `config/accounts.json` (one entry per account: paper/live + capital_pct) + auto_trader splits orders proportionally
   - **Acceptance:** default config = single Alpaca paper account at 100%. Schema supports adding live accounts with `capital_pct` and `live_strategies` overrides. Tests: split math, defaults, missing-key handling.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 149e9d2 (registry + validator + penny-perfect split helper; auto_trader iteration deferred until second account exists)
 
 ---
 
