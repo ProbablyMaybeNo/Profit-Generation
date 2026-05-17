@@ -116,9 +116,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** documents (a) which Alpaca options endpoints we'd need, (b) data sources for IV / Greeks, (c) which existing strategies could translate to long calls/puts vs which need restructuring, (d) regulatory + tax implications (1256 vs short-term gains), (e) recommended go/no-go criteria for an implementation milestone. No code shipped.
   - **Completed:** 2026-05-16 by milestone-builder · commit 6849752 (Alpaca options endpoints catalogued; Polygon snapshots + py_vollib fallback for IV/Greeks; per-strategy translation matrix recommends botnet101 cluster + rsi2 / SKIP for ORB+SMC; 1256 SPX-over-SPY recommendation; 6-point go/no-go gate)
 
-- [ ] **3.4.3 Futures evaluation — research milestone**
+- [x] **3.4.3 Futures evaluation — research milestone**
   - **Deliverable:** `docs/FUTURES_RESEARCH.md` (NOT code)
   - **Acceptance:** documents (a) broker options (Alpaca doesn't carry futures; candidates: Tradovate, IBKR, NinjaTrader), (b) data cost (~$120-150/mo minimum), (c) PDT / margin / pattern rules, (d) which strategies plausibly translate to /ES, /NQ, /CL, /GC, (e) go/no-go criteria. No code shipped.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 5249864 (Tradovate first, IBKR fallback; $120-150/mo data cost reality; PDT-free + no T+1 + MtM daily operational unlocks; per-strategy → /M-prefix micro contracts; 1256 60/40 tax saves ~30%; 6-point go/no-go gate with paid-R&D acknowledgement)
 
 ---
 
