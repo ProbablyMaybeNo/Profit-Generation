@@ -92,9 +92,10 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Acceptance:** exposes a public-safe subset: equity curve (no $ amounts, % returns only), per-strategy Sharpe + win-rate, last 30-day P&L %. NEVER exposes: position sizes, open positions, credentials, Alpaca account IDs, raw fill data. Rate-limited per IP (60 req/min). Tests: sensitive fields rejected, rate-limiter, shape validation.
   - **Completed:** 2026-05-17 by milestone-builder · commit 43c269d
 
-- [ ] **4.4.2 Static performance page**
+- [x] **4.4.2 Static performance page**
   - **Deliverable:** new `public/` subdirectory with a single-page site (Next.js OR plain HTML + Chart.js — pick the lighter-weight option)
   - **Acceptance:** renders equity curve, per-strategy stats table, "last updated" timestamp. Mobile-responsive. Calls the 4.4.1 endpoints. No login. Lighthouse score ≥ 90. Tests: build succeeds, snapshot of HTML output.
+  - **Completed:** 2026-05-17 by milestone-builder · commit f6bb887 · plain HTML + Chart.js v4 (single file, no build).
 
 - [ ] **4.4.3 Daily Vercel auto-deploy**
   - **Deliverable:** `schedulers/deploy_public.bat` + Vercel project config
