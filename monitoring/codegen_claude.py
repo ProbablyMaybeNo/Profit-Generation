@@ -348,6 +348,125 @@ def fn_name_from_strategy_id(strategy_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Budget-gated wrapper (4.3.3)
+# ---------------------------------------------------------------------------
+
+def generate_with_budget_gate(
+    fn_name: str,
+    *,
+    entry_rules: str,
+    exit_rules: str,
+    risk_management: str = "",
+    model: Optional[str] = None,
+    temperature: float = 0.1,
+    api_key: Optional[str] = None,
+    conn=None,
+    cap_usd: Optional[float] = None,
+    fallback_fn: Optional[Callable] = None,
+    alert_fn: Optional[Callable[[str], bool]] = None,
+    now_fn: Optional[Callable] = None,
+) -> Dict:
+    """Budget-gated Claude codegen.
+
+    Returns {provider, code} where provider ∈ {"claude", "ollama"}.
+
+    Flow:
+      1. Pre-check: monitoring.api_budget.assert_can_spend. If exhausted,
+         fire a Telegram alert (once per day) and fall back to Ollama.
+      2. Call Claude. The usage callback persists today's spend so the
+         next call sees the updated total.
+      3. On any Claude error (network, content rejection), no fallback —
+         the caller decides what to do. Budget exhaustion is the only
+         path that triggers automatic fallback.
+    """
+    from monitoring import api_budget
+    if conn is None:
+        from data import db
+        conn = db.init_db()
+        own_conn = True
+    else:
+        own_conn = False
+
+    try:
+        check = api_budget.can_spend(
+            conn, cap_usd=cap_usd, now_fn=now_fn,
+        )
+        if not check["ok"]:
+            _maybe_alert_budget(
+                conn=conn, check=check,
+                alert_fn=alert_fn, now_fn=now_fn,
+            )
+            if fallback_fn is None:
+                fallback_fn = lambda: llm_codegen.generate_compute_fn(
+                    fn_name, entry_rules=entry_rules,
+                    exit_rules=exit_rules,
+                    risk_management=risk_management,
+                )
+            code = fallback_fn()
+            return {"provider": "ollama", "code": code,
+                    "budget": check}
+
+        recorder = api_budget.make_usage_recorder(conn, now_fn=now_fn)
+        code = generate_compute_fn(
+            fn_name, entry_rules=entry_rules, exit_rules=exit_rules,
+            risk_management=risk_management,
+            model=model, temperature=temperature, api_key=api_key,
+            on_usage=recorder,
+        )
+        return {"provider": "claude", "code": code,
+                "budget": check}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+_BUDGET_ALERT_META_PREFIX = "api_budget.alerted:"
+
+
+def _maybe_alert_budget(
+    *,
+    conn,
+    check: Dict,
+    alert_fn: Optional[Callable[[str], bool]] = None,
+    now_fn: Optional[Callable] = None,
+) -> bool:
+    """Fire a Telegram alert once per UTC day on budget exhaustion.
+
+    Returns True iff an alert was actually sent. The dedupe key is
+    `api_budget.alerted:<provider>:<date>` in the meta table.
+    """
+    key = f"{_BUDGET_ALERT_META_PREFIX}anthropic:{check['today']}"
+    existing = conn.execute(
+        "SELECT value FROM meta WHERE key=?", (key,),
+    ).fetchone()
+    if existing is not None:
+        return False
+    if alert_fn is None:
+        try:
+            from monitoring.telegram_alerter import send_message as alert_fn  # type: ignore[no-redef]
+        except Exception:
+            return False
+    text = (
+        "\U000026A0\U0000FE0F *Claude API budget exhausted* "
+        f"({check['today']}): spent ${check['spent_usd']:.4f} / "
+        f"cap ${check['cap_usd']:.4f}. Codegen falling back to Ollama."
+    )
+    try:
+        sent = bool(alert_fn(text))
+    except Exception as e:
+        log(f"budget alert send failed: {e}", "WARNING")
+        return False
+    if sent:
+        with conn:
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, "1"),
+            )
+    return sent
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

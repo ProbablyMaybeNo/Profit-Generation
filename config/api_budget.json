@@ -1,0 +1,7 @@
+{
+  "anthropic": {
+    "daily_usd_cap": 5.0,
+    "enabled": true
+  },
+  "_notes": "Daily spend cap for the Claude codegen path (4.3.3). When the running api_spend total for the current UTC date exceeds anthropic.daily_usd_cap, monitoring/codegen_claude.py refuses new calls and the caller falls back to the Ollama path. Set enabled=false to disable the gate entirely. Per-day reset is automatic at UTC midnight."
+}
