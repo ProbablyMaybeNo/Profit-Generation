@@ -303,3 +303,127 @@ def test_process_signals_does_not_skip_exits_on_regime_mismatch(isolated_db,
     # matching open trade. Either way, no regime-skip on the exit.
     actions = [a.get("action") for a in res["actions"]]
     assert "SKIP_REGIME_MISMATCH" not in actions
+
+
+# ---------------------------------------------------------------------------
+# Capital allocation (milestone 4.6.4)
+# ---------------------------------------------------------------------------
+
+def test_allocation_trend_regime_favors_trend():
+    out = rr.allocation_for_regime("trending_up")
+    assert out["trend"] == 0.7
+    assert out["mean_reversion"] == 0.3
+    assert out["fallback"] is False
+
+
+def test_allocation_choppy_favors_mean_reversion():
+    out = rr.allocation_for_regime("choppy")
+    assert out["trend"] == 0.3
+    assert out["mean_reversion"] == 0.7
+
+
+def test_allocation_low_vol_favors_mean_reversion():
+    out = rr.allocation_for_regime("low_vol")
+    assert out["trend"] == 0.3
+    assert out["mean_reversion"] == 0.7
+
+
+def test_allocation_mixed_is_balanced():
+    out = rr.allocation_for_regime("mixed")
+    assert out["trend"] == 0.5
+    assert out["mean_reversion"] == 0.5
+
+
+def test_allocation_low_confidence_falls_back_to_50_50():
+    """Below the confidence floor, the allocator falls back to 50/50
+    regardless of declared regime."""
+    out = rr.allocation_for_regime("trending_up", confidence=0.4)
+    assert out["trend"] == 0.5
+    assert out["mean_reversion"] == 0.5
+    assert out["fallback"] is True
+
+
+def test_allocation_high_confidence_uses_declared_regime():
+    out = rr.allocation_for_regime("trending_up", confidence=0.9)
+    assert out["trend"] == 0.7
+    assert out["fallback"] is False
+
+
+def test_allocation_at_confidence_floor_uses_declared_regime():
+    """Strictly below the floor is fallback. AT the floor is still ok."""
+    out = rr.allocation_for_regime(
+        "trending_up", confidence=rr.DEFAULT_CONFIDENCE_FLOOR,
+    )
+    assert out["fallback"] is False
+
+
+def test_allocation_unknown_regime_falls_back():
+    out = rr.allocation_for_regime("garbage")
+    assert out["trend"] == 0.5
+    assert out["mean_reversion"] == 0.5
+    assert out["fallback"] is True
+
+
+def test_allocation_uses_supplied_table():
+    custom = {"weird": (0.99, 0.01)}
+    out = rr.allocation_for_regime("weird", table=custom)
+    assert out["trend"] == 0.99
+    assert out["mean_reversion"] == 0.01
+    assert out["fallback"] is False
+
+
+# ---------------------------------------------------------------------------
+# size_multiplier
+# ---------------------------------------------------------------------------
+
+def test_size_multiplier_trend_strategy_gets_trend_share():
+    alloc = {"trend": 0.7, "mean_reversion": 0.3}
+    assert rr.size_multiplier("trend", allocation=alloc) == 0.7
+
+
+def test_size_multiplier_mean_reversion_gets_mr_share():
+    alloc = {"trend": 0.7, "mean_reversion": 0.3}
+    assert rr.size_multiplier("mean_reversion",
+                                allocation=alloc) == 0.3
+
+
+def test_size_multiplier_hyphenated_alias():
+    alloc = {"trend": 0.7, "mean_reversion": 0.3}
+    assert rr.size_multiplier("mean-reversion",
+                                allocation=alloc) == 0.3
+
+
+def test_size_multiplier_other_class_unaffected():
+    """Strategy classes the allocator doesn't know about (intraday,
+    crypto-only, etc.) keep their full sizing."""
+    alloc = {"trend": 0.7, "mean_reversion": 0.3}
+    assert rr.size_multiplier("intraday", allocation=alloc) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# regime_to_allocation_class — dashboard hint helper
+# ---------------------------------------------------------------------------
+
+def test_regime_to_allocation_class_trend():
+    assert rr.regime_to_allocation_class("trending_up") == "trend_favored"
+    assert rr.regime_to_allocation_class("trending_down") == "trend_favored"
+
+
+def test_regime_to_allocation_class_mean_reversion():
+    assert rr.regime_to_allocation_class("choppy") == "mean_reversion_favored"
+    assert rr.regime_to_allocation_class("low_vol") == "mean_reversion_favored"
+
+
+def test_regime_to_allocation_class_balanced():
+    assert rr.regime_to_allocation_class("mixed") == "balanced"
+    assert rr.regime_to_allocation_class("garbage") == "balanced"
+
+
+# ---------------------------------------------------------------------------
+# Regime transitions — same logic re-run produces stable allocations
+# ---------------------------------------------------------------------------
+
+def test_allocation_stable_across_repeated_calls():
+    a = rr.allocation_for_regime("trending_up", confidence=0.9)
+    b = rr.allocation_for_regime("trending_up", confidence=0.9)
+    assert a == b
