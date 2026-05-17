@@ -39,9 +39,10 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Notes:** Agent must NOT execute this milestone end-to-end since it requires Ross's live API keys. Agent ships the wizard code + tests; Ross runs it himself.
   - **Partial:** 2026-05-17 code + 24 tests shipped (commit 845d4f4). READY FOR ROSS to run with `py -3.13 scripts/setup_live_credentials.py --dry-run` first, then without `--dry-run` once live keys are in hand.
 
-- [ ] **4.1.3 Live-equity smoke-test playbook**
+- [x] **4.1.3 Live-equity smoke-test playbook**
   - **Deliverable:** `docs/LIVE_SMOKE_TEST.md` (NOT code)
   - **Acceptance:** documents the day-1-live procedure end-to-end: which strategy goes first (one ETF, single share size), how to monitor the first 5 fills in real-time, abort criteria, rollback to paper, sign-off checklist. Cross-references preflight, reconcile_positions, kill_switch. ≤ 10 procedures, each ≤ 5 steps.
+  - **Completed:** 2026-05-17 by milestone-builder · commit f7b73fb
 
 - [ ] **4.1.4 Live-crypto smoke-test playbook**
   - **Deliverable:** `docs/CRYPTO_SMOKE_TEST.md` (NOT code)
