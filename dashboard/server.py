@@ -863,6 +863,21 @@ def edge_diff():
         conn.close()
 
 
+@app.route("/api/slippage_burn", methods=["GET"])
+def slippage_burn():
+    """Compact ranked-by-burn view of edge_diff (milestone 3.6.1).
+
+    One row per strategy with a usable theoretical baseline AND closed
+    paper pairs, expressed as: expected /signal, actual /signal, burn %.
+    Sorted by burn % descending (worst first)."""
+    from monitoring import edge_diff as ed
+    conn = db.init_db()
+    try:
+        return jsonify(ed.compute_slippage_burn(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/news_sentiment_overlay", methods=["GET"])
 def news_sentiment_overlay():
     """Per-strategy outcome returns sliced by entry-day news sentiment

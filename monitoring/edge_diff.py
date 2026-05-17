@@ -263,6 +263,81 @@ def diff_row(strategy_id: str, theoretical: Dict, pairs: List[Dict]) -> Dict:
     }
 
 
+def compute_slippage_burn(conn: sqlite3.Connection) -> Dict:
+    """Compact ranked-by-burn view of the edge_diff rollup (milestone 3.6.1).
+
+    Returns just the strategies with a usable theoretical baseline AND at
+    least one closed paper-trade pair, sorted by slippage-burn % descending
+    (most-burnt edge first). Each row carries the three numbers the spec
+    asks for:
+
+      expected_pct  = backtest mean return per signal
+      actual_pct    = realized mean return per closed paper pair
+      burn_pct      = (expected - actual) / |expected| * 100   when expected > 0
+                       (positive = backtest beats live; negative = live beats)
+
+    Shape::
+
+      {
+        "rows": [
+          {"strategy_id": "...", "expected_pct": 0.97, "actual_pct": 0.42,
+           "burn_pct": 56.7, "n_pairs": 18},
+          ...
+        ],
+        "n_rows": int,
+        "median_burn_pct": float | None,
+        "worst": {"strategy_id": ..., "burn_pct": ...} | None,
+      }
+
+    Rows where `expected_pct <= 0` are excluded (burn ratio is undefined when
+    backtest itself loses money; the underlying issue is strategy quality,
+    not slippage). Rows with no closed pairs are excluded.
+    """
+    full = compute_edge_diff(conn)
+    rows: List[Dict] = []
+    for r in full.get("rows", []):
+        if r.get("status") != "ok":
+            continue
+        expected = r.get("theoretical_per_signal_pct")
+        realized_block = r.get("realized") or {}
+        actual = realized_block.get("mean_pct")
+        n_pairs = realized_block.get("n", 0)
+        if expected is None or actual is None or n_pairs == 0:
+            continue
+        if expected <= 0:
+            continue
+        burn = (expected - actual) / abs(expected) * 100.0
+        rows.append({
+            "strategy_id": r["strategy_id"],
+            "expected_pct": round(float(expected), 4),
+            "actual_pct": round(float(actual), 4),
+            "burn_pct": round(burn, 2),
+            "n_pairs": int(n_pairs),
+        })
+
+    rows.sort(key=lambda x: (-x["burn_pct"], x["strategy_id"]))
+
+    if rows:
+        burns = sorted(r["burn_pct"] for r in rows)
+        mid = len(burns) // 2
+        if len(burns) % 2 == 1:
+            median = burns[mid]
+        else:
+            median = (burns[mid - 1] + burns[mid]) / 2.0
+        worst = {"strategy_id": rows[0]["strategy_id"],
+                 "burn_pct": rows[0]["burn_pct"]}
+    else:
+        median = None
+        worst = None
+
+    return {
+        "rows": rows,
+        "n_rows": len(rows),
+        "median_burn_pct": round(median, 2) if median is not None else None,
+        "worst": worst,
+    }
+
+
 def compute_edge_diff(conn: sqlite3.Connection) -> Dict:
     """Produce the full edge-diff rollup served by the dashboard + CLI."""
     pairs_by_strat = fetch_paper_pairs(conn)

@@ -396,6 +396,43 @@
   .edge-diff-cap-mid { color: var(--text); }
   .edge-diff-cap-lo { color: var(--red); }
 
+  /* Slippage burn card (3.6.1) */
+  .burn-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .burn-row:last-child { border-bottom: none; }
+  .burn-row .burn-strat {
+    flex: 0 1 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .burn-row .burn-spec {
+    flex: 1;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .burn-row .burn-pct {
+    flex: 0 0 70px;
+    text-align: right;
+    font-weight: 600;
+  }
+  .burn-hi  { color: var(--red); }
+  .burn-mid { color: var(--amber); }
+  .burn-lo  { color: var(--green); }
+  .burn-header {
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 6px;
+    letter-spacing: 0.03em;
+  }
+
   /* Strategy forecast pill (embedded in strategy-edge table) */
   .forecast {
     display: block;
@@ -923,6 +960,12 @@
   <div class="card">
     <h2>strategy correlation — daily P&amp;L <span class="count" id="corr-count"></span></h2>
     <div id="strategy-correlation" class="loading">loading...</div>
+  </div>
+
+  <!-- Slippage / fill-quality burn (3.6.1) -->
+  <div class="card">
+    <h2>slippage burn — backtest edge vs paper fills <span class="count" id="slippage-burn-count"></span></h2>
+    <div id="slippage-burn" class="loading">loading...</div>
   </div>
 
   <!-- Realized vs theoretical edge -->
@@ -1829,6 +1872,51 @@ function edgeDiffCapClass(cap) {
   return 'edge-diff-cap-lo';
 }
 
+function burnClass(burn) {
+  if (burn === null || burn === undefined) return 'burn-mid';
+  if (burn >= 50) return 'burn-hi';
+  if (burn >= 25) return 'burn-mid';
+  return 'burn-lo';
+}
+
+function renderSlippageBurn() {
+  const el = document.getElementById('slippage-burn');
+  const count = document.getElementById('slippage-burn-count');
+  fetch('/api/slippage_burn', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+    .then(d => {
+      const n = d.n_rows;
+      if (d.median_burn_pct !== null && d.median_burn_pct !== undefined) {
+        count.textContent = `${n} strats · median burn ${d.median_burn_pct.toFixed(0)}%`;
+      } else {
+        count.textContent = `${n} strats`;
+      }
+      if (!d.rows.length) {
+        el.innerHTML = '<div class="empty">no strategies with both backtest baseline and closed paper pairs yet.</div>';
+        return;
+      }
+      let html = '<div class="burn-header">strategy · expected /trade · actual /trade · burn</div>';
+      for (const r of d.rows) {
+        const cls = burnClass(r.burn_pct);
+        const exp = r.expected_pct;
+        const act = r.actual_pct;
+        const burn = r.burn_pct;
+        const expStr = `${exp >= 0 ? '+' : ''}${exp.toFixed(2)}%`;
+        const actStr = `${act >= 0 ? '+' : ''}${act.toFixed(2)}%`;
+        const burnStr = `${burn >= 0 ? '+' : ''}${burn.toFixed(0)}%`;
+        html += `<div class="burn-row">`
+          + `<div class="burn-strat" title="${escapeHtml(r.strategy_id)}">${escapeHtml(shortStrat(r.strategy_id))}</div>`
+          + `<div class="burn-spec">expected: ${escapeHtml(expStr)} · actual: ${escapeHtml(actStr)} · n=${r.n_pairs}</div>`
+          + `<div class="burn-pct ${cls}">${escapeHtml(burnStr)}</div>`
+          + `</div>`;
+      }
+      el.innerHTML = html;
+    })
+    .catch(e => {
+      el.innerHTML = `<div class="empty">slippage-burn fetch failed: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
 function renderEdgeDiff() {
   const el = document.getElementById('edge-diff');
   const count = document.getElementById('edge-diff-count');
@@ -2124,6 +2212,7 @@ async function refresh() {
     renderEquityCurves(s);
     renderEdgeSlices();
     renderStrategyCorrelation();
+    renderSlippageBurn();
     renderEdgeDiff();
     renderNewsSentimentOverlay();
     renderOpenPositions(s);
