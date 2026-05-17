@@ -78,9 +78,10 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Acceptance:** takes N UNTESTED records from records.jsonl, generates each twice (once via Ollama, once via Claude), runs both through the validator, computes win-rate, PASS-rate, mean Sharpe, and a per-strategy delta. Output: Notion post + JSON summary. Cost-tracked (Claude API spend logged). Tests: aggregation math, cost accounting.
   - **Completed:** 2026-05-17 by milestone-builder · commit 46be53f
 
-- [ ] **4.3.3 Claude-API budget gate**
+- [x] **4.3.3 Claude-API budget gate**
   - **Deliverable:** `config/api_budget.json` + budget check inside `codegen_claude.py`
   - **Acceptance:** daily budget cap (default $5/day, configurable). On exhaustion, auto-fallback to Ollama path with a Telegram alert. Tracks running spend in a new `api_spend` table keyed by date. Tests: budget exhaustion fallback, daily reset at UTC midnight.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 46d84f5
 
 ---
 
