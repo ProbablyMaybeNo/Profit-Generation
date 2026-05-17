@@ -136,9 +136,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** copies `data/trading.db`, `data/records.jsonl`, `config/settings.json` to `D:\Backups\profit-generation\YYYY-MM-DD\`. Keeps last 30 days, prunes older. Restore script reverses it. Tests: backup file integrity, prune logic.
   - **Completed:** 2026-05-16 by milestone-builder · commit ddc069d (atomic sqlite .backup API; manifest.json per snapshot; 30-day rolling prune; restore with overwrite-guard default; \TradingSystem\Backup daily 22:30 schtask; 17 tests)
 
-- [ ] **3.5.3 Health endpoint on dashboard**
+- [x] **3.5.3 Health endpoint on dashboard**
   - **Deliverable:** new `/api/health` returning JSON with all subsystem status
   - **Acceptance:** returns {alpaca: ok/blocked, db: ok, intraday_age_min: N, daily_report_age_h: N, tunnel_age_h: N, kill_switch: bool, open_positions: N}. UptimeRobot-style polling target. Tests: endpoint shape, stale-data flags.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 0d9c1fa (full subsystem rollup; always 200; intraday stale only when market_open; degraded list per-subsystem; 19 tests)
 
 - [ ] **3.5.4 PnL tax export**
   - **Deliverable:** `scripts/export_tax_8949.py`
