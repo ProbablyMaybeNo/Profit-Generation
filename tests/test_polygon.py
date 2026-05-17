@@ -7,8 +7,13 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.utils import load_credentials, log
+
+# Module-level live marker — skip these with `pytest -m "not live"`.
+pytestmark = pytest.mark.live
 
 PASS = True
 WARN = False

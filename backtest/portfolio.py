@@ -35,8 +35,22 @@ class Portfolio:
 
     def apply_fill(self, fill: Fill) -> None:
         sym = fill.symbol
-        signed_qty = fill.qty if fill.side == "buy" else -fill.qty
         prev_qty = self.positions.get(sym, 0.0)
+
+        # PG-013 (3.5.1): backtest portfolio is long-only. A sell larger
+        # than the current position would imply implicit shorts; cap the
+        # sell at prev_qty so simulation matches live risk constraints.
+        if fill.side != "buy" and fill.qty > prev_qty:
+            if prev_qty <= 0:
+                # Nothing to sell — drop the fill silently. Capturing it
+                # in self.fills would make P&L reports lie.
+                return
+            fill = Fill(
+                timestamp=fill.timestamp, symbol=sym, side=fill.side,
+                qty=prev_qty, price=fill.price, commission=fill.commission,
+            )
+
+        signed_qty = fill.qty if fill.side == "buy" else -fill.qty
         new_qty = prev_qty + signed_qty
 
         if fill.side == "buy":

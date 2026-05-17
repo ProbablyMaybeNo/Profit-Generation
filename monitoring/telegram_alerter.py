@@ -92,14 +92,36 @@ def send_message(text: str, *, parse_mode: str = "Markdown",
     return True
 
 
+def escape_markdown(text: str) -> str:
+    """Escape Telegram Markdown (V1) special characters in user content.
+
+    PG-015 (3.5.1): strategy IDs with `_`, `*`, `[` etc. used to break the
+    Markdown parser and cause Telegram API 400. This helper escapes the
+    minimal V1 set (`_*[\\``) — code-block boundaries (`` ` ``) get
+    backslash-escaped too so a strategy id containing a backtick can't
+    close a fenced span.
+    """
+    if not text:
+        return ""
+    out = []
+    for ch in str(text):
+        if ch in "_*[`\\":
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def send_intraday_alert(*, kind: str, strategy_id: str, symbol: str,
                         close: float) -> bool:
     """One alert per new intraday-projected fire/exit."""
     side = "BUY" if kind == "FIRE" else "SELL"
     emoji = "\U0001f7e2" if kind == "FIRE" else "\U0001f534"
+    sid_safe = escape_markdown(strategy_id)
+    sym_safe = escape_markdown(symbol)
     text = (
-        f"{emoji} *{kind}* — `{strategy_id}` on *{symbol}* @ ${close:.2f}\n"
-        f"TradingView paper note: `{side} {symbol} ~{close:.2f} {strategy_id}`"
+        f"{emoji} *{kind}* — `{sid_safe}` on *{sym_safe}* @ ${close:.2f}\n"
+        f"TradingView paper note: `{side} {sym_safe} ~{close:.2f} {sid_safe}`"
     )
     return send_message(text)
 

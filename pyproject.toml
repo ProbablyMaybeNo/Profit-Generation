@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+# Pytest marker registry — keeps -W error::pytest.PytestUnknownMarkWarning happy
+# and gives `pytest -m "not live"` a meaningful filter.
+markers = [
+    "live: tests that hit real external APIs (Alpaca / Polygon / FRED / yfinance). Require credentials. Default pytest run still includes them for parity with prior behavior; skip with `-m 'not live'`.",
+]

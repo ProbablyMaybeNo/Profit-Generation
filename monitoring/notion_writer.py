@@ -263,18 +263,55 @@ def _build_properties(report) -> Dict:
     }
 
 
+# Notion's create-page and append-children endpoints both cap `children`
+# at 100 blocks per call. PG-010 fix: split long reports into chunks and
+# PATCH the remaining blocks onto the freshly-created page.
+NOTION_BLOCKS_PER_CALL = 100
+
+
+def _append_blocks_to_page(page_id: str, blocks: List[Dict]) -> None:
+    """PATCH up to NOTION_BLOCKS_PER_CALL blocks at a time onto a page.
+    Used to extend daily reports beyond the 100-block create-page cap."""
+    if not blocks:
+        return
+    for start in range(0, len(blocks), NOTION_BLOCKS_PER_CALL):
+        chunk = blocks[start:start + NOTION_BLOCKS_PER_CALL]
+        url = f"{NOTION_API}/blocks/{page_id}/children"
+        r = requests.patch(url, headers=_headers(),
+                           json={"children": chunk}, timeout=30)
+        if r.status_code >= 400:
+            raise RuntimeError(
+                f"Notion API {r.status_code} appending blocks: {r.text[:500]}"
+            )
+
+
 def post_daily_report(report, markdown: str, database_id: str) -> Dict:
-    """Create a new page in the Trading Daily Reports DB."""
+    """Create a new page in the Trading Daily Reports DB.
+
+    PG-010 (3.5.1): long reports are paginated. The first 100 blocks ship
+    in the create-page call; remaining blocks are PATCHed onto the page
+    via `_append_blocks_to_page`. The returned dict is the create-page
+    response (so callers still get `id`, `url`, etc.).
+    """
+    all_blocks = _markdown_to_blocks(markdown)
+    first_chunk = all_blocks[:NOTION_BLOCKS_PER_CALL]
+    remainder = all_blocks[NOTION_BLOCKS_PER_CALL:]
     body = {
         "parent": {"database_id": database_id},
         "icon": {"type": "emoji", "emoji": "\U0001f4ca"},
         "properties": _build_properties(report),
-        "children": _markdown_to_blocks(markdown)[:100],
+        "children": first_chunk,
     }
     r = requests.post(f"{NOTION_API}/pages", headers=_headers(), json=body, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"Notion API {r.status_code}: {r.text[:500]}")
-    return r.json()
+    page = r.json()
+    if remainder:
+        page_id = page.get("id")
+        if page_id:
+            _append_blocks_to_page(page_id, remainder)
+            page["appended_blocks"] = len(remainder)
+    return page
 
 
 def post_pattern(

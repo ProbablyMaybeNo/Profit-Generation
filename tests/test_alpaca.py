@@ -6,8 +6,13 @@ Tests: auth, market clock, market data, paper order lifecycle.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.utils import get_alpaca_client, get_account_summary, market_is_open, log
+
+# Module-level live marker — skip these with `pytest -m "not live"`.
+pytestmark = pytest.mark.live
 
 PASS = True
 

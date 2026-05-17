@@ -187,13 +187,25 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--allow-unauthenticated", action="store_true",
+                        help="Boot even when no webhook_secret is configured. "
+                             "PG-011 (3.5.1): default is to REFUSE startup "
+                             "without a secret. Pass this flag only when "
+                             "deliberately exposing for testing on a fully "
+                             "isolated network.")
     args = parser.parse_args()
 
     secret = _resolve_secret()
     if secret is None:
-        log("tv_webhook: NO secret configured — webhook will accept anonymous "
-            "POSTs. Set credentials.json.tradingview.webhook_secret or env "
-            "TV_WEBHOOK_SECRET before exposing publicly.", "WARNING")
+        if not args.allow_unauthenticated:
+            log("tv_webhook: REFUSING to start — no secret configured. Set "
+                "credentials.json.tradingview.webhook_secret OR the env var "
+                "TV_WEBHOOK_SECRET. Pass --allow-unauthenticated to override "
+                "(unsafe outside an isolated test network).", "ERROR")
+            import sys as _sys
+            _sys.exit(2)
+        log("tv_webhook: starting WITHOUT auth (--allow-unauthenticated). "
+            "Webhook will accept anonymous POSTs.", "WARNING")
     else:
         log(f"tv_webhook: secret configured (len={len(secret)})", "INFO")
 

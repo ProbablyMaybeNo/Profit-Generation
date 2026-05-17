@@ -117,17 +117,32 @@ def reconcile_signals(
     *,
     since_iso: Optional[str] = None,
     bar_interval: str = "1d",
+    bar_intervals=None,
 ) -> Dict[str, int]:
     """
     Walk signals in (bar_ts, id) order; open or close outcomes as needed.
+
+    `bar_interval` (legacy single-value arg, kept for back-compat) and
+    `bar_intervals` (new list arg, PG-009 fix) are mutually compatible:
+    when `bar_intervals` is set it takes precedence; otherwise the single
+    interval is used. Pass `bar_intervals=['1d', '1d-intraday',
+    'tv-webhook']` to process all signal sources in one pass.
+
     Pass since_iso to scope by bar_ts; default is full history.
     """
+    if bar_intervals is None:
+        intervals = [bar_interval]
+    else:
+        intervals = list(bar_intervals)
+    if not intervals:
+        return {"opened": 0, "closed": 0, "noop": 0}
+    placeholders = ",".join("?" * len(intervals))
     sql = (
         "SELECT * FROM signals "
         "WHERE signal_type IN ('long_entry','long_exit') "
-        "  AND bar_interval = ?"
+        f"  AND bar_interval IN ({placeholders})"
     )
-    params = [bar_interval]
+    params = list(intervals)
     if since_iso:
         sql += " AND bar_ts >= ?"
         params.append(since_iso)

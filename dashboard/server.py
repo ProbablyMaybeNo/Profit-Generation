@@ -784,7 +784,19 @@ def manual_trigger_status():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bind-all", action="store_true",
+                        help="Bind 0.0.0.0 (LAN-exposed). Default is 127.0.0.1 "
+                             "loopback-only — PG-011 security fix (3.5.1).")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Override settings.dashboard_port")
+    args = parser.parse_args()
     settings = load_settings()
-    port = settings.get("dashboard_port", 8080)
-    print(f"Trading dashboard at http://localhost:{port}/")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    port = args.port if args.port is not None else settings.get("dashboard_port", 8080)
+    host = "0.0.0.0" if args.bind_all else "127.0.0.1"
+    if args.bind_all:
+        print(f"[dashboard] WARNING: binding 0.0.0.0:{port} (LAN-exposed). "
+              f"Account data is unauthenticated — only do this on a trusted network.")
+    print(f"Profit Generation dashboard at http://{host}:{port}/")
+    app.run(host=host, port=port, debug=False)

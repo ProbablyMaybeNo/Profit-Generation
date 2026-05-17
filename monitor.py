@@ -35,14 +35,19 @@ def run():
     cash = summary["cash"]
     buying_power = summary["buying_power"]
 
-    log(f"Portfolio: ${portfolio:,.2f} | Cash: ${cash:,.2f} | Buying power: ${buying_power:,.2f}", "INFO")
+    # PG-012 fix: route ALL heartbeat lines (not just the closed-market path)
+    # to HEARTBEAT_LOG so the file is the single source of truth for monitor
+    # state during market hours too.
+    log(f"Portfolio: ${portfolio:,.2f} | Cash: ${cash:,.2f} | Buying power: ${buying_power:,.2f}",
+        "INFO", str(HEARTBEAT_LOG))
 
     # Check for strategy state files
     state_files = list(DATA_DIR.glob("*_state.json"))
     active_count = len(state_files)
     for sf in state_files:
         mtime = datetime.fromtimestamp(sf.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        log(f"  Strategy state: {sf.name} (last modified: {mtime})", "INFO")
+        log(f"  Strategy state: {sf.name} (last modified: {mtime})",
+            "INFO", str(HEARTBEAT_LOG))
 
     # Check for silent strategies (log files not updated in 30 mins during market hours)
     cutoff = datetime.now() - timedelta(minutes=30)
@@ -51,7 +56,8 @@ def run():
             continue
         mtime = datetime.fromtimestamp(lf.stat().st_mtime)
         if mtime < cutoff:
-            log(f"WARNING: {lf.name} has not been updated in over 30 minutes — strategy may be silent", "WARNING")
+            log(f"WARNING: {lf.name} has not been updated in over 30 minutes — strategy may be silent",
+                "WARNING", str(HEARTBEAT_LOG))
 
     # Write heartbeat line
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
