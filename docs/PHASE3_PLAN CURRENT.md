@@ -42,9 +42,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** prints PASS/FAIL on each check, exits non-zero on any FAIL. Checks: Alpaca account ACTIVE + unblocked, credentials.json all keys present and non-empty, settings.json schema valid, trading.db schema matches latest migration, last 3 daily reports posted to Notion, last intraday scan within 30 minutes (if market open), Cloudflare tunnel URL file fresh (< 1d). Used as a manual sanity check before any config flip.
   - **Completed:** 2026-05-16 by milestone-builder · commit 899f6a7 (7 independent checks, 31 unit tests, `--json` mode for scripting)
 
-- [ ] **3.1.4 Position reconciliation job**
+- [x] **3.1.4 Position reconciliation job**
   - **Deliverable:** `monitoring/reconcile_positions.py` + nightly schtask + Telegram alert on drift
   - **Acceptance:** queries Alpaca `list_positions()`, compares against `paper_trades` table (open positions = entries without matching exit). Reports any drift (symbol in Alpaca but not in our DB, or vice versa, or qty mismatch). Posts to Notion daily report as a section. Fires Telegram alert on any non-zero drift. Tests: synthetic drift cases, no-drift case.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 4c0d801 (nightly schtask at 21:00; section splice into daily_report markdown; 25 unit tests)
 
 - [ ] **3.1.5 Per-strategy live/paper segregation**
   - **Deliverable:** `auto_trade.live_strategies` setting (list of strategy_ids) + auto_trader routes orders accordingly
