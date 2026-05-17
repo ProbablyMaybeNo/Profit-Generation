@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 DB_FILE = Path(__file__).resolve().parent / "trading.db"
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 def _utc_now_iso() -> str:
@@ -256,6 +256,20 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_api_spend_date ON api_spend(spend_date)",
+    """
+    CREATE TABLE IF NOT EXISTS trailing_stops (
+        strategy_id   TEXT NOT NULL,
+        symbol        TEXT NOT NULL,
+        side          TEXT NOT NULL DEFAULT 'long',
+        method        TEXT NOT NULL,
+        stop_price    REAL NOT NULL,
+        extreme_price REAL NOT NULL,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY(strategy_id, symbol)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_trailing_stops_symbol "
+    "ON trailing_stops(symbol)",
 ]
 
 
