@@ -332,6 +332,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         sizing_method=settings.get("sizing_method"),
         portfolio_value=portfolio_value,
         max_position_usd=float(settings.get("max_position_usd", 1000)),
+        settings_tiered=settings.get("tiered"),
     )
     notional = sizing["notional"]
     if notional <= 0:

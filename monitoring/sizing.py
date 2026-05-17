@@ -32,7 +32,21 @@ from typing import Dict, Optional
 KELLY_CAP = 0.25
 SIZING_METHOD_FIXED = "fixed"
 SIZING_METHOD_KELLY = "kelly"
-SUPPORTED_SIZING_METHODS = {SIZING_METHOD_FIXED, SIZING_METHOD_KELLY}
+SIZING_METHOD_TIERED = "tiered"
+SUPPORTED_SIZING_METHODS = {
+    SIZING_METHOD_FIXED, SIZING_METHOD_KELLY, SIZING_METHOD_TIERED,
+}
+
+# Tiered sizing defaults (per-tier capital in USD). All overridable via
+# settings.auto_trade.tiered.{tier_0_usd, tier_1_usd, tier_2_usd,
+# tier_3_usd, tier_3_min_sharpe}.
+TIERED_DEFAULTS = {
+    "tier_0_usd": 200.0,    # < 5 closed outcomes
+    "tier_1_usd": 500.0,    # 5-19
+    "tier_2_usd": 1000.0,   # 20-49
+    "tier_3_usd": 2000.0,   # 50+ with Sharpe > tier_3_min_sharpe
+    "tier_3_min_sharpe": 0.3,
+}
 
 
 def fetch_returns(conn: sqlite3.Connection, strategy_id: str) -> list:
@@ -120,6 +134,76 @@ def kelly_notional(
     return {"notional": round(notional, 2), "fraction": f, "stats": stats}
 
 
+def _coerce_tiered_settings(raw) -> Dict:
+    """Merge `settings.auto_trade.tiered` over TIERED_DEFAULTS. Any
+    non-numeric / negative override falls back to the default for that
+    key so a typo never silently zeros out a tier."""
+    out = dict(TIERED_DEFAULTS)
+    if not isinstance(raw, dict):
+        return out
+    for k, default in TIERED_DEFAULTS.items():
+        v = raw.get(k)
+        if v is None:
+            continue
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if v < 0:
+            continue
+        out[k] = v
+    return out
+
+
+def _tier_for(n: int, sharpe: float, caps: Dict) -> int:
+    """Decide tier from outcome count + sharpe."""
+    if n < 5:
+        return 0
+    if n < 20:
+        return 1
+    if n < 50:
+        return 2
+    if sharpe > caps["tier_3_min_sharpe"]:
+        return 3
+    return 2  # 50+ outcomes but not enough edge → stay at tier 2
+
+
+def tiered_notional(
+    conn: sqlite3.Connection,
+    strategy_id: str,
+    *,
+    settings_tiered: Optional[Dict] = None,
+    max_position_usd: Optional[float] = None,
+) -> Dict:
+    """Return {notional, tier, sharpe, stats} for a tier-sized entry.
+
+    `max_position_usd` is applied as a hard ceiling on top of the tier
+    notional — if the user wants tier 3 but their max_position_usd is
+    $800, the entry is capped at $800. Pass None to disable the ceiling.
+    """
+    caps = _coerce_tiered_settings(settings_tiered)
+    rets = fetch_returns(conn, strategy_id)
+    n = len(rets)
+    if n == 0:
+        sharpe = 0.0
+    else:
+        mean = sum(rets) / n
+        sd = statistics.stdev(rets) if n > 1 else 0.0
+        sharpe = (mean / sd) if sd > 0 else 0.0
+    tier = _tier_for(n, sharpe, caps)
+    tier_amount = caps[f"tier_{tier}_usd"]
+    notional = float(tier_amount)
+    if max_position_usd is not None and max_position_usd > 0:
+        notional = min(notional, float(max_position_usd))
+    return {
+        "notional": round(notional, 2),
+        "tier": tier,
+        "sharpe": round(sharpe, 4),
+        "stats": {"n": n},
+        "caps": caps,
+    }
+
+
 def compute_notional(
     conn: sqlite3.Connection,
     strategy_id: str,
@@ -128,18 +212,29 @@ def compute_notional(
     portfolio_value: Optional[float],
     max_position_usd: float,
     cap: float = KELLY_CAP,
+    settings_tiered: Optional[Dict] = None,
 ) -> Dict:
     """Single entry point for the auto-trader.
 
-    Returns {notional, sizing_method, fraction?, stats?}. For "fixed",
-    notional is just max_position_usd (the existing behavior); for
-    "kelly", it routes through kelly_notional.
+    Returns {notional, sizing_method, fraction?, stats?, tier?}.
+    For "fixed", notional is just max_position_usd (the existing
+    behavior); for "kelly" it routes through kelly_notional; for
+    "tiered" it routes through tiered_notional with max_position_usd
+    as a hard ceiling.
     """
     method = normalize_sizing_method(sizing_method)
     if method == SIZING_METHOD_KELLY:
         out = kelly_notional(
             conn, strategy_id, portfolio_value,
             max_position_usd=max_position_usd, cap=cap,
+        )
+        out["sizing_method"] = method
+        return out
+    if method == SIZING_METHOD_TIERED:
+        out = tiered_notional(
+            conn, strategy_id,
+            settings_tiered=settings_tiered,
+            max_position_usd=max_position_usd,
         )
         out["sizing_method"] = method
         return out

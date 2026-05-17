@@ -328,3 +328,142 @@ def test_auto_trader_kelly_account_fn_failure_falls_back_to_zero(
     actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
     # No portfolio_value → kelly returns notional=0 → SKIP_SIZING_ZERO.
     assert actions[0]["action"] == "SKIP_SIZING_ZERO"
+
+
+# ---------------------------------------------------------------------------
+# Tiered sizing (3.2.1)
+# ---------------------------------------------------------------------------
+
+def test_tier_for_boundaries():
+    caps = sizing.TIERED_DEFAULTS
+    assert sizing._tier_for(0, 0.0, caps) == 0
+    assert sizing._tier_for(4, 99.0, caps) == 0
+    assert sizing._tier_for(5, 0.0, caps) == 1
+    assert sizing._tier_for(19, 0.0, caps) == 1
+    assert sizing._tier_for(20, 0.0, caps) == 2
+    assert sizing._tier_for(49, 99.0, caps) == 2
+    assert sizing._tier_for(50, 0.31, caps) == 3
+    assert sizing._tier_for(50, 0.30, caps) == 2  # boundary: needs > 0.3
+    assert sizing._tier_for(50, 0.10, caps) == 2  # 50+ but low sharpe → stay tier 2
+    assert sizing._tier_for(200, 1.5, caps) == 3
+
+
+def test_coerce_tiered_settings_defaults():
+    out = sizing._coerce_tiered_settings(None)
+    assert out == sizing.TIERED_DEFAULTS
+
+
+def test_coerce_tiered_settings_overrides_numeric():
+    out = sizing._coerce_tiered_settings({
+        "tier_0_usd": 100, "tier_3_usd": 5000,
+    })
+    assert out["tier_0_usd"] == 100.0
+    assert out["tier_3_usd"] == 5000.0
+    # Untouched keys fall through to defaults.
+    assert out["tier_1_usd"] == 500.0
+
+
+def test_coerce_tiered_settings_rejects_garbage():
+    out = sizing._coerce_tiered_settings({
+        "tier_0_usd": "garbage",
+        "tier_1_usd": -100,         # negative → default
+        "tier_3_min_sharpe": "bad",
+    })
+    assert out["tier_0_usd"] == 200.0  # default
+    assert out["tier_1_usd"] == 500.0  # default (negative rejected)
+    assert out["tier_3_min_sharpe"] == 0.3  # default
+
+
+def test_tiered_notional_tier_0_few_outcomes(isolated_db):
+    conn = _seed_outcomes("winner", [1.0, 2.0])  # only 2 outcomes
+    out = sizing.tiered_notional(conn, "winner")
+    assert out["tier"] == 0
+    assert out["notional"] == 200.0
+
+
+def test_tiered_notional_tier_1(isolated_db):
+    conn = _seed_outcomes("winner", [1.0] * 10)
+    out = sizing.tiered_notional(conn, "winner")
+    assert out["tier"] == 1
+    assert out["notional"] == 500.0
+
+
+def test_tiered_notional_tier_2(isolated_db):
+    conn = _seed_outcomes("winner", [1.0] * 30)
+    out = sizing.tiered_notional(conn, "winner")
+    assert out["tier"] == 2
+    assert out["notional"] == 1000.0
+
+
+def test_tiered_notional_tier_3_requires_sharpe(isolated_db):
+    """50 outcomes with great mean / low variance → tier 3."""
+    rets = [2.0, 2.5] * 30  # 60 outcomes, mean=2.25, sd≈0.25
+    conn = _seed_outcomes("winner", rets)
+    out = sizing.tiered_notional(conn, "winner")
+    assert out["tier"] == 3
+    assert out["notional"] == 2000.0
+    assert out["sharpe"] > 0.3
+
+
+def test_tiered_notional_tier_3_falls_back_to_tier_2_on_low_sharpe(isolated_db):
+    """50+ outcomes but high variance / no edge → stays at tier 2."""
+    rets = [10.0, -10.0] * 30  # 60 outcomes, mean ≈ 0, sharpe ≈ 0
+    conn = _seed_outcomes("winner", rets)
+    out = sizing.tiered_notional(conn, "winner")
+    assert out["tier"] == 2
+    assert out["notional"] == 1000.0
+
+
+def test_tiered_notional_max_position_caps_tier_amount(isolated_db):
+    conn = _seed_outcomes("winner", [1.0, 2.5] * 30)
+    out = sizing.tiered_notional(conn, "winner",
+                                   max_position_usd=750.0)
+    assert out["tier"] == 3
+    assert out["notional"] == 750.0  # capped by max_position_usd
+
+
+def test_tiered_notional_custom_caps(isolated_db):
+    conn = _seed_outcomes("winner", [1.0] * 30)
+    out = sizing.tiered_notional(
+        conn, "winner",
+        settings_tiered={"tier_2_usd": 1500},
+    )
+    assert out["tier"] == 2
+    assert out["notional"] == 1500.0
+
+
+def test_compute_notional_tiered_dispatches(isolated_db):
+    conn = _seed_outcomes("winner", [1.0, 2.5] * 30)
+    out = sizing.compute_notional(
+        conn, "winner",
+        sizing_method="tiered",
+        portfolio_value=None,
+        max_position_usd=999999.0,
+    )
+    assert out["sizing_method"] == "tiered"
+    assert out["tier"] == 3
+    assert out["notional"] == 2000.0
+
+
+def test_normalize_sizing_method_tiered():
+    assert sizing.normalize_sizing_method("tiered") == "tiered"
+    assert sizing.normalize_sizing_method("TIERED") == "tiered"
+
+
+def test_auto_trader_tiered_dry_run_emits_tier(isolated_db):
+    """End-to-end through process_signals: a fresh strategy gets tier 0."""
+    conn = _seed_outcomes("winner", [1.0, 2.0])  # tier 0
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    settings = {**_winner_settings(),
+                "sizing_method": "tiered",
+                "max_position_usd": 999999.0,
+                "min_outcomes": 1}
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=settings)
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "DRY_BUY"
+    sizing_out = actions[0]["sizing"]
+    assert sizing_out["sizing_method"] == "tiered"
+    assert sizing_out["tier"] == 0
+    assert sizing_out["notional"] == 200.0
