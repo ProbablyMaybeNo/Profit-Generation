@@ -12,6 +12,10 @@
     "max_orders_per_day": 50,
     "allow_shorts": false
   },
+  "crypto": {
+    "max_position_usd": 500,
+    "_notes": "Per-position cap for crypto signals (3.4.1). Wider spreads + 24/7 markets mean we size more conservatively than equity. Auto_trader detects crypto symbols via monitoring.crypto_adapter.is_crypto_symbol and uses this cap instead of auto_trade.max_position_usd. Set 0 to fall back to the default (500)."
+  },
   "auto_trade": {
     "enabled": true,
     "dry_run": false,

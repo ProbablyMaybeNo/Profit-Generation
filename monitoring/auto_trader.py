@@ -320,6 +320,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     throttle_multiplier: float = 1.0) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
+    from monitoring import crypto_adapter as crypto_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
     eligible, stats = _is_eligible(conn, sid, settings)
     if not eligible:
@@ -328,13 +329,21 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     if _already_traded(conn, sig["id"], "buy"):
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
+    is_crypto = crypto_mod.is_crypto_symbol(sym)
+    if is_crypto:
+        max_pos_usd = crypto_mod.crypto_max_position_usd(settings)
+    else:
+        max_pos_usd = float(settings.get("max_position_usd", 1000))
     sizing = sizing_mod.compute_notional(
         conn, sid,
         sizing_method=settings.get("sizing_method"),
         portfolio_value=portfolio_value,
-        max_position_usd=float(settings.get("max_position_usd", 1000)),
+        max_position_usd=max_pos_usd,
         settings_tiered=settings.get("tiered"),
     )
+    if is_crypto:
+        sizing["asset_class"] = "crypto"
+        sizing["crypto_max_position_usd"] = max_pos_usd
     notional = sizing["notional"] * float(throttle_multiplier)
     sizing["throttle_multiplier"] = float(throttle_multiplier)
     sizing["notional_after_throttle"] = round(notional, 2)
@@ -344,7 +353,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     qty = _calc_qty(sig["close"], notional)
     if qty < 1:
         return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
-                "price": sig["close"], "max_usd": settings.get("max_position_usd"),
+                "price": sig["close"], "max_usd": max_pos_usd,
                 "sizing": sizing}
 
     offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
