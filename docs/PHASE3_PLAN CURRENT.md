@@ -166,9 +166,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** every Sunday, computes per-strategy mean return for the LIVE outcomes of the past week vs the same strategy's backtest mean. Flags any strategy where live < 50% of backtest as ⚠️. Posts to Notion. Tests: aggregation math, edge case (strategy with no live trades this week).
   - **Completed:** 2026-05-17 by milestone-builder · commit 86386be (compute_divergence with warn/watch/ok/info bands at 0.5 / 0.8 thresholds; live = outcomes backed by paper_trades BUY rows; Sunday schtask now runs weekly_digest + live_vs_backtest in sequence; 17 tests; both Notion posts share the daily-reports DB with distinct tags)
 
-- [ ] **3.6.3 Fill-time / latency tracking**
+- [x] **3.6.3 Fill-time / latency tracking**
   - **Deliverable:** auto_trader records `submitted_at` and `filled_at` in `paper_trades` (columns exist) and dashboard surfaces the delta
   - **Acceptance:** dashboard "FILL LATENCY" card shows median fill-time delta per strategy. Outliers (> 5min) get flagged. Tests: synthetic timestamps, median math.
+  - **Completed:** 2026-05-17 by milestone-builder · commit b740589 (compute_fill_latency + /api/fill_latency + dashboard card; median + p95 + outlier count > 5min; excludes negative clock-skew rows; auto_trader already writes both timestamps so no schema or writer change needed; 23 tests)
 
 ---
 
