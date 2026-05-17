@@ -33,10 +33,11 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Notes:** This is the tool Ross will use to *decide* which strategies graduate to `auto_trade.live_strategies` (3.1.5). Manual flip remains a deliberate human decision.
   - **Completed:** 2026-05-17 by milestone-builder · commit ee26ae5
 
-- [ ] **4.1.2 Live-credentials onboarding wizard**
+- [~] **4.1.2 Live-credentials onboarding wizard**
   - **Deliverable:** `scripts/setup_live_credentials.py` + idempotent flow
   - **Acceptance:** interactive wizard that prompts Ross for Alpaca live keys, validates them against the live API, writes them into `config/credentials.json` under `alpaca_live`, and posts a confirmation to Notion. Refuses to overwrite existing live keys without `--force`. Tests: schema validation, refusal-on-existing, dry-run mode.
   - **Notes:** Agent must NOT execute this milestone end-to-end since it requires Ross's live API keys. Agent ships the wizard code + tests; Ross runs it himself.
+  - **Partial:** 2026-05-17 code + 24 tests shipped (commit 845d4f4). READY FOR ROSS to run with `py -3.13 scripts/setup_live_credentials.py --dry-run` first, then without `--dry-run` once live keys are in hand.
 
 - [ ] **4.1.3 Live-equity smoke-test playbook**
   - **Deliverable:** `docs/LIVE_SMOKE_TEST.md` (NOT code)
