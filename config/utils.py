@@ -50,17 +50,35 @@ def load_settings() -> dict:
         return json.load(f)
 
 
-def get_alpaca_client():
+def get_alpaca_client(*, live: bool = False):
     """
-    Return an authenticated Alpaca TradingClient using paper trading credentials.
-    Always targets the paper endpoint. Raises on missing credentials or connection failure.
+    Return an authenticated Alpaca TradingClient.
+
+    Defaults to the paper-trading credentials in `credentials.json.alpaca`.
+    When live=True, loads `credentials.json.alpaca_live` and forces the
+    paper flag off. Raises a clear ValueError when the user requests
+    `live=True` but the `alpaca_live` section is absent or empty — never
+    silently falls back to paper for a live-flagged request.
     """
     from alpaca.trading.client import TradingClient
-    creds = load_credentials("alpaca")
+    section = "alpaca_live" if live else "alpaca"
+    try:
+        creds = load_credentials(section)
+    except KeyError:
+        raise ValueError(
+            f"credentials.json has no `{section}` section. "
+            f"Add it with api_key / secret_key before routing live orders."
+        )
+    if not creds.get("api_key") or not creds.get("secret_key"):
+        raise ValueError(
+            f"credentials.json.{section} is missing api_key/secret_key — "
+            f"cannot build alpaca client (live={live})."
+        )
+    paper = False if live else bool(creds.get("paper", True))
     client = TradingClient(
         api_key=creds["api_key"],
         secret_key=creds["secret_key"],
-        paper=creds.get("paper", True),
+        paper=paper,
     )
     return client
 

@@ -762,3 +762,174 @@ def test_kill_switch_idempotent_re_run(
         assert actions[0]["action"] == "KILL_SWITCH_HALT"
     n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
     assert n == 0
+
+
+# ----- Per-strategy live/paper segregation (3.1.5) -----
+
+def test_live_strategies_default_empty():
+    assert at._live_strategies({}) == set()
+    assert at._live_strategies({"live_strategies": None}) == set()
+    assert at._live_strategies({"live_strategies": []}) == set()
+
+
+def test_live_strategies_coerces_list():
+    assert at._live_strategies({"live_strategies": ["a", "b"]}) == {"a", "b"}
+
+
+def test_live_strategies_malformed_returns_empty():
+    """Non-list values must default to empty (safety: never silently send live)."""
+    assert at._live_strategies({"live_strategies": "winner"}) == set()
+    assert at._live_strategies({"live_strategies": {"winner": True}}) == set()
+
+
+def test_resolve_strategy_client_paper_when_not_in_live_set(
+    isolated_db, winner_settings,
+):
+    paper = _mk_client()
+    live_made = []
+    cache: dict = {}
+    chosen = at._resolve_strategy_client(
+        "winner",
+        live_set=set(),
+        paper_client=paper,
+        live_client_factory=lambda: live_made.append(1) or _mk_client(),
+        live_cache=cache,
+    )
+    assert chosen is paper
+    assert live_made == []  # never built
+
+
+def test_resolve_strategy_client_live_when_in_live_set():
+    paper = _mk_client()
+    live = _mk_client()
+    cache: dict = {}
+    chosen = at._resolve_strategy_client(
+        "winner",
+        live_set={"winner"},
+        paper_client=paper,
+        live_client_factory=lambda: live,
+        live_cache=cache,
+    )
+    assert chosen is live
+    # Cached on second call (factory not re-invoked).
+    chosen2 = at._resolve_strategy_client(
+        "winner",
+        live_set={"winner"},
+        paper_client=paper,
+        live_client_factory=lambda: (_ for _ in ()).throw(RuntimeError("must not call")),
+        live_cache=cache,
+    )
+    assert chosen2 is live
+
+
+def test_resolve_strategy_client_missing_live_creds_raises():
+    cache: dict = {}
+    def boom():
+        raise ValueError("alpaca_live missing")
+    with pytest.raises(ValueError):
+        at._resolve_strategy_client(
+            "winner",
+            live_set={"winner"},
+            paper_client=_mk_client(),
+            live_client_factory=boom,
+            live_cache=cache,
+        )
+
+
+def test_process_signals_routes_live_strategy_to_live_client(
+    isolated_db, winner_settings, monkeypatch,
+):
+    """A live-tagged strategy's order goes to the live client; other
+    strategies still hit the paper client."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    _seed_outcomes("loser", [2.0, 1.0] * 18)  # eligible too
+    # Different signals for two different strategies.
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    db.record_signal(conn, strategy_id="loser", symbol="KRE",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=68.0, bar_interval="1d")
+
+    paper = _mk_client()
+    live = _mk_client()
+    received = []
+    def fake_submit(client, *, symbol, qty, side, client_order_id=None):
+        received.append(("paper" if client is paper else "live", symbol, side))
+        order = MagicMock()
+        order.id = f"order-{len(received)}"
+        order.status = "accepted"
+        order.submitted_at = "2026-05-14T20:30:00Z"
+        return order
+    monkeypatch.setattr(at, "_submit_market_order", fake_submit)
+
+    settings = {**winner_settings, "dry_run": False,
+                "live_strategies": ["winner"]}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings, client=paper,
+        live_client_factory=lambda: live,
+    )
+    assert res["status"] == "OK"
+    # winner went live; loser stayed paper.
+    assert ("live", "GDX", "buy") in received
+    assert ("paper", "KRE", "buy") in received
+
+
+def test_process_signals_live_strategy_missing_creds_skips_gracefully(
+    isolated_db, winner_settings, monkeypatch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    def fake_submit(*a, **kw):
+        raise AssertionError("must not submit when live creds missing")
+    monkeypatch.setattr(at, "_submit_market_order", fake_submit)
+
+    def no_live_creds():
+        raise ValueError("credentials.json has no `alpaca_live` section. "
+                         "Add it with api_key / secret_key before "
+                         "routing live orders.")
+    settings = {**winner_settings, "dry_run": False,
+                "live_strategies": ["winner"]}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings, client=_mk_client(),
+        live_client_factory=no_live_creds,
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "SKIP_LIVE_CREDS_MISSING"
+    assert "alpaca_live" in actions[0]["reason"]
+    n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+    assert n == 0
+
+
+def test_process_signals_default_routes_everything_to_paper(
+    isolated_db, winner_settings, monkeypatch,
+):
+    """With live_strategies absent (default), every signal hits the paper client."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    paper = _mk_client()
+    received = []
+    def fake_submit(client, *, symbol, qty, side, client_order_id=None):
+        received.append("paper" if client is paper else "?")
+        order = MagicMock()
+        order.id = "p1"; order.status = "accepted"
+        order.submitted_at = "2026-05-14T20:30:00Z"
+        return order
+    monkeypatch.setattr(at, "_submit_market_order", fake_submit)
+
+    settings = {**winner_settings, "dry_run": False}
+    def boom_live():
+        raise AssertionError("live factory must not be called in default mode")
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        settings=settings, client=paper,
+        live_client_factory=boom_live,
+    )
+    assert res["status"] == "OK"
+    assert received == ["paper"]

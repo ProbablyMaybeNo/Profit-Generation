@@ -1021,6 +1021,46 @@ def _maybe_attach_stop(
     return info
 
 
+def _live_strategies(settings: dict) -> set:
+    """Coerce settings.auto_trade.live_strategies into a set of strategy_ids.
+
+    Defaults to an empty set (= every strategy routes to paper). Accepts
+    list-of-strings or null; anything else logs a warning and defaults
+    to empty so a malformed setting never silently sends live orders.
+    """
+    raw = settings.get("live_strategies")
+    if raw is None:
+        return set()
+    if not isinstance(raw, list):
+        log(
+            f"auto_trade.live_strategies is not a list "
+            f"({type(raw).__name__}); ignoring — all strategies stay paper",
+            "WARNING",
+        )
+        return set()
+    return {str(s) for s in raw if s}
+
+
+def _resolve_strategy_client(
+    strategy_id: str, *,
+    live_set: set,
+    paper_client,
+    live_client_factory: Callable,
+    live_cache: Dict[str, object],
+) -> object:
+    """Return the Alpaca client to use for `strategy_id`. Builds the live
+    client lazily and caches it. Raises ValueError when live creds are
+    missing — caller decides whether to skip the signal or abort the run.
+    """
+    if strategy_id not in live_set:
+        return paper_client
+    if "live" in live_cache:
+        return live_cache["live"]
+    client = live_client_factory()
+    live_cache["live"] = client
+    return client
+
+
 def process_signals(
     conn,
     *,
@@ -1028,6 +1068,7 @@ def process_signals(
     settings: Optional[dict] = None,
     client=None,
     client_factory: Callable = get_alpaca_client,
+    live_client_factory: Optional[Callable] = None,
     sleep_fn=None,
     now_fn=None,
     data_client=None,
@@ -1052,6 +1093,11 @@ def process_signals(
     dry_run = bool(settings.get("dry_run", True))
     if client is None and not dry_run:
         client = client_factory()
+
+    live_set = _live_strategies(settings)
+    if live_client_factory is None:
+        live_client_factory = lambda: get_alpaca_client(live=True)
+    live_cache: Dict[str, object] = {}
 
     sigs = conn.execute(
         "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, signal_type, close "
@@ -1178,15 +1224,49 @@ def process_signals(
             if block is not None:
                 actions.append(block)
                 continue
+            try:
+                strategy_client = _resolve_strategy_client(
+                    sig["strategy_id"],
+                    live_set=live_set,
+                    paper_client=client,
+                    live_client_factory=live_client_factory,
+                    live_cache=live_cache,
+                )
+            except ValueError as e:
+                actions.append({
+                    "action": "SKIP_LIVE_CREDS_MISSING",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "reason": str(e),
+                })
+                continue
             actions.append(_process_entry(
-                conn, client, settings, sig, dry_run,
+                conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
                 data_client=data_client,
                 portfolio_value=portfolio_value,
                 bars_fetcher=bars_fetcher,
             ))
         elif sig["signal_type"] == "long_exit":
-            actions.append(_process_exit(conn, client, settings, sig, dry_run))
+            try:
+                strategy_client = _resolve_strategy_client(
+                    sig["strategy_id"],
+                    live_set=live_set,
+                    paper_client=client,
+                    live_client_factory=live_client_factory,
+                    live_cache=live_cache,
+                )
+            except ValueError as e:
+                actions.append({
+                    "action": "SKIP_LIVE_CREDS_MISSING",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "reason": str(e),
+                })
+                continue
+            actions.append(_process_exit(conn, strategy_client, settings, sig, dry_run))
 
     return {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
             "actions": actions}
