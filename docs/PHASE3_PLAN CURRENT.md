@@ -57,9 +57,10 @@ is exposed (3.2.4 onward).
 
 ## 3.2 Capital scaling & risk hardening
 
-- [ ] **3.2.1 Tiered position sizing**
+- [x] **3.2.1 Tiered position sizing**
   - **Deliverable:** `monitoring/sizing.py` extended with `sizing_method = "tiered"` + new settings under `auto_trade.tiered`
   - **Acceptance:** per-strategy size scales with track record. Tier 0 (<5 closed outcomes) = $200, Tier 1 (5-19) = $500, Tier 2 (20-49) = $1000, Tier 3 (50+ with Sharpe > 0.3) = $2000. Caps configurable. Tests: tier boundary math, fallback when stats unavailable.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 6168f12 (14 tests, full boundary coverage, max_position_usd remains a hard ceiling)
 
 - [ ] **3.2.2 Portfolio drawdown auto-throttle**
   - **Deliverable:** auto_trader inspects portfolio equity vs trailing 30-day peak
