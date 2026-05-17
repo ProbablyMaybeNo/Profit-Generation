@@ -111,9 +111,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** initial universe = BTC/USD, ETH/USD, SOL/USD. 24/7 scheduling (separate schtask `\TradingSystem\Crypto`). Same mean-reversion logic adapted for 24/7 bar data. Position sizing respects a separate `crypto.max_position_usd` (default $500) since spreads are wider. Tests: symbol routing, order construction.
   - **Completed:** 2026-05-16 by milestone-builder · commit 95357b0 (adapter with is_crypto/normalize/load_bars/build_order/submit_order; auto_trader sizing override; \TradingSystem\Crypto schtask scripts; settings.crypto.max_position_usd=500; 18 tests, 2 skipped on alpaca-py availability). Out-of-scope deferrals: live crypto flip + crypto strategy validation pipeline.
 
-- [ ] **3.4.2 Options screening (long-only) — research milestone**
+- [x] **3.4.2 Options screening (long-only) — research milestone**
   - **Deliverable:** `docs/OPTIONS_RESEARCH.md` (NOT code)
   - **Acceptance:** documents (a) which Alpaca options endpoints we'd need, (b) data sources for IV / Greeks, (c) which existing strategies could translate to long calls/puts vs which need restructuring, (d) regulatory + tax implications (1256 vs short-term gains), (e) recommended go/no-go criteria for an implementation milestone. No code shipped.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 6849752 (Alpaca options endpoints catalogued; Polygon snapshots + py_vollib fallback for IV/Greeks; per-strategy translation matrix recommends botnet101 cluster + rsi2 / SKIP for ORB+SMC; 1256 SPX-over-SPY recommendation; 6-point go/no-go gate)
 
 - [ ] **3.4.3 Futures evaluation — research milestone**
   - **Deliverable:** `docs/FUTURES_RESEARCH.md` (NOT code)
