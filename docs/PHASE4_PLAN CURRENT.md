@@ -97,10 +97,11 @@ operational followups from Phase 3's concerns sit in 4.5.
   - **Acceptance:** renders equity curve, per-strategy stats table, "last updated" timestamp. Mobile-responsive. Calls the 4.4.1 endpoints. No login. Lighthouse score ≥ 90. Tests: build succeeds, snapshot of HTML output.
   - **Completed:** 2026-05-17 by milestone-builder · commit f6bb887 · plain HTML + Chart.js v4 (single file, no build).
 
-- [ ] **4.4.3 Daily Vercel auto-deploy**
+- [~] **4.4.3 Daily Vercel auto-deploy**
   - **Deliverable:** `schedulers/deploy_public.bat` + Vercel project config
   - **Acceptance:** daily schtask `\TradingSystem\PublicDeploy` at 23:30 rebuilds the static page with the latest performance numbers and deploys to Vercel. Notion alert on deploy success/failure. Tests: deploy command construction, failure-path Telegram alert.
   - **Notes:** Vercel project must be created manually by Ross first — agent surfaces a missing-config message rather than auto-creating.
+  - **Partial:** 2026-05-17 code + 22 tests shipped (commit 9f1a66a). READY FOR ROSS to run `vercel link` once in the repo root (or set VERCEL_TOKEN env var), then run `schedulers/register_public_deploy.bat` as admin. The agent's check_preconditions() correctly halts when the project isn't linked yet.
 
 ---
 
