@@ -37,9 +37,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** listens for `/halt <reason>`, `/resume`, `/status`, `/positions`, `/pnl` from the configured `chat_id`. Ignores messages from other chats. `/halt` writes kill_switch.json; `/status` returns one-line system health; `/positions` lists open paper positions from Alpaca; `/pnl` shows today's realized P&L. Tests: command parsing, auth check (wrong chat_id rejected).
   - **Completed:** 2026-05-16 by milestone-builder · commit c2616c4 (offset-persisting long-poll loop + schedulers/register_telegram_listener.bat at /sc onstart)
 
-- [ ] **3.1.3 Pre-flight checklist script**
+- [x] **3.1.3 Pre-flight checklist script**
   - **Deliverable:** `scripts/preflight.py` + `tests/test_preflight.py`
   - **Acceptance:** prints PASS/FAIL on each check, exits non-zero on any FAIL. Checks: Alpaca account ACTIVE + unblocked, credentials.json all keys present and non-empty, settings.json schema valid, trading.db schema matches latest migration, last 3 daily reports posted to Notion, last intraday scan within 30 minutes (if market open), Cloudflare tunnel URL file fresh (< 1d). Used as a manual sanity check before any config flip.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 899f6a7 (7 independent checks, 31 unit tests, `--json` mode for scripting)
 
 - [ ] **3.1.4 Position reconciliation job**
   - **Deliverable:** `monitoring/reconcile_positions.py` + nightly schtask + Telegram alert on drift
