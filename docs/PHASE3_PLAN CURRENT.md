@@ -106,9 +106,10 @@ is exposed (3.2.4 onward).
 
 ## 3.4 Additional asset classes
 
-- [ ] **3.4.1 Crypto support via Alpaca Crypto API**
+- [x] **3.4.1 Crypto support via Alpaca Crypto API**
   - **Deliverable:** `monitoring/crypto_adapter.py` + symbols list in settings + auto_trader recognizes crypto symbols
   - **Acceptance:** initial universe = BTC/USD, ETH/USD, SOL/USD. 24/7 scheduling (separate schtask `\TradingSystem\Crypto`). Same mean-reversion logic adapted for 24/7 bar data. Position sizing respects a separate `crypto.max_position_usd` (default $500) since spreads are wider. Tests: symbol routing, order construction.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 95357b0 (adapter with is_crypto/normalize/load_bars/build_order/submit_order; auto_trader sizing override; \TradingSystem\Crypto schtask scripts; settings.crypto.max_position_usd=500; 18 tests, 2 skipped on alpaca-py availability). Out-of-scope deferrals: live crypto flip + crypto strategy validation pipeline.
 
 - [ ] **3.4.2 Options screening (long-only) — research milestone**
   - **Deliverable:** `docs/OPTIONS_RESEARCH.md` (NOT code)
