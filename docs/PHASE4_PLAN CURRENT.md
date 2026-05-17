@@ -106,6 +106,40 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ---
 
+## 4.6 Trend-following with pyramiding and trailing stops
+
+Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bearish bounces). This section adds the opposite market mode — trend-following — so the system covers both regimes. The regime router (3.3.3) already exists to route capital between them automatically.
+
+- [ ] **4.6.1 Trailing stop engine**
+  - **Deliverable:** `monitoring/trailing_stops.py` + `tests/test_trailing_stops.py` + auto_trader integration
+  - **Acceptance:** three configurable formulas selectable per strategy via `trailing_stop.method` setting:
+    - `atr_trail` — stop = highest_high_since_entry − (multiplier × ATR_14)
+    - `chandelier` — stop = highest_high_over_N_days − (multiplier × ATR_22)
+    - `percent_trail` — stop = highest_high_since_entry × (1 − pct)
+    Stop only moves UP for longs, DOWN for shorts (ratchet, never loosen). New `trailing_stops` table tracks current stop per open position; updated on every bar close. Auto-trader honors the trailing stop on exit eligibility check. Tests: monotonic-ratchet, formula correctness for each method, position-direction handling, no-update-on-flat-bar.
+  - **Notes:** Initial stop (entry-time ATR stop from 2.3.4) still applies until the trailing stop crosses above it. Then trailing takes over.
+
+- [ ] **4.6.2 Pyramiding logic in auto_trader**
+  - **Deliverable:** `auto_trade.pyramiding` settings section + auto_trader add-on entry logic + `paper_trades` schema additions for tier tracking
+  - **Acceptance:** when a position is already open and a new confirming signal fires from the same strategy + same direction + regime still trend-aligned, submit an *add-on* order. Add-on sizes follow a tier schedule (default `[1.0, 0.5, 0.25, 0.125]` — initial entry full size, then halving). Max-N tiers configurable (default 4). Each add-on logged with `pyramid_tier` column. The trailing stop applies to the *whole* aggregated position. Tests: tier sequencing, size math, regime-veto on add-ons, max-N cap, stop applies to aggregate.
+  - **Notes:** Pyramiding is opt-in per strategy via `pyramidable: true` declaration in `TRACKED_STRATEGIES`. Mean-reversion strategies must NOT be pyramidable — there's no continuation thesis there.
+
+- [ ] **4.6.3 Trend-following strategy implementations**
+  - **Deliverable:** `strategies/trend/` module with three implementations + validator runs through existing PASS/FAIL pipeline
+  - **Acceptance:** three trend strategies marked `pyramidable: true` and `active_in_regimes=["bull", "trend"]`:
+    - `donchian_breakout_20` — long on close above 20-day high, exit on close below 10-day low
+    - `ma_cross_20_50` — long on 20-EMA crossing above 50-EMA, exit on opposite cross
+    - `new_high_volume` — long on new 52-week high accompanied by volume ≥ 150% of 50-day average
+    All three respect the trailing stop engine (4.6.1) and pyramid via 4.6.2. Validator must show PASS on at least one over a 5-year backtest before any goes live. Tests: signal shape, regime gating, pyramiding declaration, validator integration.
+  - **Notes:** Expected behavior: win rate 30-40%, but the avg winner is 5-10× the avg loser (classic Turtle profile). Long flat periods between trends are normal — don't pull a strategy that's underperforming for 60 days unless the divergence report (3.6.2) shows it's actually broken.
+
+- [ ] **4.6.4 Trend / mean-reversion regime allocator**
+  - **Deliverable:** `monitoring/regime_router.py` extended with capital-allocation logic
+  - **Acceptance:** the existing regime router only does on/off gating per strategy. Extend it to *allocate capital* between the two modes based on current regime: clear trend → 70% trend / 30% mean-reversion; chop → reverse; mixed → 50/50. Allocation expressed as multipliers applied on top of tiered sizing from 3.2.1. Tests: allocation math, regime transitions, default-50/50 fallback when classifier confidence < 0.6.
+  - **Notes:** Together with 4.6.1-3, this is the piece that makes the system actually adaptive — capital flows automatically to whichever strategy class fits current conditions, instead of every strategy fighting for the same dollars.
+
+---
+
 ## Notes for Phase 5 candidates
 
 - Multi-account live (>1 broker, e.g. IBKR alongside Alpaca)
