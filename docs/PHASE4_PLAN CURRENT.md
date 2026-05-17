@@ -67,10 +67,11 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ## 4.3 Strategy generation via Claude API
 
-- [ ] **4.3.1 Claude-API codegen adapter**
+- [x] **4.3.1 Claude-API codegen adapter**
   - **Deliverable:** `monitoring/codegen_claude.py` + integration into existing batch_validate pipeline
   - **Acceptance:** drop-in replacement for the Ollama codegen path. Same input schema (UNTESTED record from records.jsonl), same output schema (strategy implementation). Uses prompt caching for the system prompt + few-shot examples. CLI flag `--model claude` on batch_validate routes to this adapter. Tests: prompt construction, cache-key stability, response parsing.
   - **Notes:** Prompt caching is mandatory per global CLAUDE.md — system prompt + ≥5 few-shot strategy examples should be marked `cache_control`.
+  - **Completed:** 2026-05-17 by milestone-builder · commit b0ef544
 
 - [ ] **4.3.2 Codegen quality A/B**
   - **Deliverable:** `scripts/codegen_ab.py` + report
