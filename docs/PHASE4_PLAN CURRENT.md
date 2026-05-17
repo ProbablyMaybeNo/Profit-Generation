@@ -87,9 +87,10 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ## 4.4 Public read-only performance page
 
-- [ ] **4.4.1 Sanitized performance API**
+- [x] **4.4.1 Sanitized performance API**
   - **Deliverable:** new `/api/public/*` endpoints on dashboard with NO auth
   - **Acceptance:** exposes a public-safe subset: equity curve (no $ amounts, % returns only), per-strategy Sharpe + win-rate, last 30-day P&L %. NEVER exposes: position sizes, open positions, credentials, Alpaca account IDs, raw fill data. Rate-limited per IP (60 req/min). Tests: sensitive fields rejected, rate-limiter, shape validation.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 43c269d
 
 - [ ] **4.4.2 Static performance page**
   - **Deliverable:** new `public/` subdirectory with a single-page site (Next.js OR plain HTML + Chart.js — pick the lighter-weight option)
