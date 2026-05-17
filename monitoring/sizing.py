@@ -213,14 +213,23 @@ def compute_notional(
     max_position_usd: float,
     cap: float = KELLY_CAP,
     settings_tiered: Optional[Dict] = None,
+    regime_multiplier: Optional[float] = None,
+    strategy_class: Optional[str] = None,
+    min_position_usd: float = 0.0,
 ) -> Dict:
     """Single entry point for the auto-trader.
 
-    Returns {notional, sizing_method, fraction?, stats?, tier?}.
+    Returns {notional, sizing_method, fraction?, stats?, tier?,
+              regime_multiplier?, base_notional?}.
     For "fixed", notional is just max_position_usd (the existing
     behavior); for "kelly" it routes through kelly_notional; for
     "tiered" it routes through tiered_notional with max_position_usd
     as a hard ceiling.
+
+    When `regime_multiplier` is supplied (milestone 4.7.3), the base
+    notional from the chosen method is multiplied by it. The product
+    is floored at `min_position_usd` to keep the position above the
+    broker minimum even when the regime is unfriendly.
     """
     method = normalize_sizing_method(sizing_method)
     if method == SIZING_METHOD_KELLY:
@@ -229,18 +238,52 @@ def compute_notional(
             max_position_usd=max_position_usd, cap=cap,
         )
         out["sizing_method"] = method
-        return out
-    if method == SIZING_METHOD_TIERED:
+    elif method == SIZING_METHOD_TIERED:
         out = tiered_notional(
             conn, strategy_id,
             settings_tiered=settings_tiered,
             max_position_usd=max_position_usd,
         )
         out["sizing_method"] = method
-        return out
-    return {
-        "notional": float(max_position_usd),
-        "sizing_method": SIZING_METHOD_FIXED,
-        "fraction": None,
-        "stats": None,
-    }
+    else:
+        out = {
+            "notional": float(max_position_usd),
+            "sizing_method": SIZING_METHOD_FIXED,
+            "fraction": None,
+            "stats": None,
+        }
+    if regime_multiplier is not None:
+        base = float(out["notional"])
+        adjusted = base * float(regime_multiplier)
+        if min_position_usd and 0 < adjusted < min_position_usd:
+            adjusted = float(min_position_usd)
+        out["base_notional"] = round(base, 2)
+        out["regime_multiplier"] = round(float(regime_multiplier), 4)
+        if strategy_class is not None:
+            out["strategy_class"] = strategy_class
+        out["notional"] = round(adjusted, 2)
+    return out
+
+
+def resolve_regime_multiplier(
+    *,
+    strategy_class: Optional[str],
+    regime: Optional[str],
+    confidence: Optional[float] = None,
+    confidence_floor: float = 0.6,
+) -> float:
+    """Return the per-mode capital multiplier for the strategy class given
+    the current market regime. Trend strategies in a friendly regime get
+    > 0.5, mean-reversion strategies in choppy / low-vol regimes likewise.
+
+    Strategies with an unknown / missing class get 1.0 (uneffected).
+    """
+    from monitoring.regime_router import (
+        allocation_for_regime, size_multiplier,
+    )
+    alloc = allocation_for_regime(
+        regime or "mixed",
+        confidence=confidence,
+        confidence_floor=confidence_floor,
+    )
+    return size_multiplier(strategy_class or "", allocation=alloc)

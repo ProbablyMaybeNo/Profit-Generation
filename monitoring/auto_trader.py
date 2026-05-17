@@ -311,13 +311,57 @@ def _normalize_order_type(raw) -> str:
     return ORDER_TYPE_MARKET
 
 
+def _resolve_strategy_class(
+    strategy_id: str,
+    tracked_strategies: Optional[List[dict]] = None,
+) -> Optional[str]:
+    """Read the `strategy_class` declaration from TRACKED_STRATEGIES (or
+    TREND_DECLARATIONS) for `strategy_id`. Returns None when undeclared."""
+    for meta in (tracked_strategies or []):
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("id") != strategy_id:
+            continue
+        sc = meta.get("strategy_class")
+        if sc:
+            return str(sc).lower()
+    return None
+
+
+def _resolve_strategy_declaration(
+    strategy_id: str,
+    tracked_strategies: Optional[List[dict]] = None,
+) -> Optional[dict]:
+    """Return the TRACKED_STRATEGIES entry for `strategy_id` (or None)."""
+    for meta in (tracked_strategies or []):
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("id") == strategy_id:
+            return meta
+    return None
+
+
+def _market_regime_to_allocator_regime(market_regime: Optional[str]) -> str:
+    """Bridge the daily_reports regime vocabulary to the allocator's.
+
+    daily_reports stores one of {trending_up, trending_down, low_vol,
+    choppy, mixed}; the allocator's DEFAULT_ALLOCATIONS uses the same
+    keys. Unknown / missing → 'mixed'.
+    """
+    if not market_regime:
+        return "mixed"
+    return str(market_regime)
+
+
 def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     *, asof: Optional[date] = None,
                     sleep_fn=None, now_fn=None,
                     data_client=None,
                     portfolio_value: Optional[float] = None,
                     bars_fetcher: Optional[Callable] = None,
-                    throttle_multiplier: float = 1.0) -> dict:
+                    throttle_multiplier: float = 1.0,
+                    market_regime: Optional[str] = None,
+                    tracked_strategies: Optional[List[dict]] = None) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
@@ -334,12 +378,43 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         max_pos_usd = crypto_mod.crypto_max_position_usd(settings)
     else:
         max_pos_usd = float(settings.get("max_position_usd", 1000))
+    # 4.7.2 — When the strategy is pyramidable, reserve capacity for the
+    # full pyramid ladder by sizing the initial (tier-0) entry to
+    # max_position_usd / sum(tier_schedule). That way pyramid add-ons
+    # fit under the aggregate cap rather than being refused by the
+    # SKIP_PYRAMID_OVER_CAP guard.
+    decl = _resolve_strategy_declaration(sid, tracked_strategies)
+    is_pyramidable = bool((decl or {}).get("pyramidable", False))
+    if is_pyramidable:
+        from monitoring import pyramiding as py_mod
+        pyr_settings = (settings.get("pyramiding") or {})
+        tier_schedule = pyr_settings.get(
+            "tier_schedule", py_mod.DEFAULT_TIER_SCHEDULE,
+        )
+        max_tiers = int(pyr_settings.get("max_tiers", py_mod.DEFAULT_MAX_TIERS))
+        schedule_sum = sum(float(t) for t
+                            in list(tier_schedule)[:max_tiers]) or 1.0
+        max_pos_usd = max_pos_usd / schedule_sum
+    # 4.7.3 — Regime allocator: trend strategies get sized at the trend
+    # share of the current regime's allocation; mean-reversion strategies
+    # at the mean-reversion share. Other classes (or undeclared) get 1.0.
+    strategy_class = _resolve_strategy_class(sid, tracked_strategies)
+    regime_multiplier = None
+    if strategy_class in ("trend", "mean_reversion", "mean-reversion"):
+        regime_multiplier = sizing_mod.resolve_regime_multiplier(
+            strategy_class=strategy_class,
+            regime=_market_regime_to_allocator_regime(market_regime),
+        )
+    min_position_usd = float(settings.get("min_position_usd", 0) or 0)
     sizing = sizing_mod.compute_notional(
         conn, sid,
         sizing_method=settings.get("sizing_method"),
         portfolio_value=portfolio_value,
         max_position_usd=max_pos_usd,
         settings_tiered=settings.get("tiered"),
+        regime_multiplier=regime_multiplier,
+        strategy_class=strategy_class,
+        min_position_usd=min_position_usd,
     )
     if is_crypto:
         sizing["asset_class"] = "crypto"
@@ -485,22 +560,410 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "stop": stop_info}
 
 
-def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
+def _map_regime_for_pyramiding(market_regime: Optional[str]) -> Optional[str]:
+    """Bridge daily_reports' regime vocabulary to pyramiding's friendly-
+    regime set ({"bull", "trend"}). trending_up → "bull"; trending_down →
+    "bear"; choppy/low_vol/mixed → unchanged (so pyramiding will refuse).
+    """
+    if not market_regime:
+        return None
+    r = str(market_regime).lower()
+    if r == "trending_up":
+        return "bull"
+    if r == "trending_down":
+        return "bear"
+    return r
+
+
+def _aggregate_open_notional(conn, strategy_id: str, symbol: str) -> float:
+    """Sum of (qty × fill_price-or-limit_price) across all open BUYs for
+    the (strategy, symbol) pair. Used to enforce that pyramiding doesn't
+    breach `auto_trade.max_position_usd` across the *aggregate* position.
+    """
+    rows = conn.execute(
+        "SELECT qty, COALESCE(fill_price, limit_price) AS px "
+        "  FROM paper_trades "
+        " WHERE strategy_id=? AND symbol=? AND side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') ",
+        (strategy_id, symbol),
+    ).fetchall()
+    total = 0.0
+    for r in rows:
+        if r["qty"] is None or r["px"] is None:
+            continue
+        total += float(r["qty"]) * float(r["px"])
+    return total
+
+
+def _initial_qty_for_pyramid(
+    conn, strategy_id: str, symbol: str,
+) -> Optional[int]:
+    """Return the qty of the EARLIEST (tier 0) buy in the open pyramid
+    chain, used to compute add-on tier sizes. Falls back to the most-
+    recent buy when pyramid_tier is uniformly NULL.
+    """
+    row = conn.execute(
+        "SELECT qty FROM paper_trades "
+        " WHERE strategy_id=? AND symbol=? AND side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') "
+        "   AND COALESCE(pyramid_tier, 0) = 0 "
+        " ORDER BY submitted_at ASC LIMIT 1",
+        (strategy_id, symbol),
+    ).fetchone()
+    if row is None or row["qty"] is None:
+        return None
+    try:
+        return int(row["qty"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _process_pyramid_addon(
+    conn, client, settings: dict, sig, dry_run: bool,
+    *, tracked_strategies: Optional[List[dict]],
+    market_regime: Optional[str],
+    asof: Optional[date] = None,
+) -> dict:
+    """Evaluate a long_entry signal that arrived AFTER an existing open
+    position from the same (strategy, symbol). Routes through
+    monitoring.pyramiding's evaluate_addon and submits an add-on order
+    when all checks pass.
+    """
+    from monitoring import pyramiding as py_mod
+    sid, sym = sig["strategy_id"], sig["symbol"]
+    if _already_traded(conn, sig["id"], "buy"):
+        return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
+                "signal_id": sig["id"]}
+    decl = _resolve_strategy_declaration(sid, tracked_strategies)
+    strategy_class = (decl or {}).get("strategy_class") or "trend"
+    initial_qty = _initial_qty_for_pyramid(conn, sid, sym)
+    if initial_qty is None or initial_qty <= 0:
+        return {"action": "SKIP_NO_PYRAMID_BASE",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "reason": "no tier-0 BUY to size add-on against"}
+    pyr_settings = (settings.get("pyramiding") or {})
+    max_tiers = int(pyr_settings.get("max_tiers", py_mod.DEFAULT_MAX_TIERS))
+    tier_schedule = tuple(
+        pyr_settings.get("tier_schedule", py_mod.DEFAULT_TIER_SCHEDULE)
+    )
+    mapped_regime = _map_regime_for_pyramiding(market_regime)
+    decision = py_mod.evaluate_addon(
+        conn,
+        strategy_id=sid, symbol=sym,
+        initial_qty=initial_qty,
+        regime=mapped_regime,
+        declaration=decl,
+        direction="long",
+        tier_schedule=tier_schedule,
+        max_tiers=max_tiers,
+        strategy_class=str(strategy_class).lower(),
+    )
+    if decision["action"] == "VETO_NOT_PYRAMIDABLE":
+        return {"action": "SKIP_NO_PYRAMID",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "reason": decision["reason"]}
+    if decision["action"] == "VETO_REGIME":
+        return {"action": "SKIP_PYRAMID_REGIME",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "current_regime": market_regime,
+                "reason": decision["reason"]}
+    if decision["action"] == "VETO_MAX_TIERS":
+        return {"action": "SKIP_MAX_TIERS",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "tier": decision["tier"],
+                "max_tiers": max_tiers,
+                "reason": decision["reason"]}
+    # decision["action"] == "ADDON"
+    addon_qty = int(decision["qty"])
+    addon_tier = int(decision["tier"])
+    addon_price = float(sig["close"] or 0)
+    if addon_price <= 0:
+        return {"action": "SKIP_PYRAMID_PRICE",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "reason": "no usable price on the entry signal"}
+    addon_notional = addon_qty * addon_price
+    open_notional = _aggregate_open_notional(conn, sid, sym)
+    cap_usd = float(settings.get("max_position_usd", 1000))
+    if open_notional + addon_notional > cap_usd + 1e-6:
+        return {"action": "SKIP_PYRAMID_OVER_CAP",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "tier": addon_tier,
+                "open_notional": round(open_notional, 2),
+                "addon_notional": round(addon_notional, 2),
+                "cap_usd": round(cap_usd, 2),
+                "reason": (
+                    f"add-on tier {addon_tier} ({addon_notional:.2f}) would "
+                    f"push aggregate ({open_notional:.2f}) over the "
+                    f"max_position_usd cap of {cap_usd:.2f}"
+                )}
+    client_order_id = _build_client_order_id(
+        strategy_id=sid, symbol=sym, side="buy",
+        bar_ts=sig["bar_ts"], target_utc=None,
+    )
+    client_order_id = (client_order_id + f"-p{addon_tier}")[:MAX_CLIENT_ORDER_ID_LEN]
+    if dry_run:
+        log(f"[DRY-RUN] PYRAMID_ADDON tier={addon_tier} BUY {addon_qty} "
+            f"{sym} @ ~${addon_price:.2f} for {sid}", "INFO")
+        return {"action": "PYRAMID_ADDON",
+                "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+                "qty": addon_qty, "tier": addon_tier,
+                "price": addon_price,
+                "client_order_id": client_order_id,
+                "open_notional_before": round(open_notional, 2),
+                "addon_notional": round(addon_notional, 2),
+                "dry_run": True}
+    try:
+        order = _submit_market_order(
+            client, symbol=sym, qty=addon_qty, side="buy",
+            client_order_id=client_order_id,
+        )
+    except Exception as e:
+        log(f"pyramid add-on submit failed for {sid}/{sym}: {e}", "ERROR")
+        return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
+                "error": str(e)[:200]}
+    fill_price = float(getattr(order, "filled_avg_price", 0) or 0) or None
+    paper_trade_id = db.record_paper_trade(conn, {
+        "alpaca_order_id": str(getattr(order, "id", "")),
+        "signal_id": sig["id"],
+        "strategy_id": sid, "symbol": sym, "side": "buy", "qty": addon_qty,
+        "order_type": "market",
+        "fill_price": fill_price,
+        "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
+        "status": str(getattr(order, "status", "submitted")),
+        "notes": (f"auto-pyramid tier={addon_tier} on bar_ts={sig['bar_ts']}; "
+                   f"add-on of {addon_qty} on top of open {open_notional:.2f}"),
+    })
+    if paper_trade_id is not None:
+        from monitoring import pyramiding as py_mod
+        py_mod.record_addon_tier(conn, paper_trade_id=paper_trade_id,
+                                  tier=addon_tier)
+    log(f"PYRAMID_ADDON tier={addon_tier} BUY {addon_qty} {sym}: "
+        f"{getattr(order, 'id', '?')}", "SUCCESS")
+    return {"action": "PYRAMID_ADDON",
+            "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
+            "qty": addon_qty, "tier": addon_tier,
+            "order_id": str(getattr(order, "id", "")),
+            "client_order_id": client_order_id,
+            "open_notional_before": round(open_notional, 2),
+            "addon_notional": round(addon_notional, 2)}
+
+
+def _resolve_trailing_config(
+    strategy_id: str,
+    settings: dict,
+    tracked_strategies: Optional[List[dict]] = None,
+) -> Optional[dict]:
+    """Return the per-strategy trailing-stop config, or None when the strategy
+    doesn't opt into trailing.
+
+    Resolution order: per-strategy declaration in TRACKED_STRATEGIES (or
+    TREND_DECLARATIONS), falling back to the global
+    settings.auto_trade.trailing_stop block. Missing `method` ⇒ None.
+    """
+    cfg: dict = {}
+    for meta in (tracked_strategies or []):
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("id") != strategy_id:
+            continue
+        per_strat = meta.get("trailing_stop")
+        if isinstance(per_strat, dict):
+            cfg.update(per_strat)
+        break
+    global_cfg = settings.get("trailing_stop")
+    if isinstance(global_cfg, dict):
+        for k, v in global_cfg.items():
+            cfg.setdefault(k, v)
+    method = cfg.get("method")
+    if not method:
+        return None
+    return cfg
+
+
+def _entry_time_stop_floor(conn, strategy_id: str, symbol: str) -> Optional[float]:
+    """The most-recent open STOP order's stop_price for (strategy, symbol).
+    Used as the floor below which the trailing stop is never allowed to slip."""
+    row = conn.execute(
+        "SELECT stop_price FROM paper_trades "
+        " WHERE strategy_id=? AND symbol=? "
+        "   AND order_type LIKE '%stop%' "
+        "   AND stop_price IS NOT NULL "
+        "   AND status NOT IN ('canceled', 'rejected', 'filled', 'expired') "
+        " ORDER BY submitted_at DESC LIMIT 1",
+        (strategy_id, symbol),
+    ).fetchone()
+    if row is None or row["stop_price"] is None:
+        return None
+    try:
+        return float(row["stop_price"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _advance_trailing_stop_for_position(
+    conn, *, strategy_id: str, symbol: str,
+    entry_price: float, trailing_cfg: dict,
+    bars_fetcher: Callable, now_iso: Optional[str] = None,
+) -> Optional[dict]:
+    """Fetch fresh bars, advance the trailing stop with ratchet semantics,
+    and floor it against the entry-time ATR stop. Returns the new state or
+    None when bars are unavailable / insufficient.
+    """
+    from monitoring import trailing_stops as ts_mod
+    try:
+        bars = bars_fetcher(symbol)
+    except Exception as e:
+        log(f"trailing stop: bars fetch failed for {strategy_id}/{symbol}: {e}",
+            "WARNING")
+        return None
+    if not bars:
+        return None
+    method = str(trailing_cfg.get("method") or ts_mod.DEFAULT_METHOD).lower()
+    multiplier = float(trailing_cfg.get("multiplier",
+                                         ts_mod.DEFAULT_ATR_MULTIPLIER))
+    pct = float(trailing_cfg.get("pct", ts_mod.DEFAULT_PCT_TRAIL))
+    chandelier_lookback = int(trailing_cfg.get(
+        "chandelier_lookback", ts_mod.DEFAULT_CHANDELIER_LOOKBACK))
+    atr_period = trailing_cfg.get("atr_period")
+    new_state = ts_mod.advance_stop(
+        conn, strategy_id=strategy_id, symbol=symbol,
+        entry_price=entry_price, bars=bars, method=method, side="long",
+        multiplier=multiplier, pct=pct,
+        chandelier_lookback=chandelier_lookback,
+        atr_period=atr_period,
+        now_iso=now_iso,
+    )
+    if new_state is None:
+        return None
+    floor = _entry_time_stop_floor(conn, strategy_id, symbol)
+    if floor is not None and new_state["stop_price"] < floor:
+        new_state = ts_mod.upsert_stop(
+            conn,
+            strategy_id=strategy_id, symbol=symbol,
+            method=new_state["method"],
+            stop_price=floor,
+            extreme_price=new_state["extreme_price"],
+            side=new_state["side"],
+            now_iso=now_iso,
+        )
+        new_state["floored_to_entry_stop"] = True
+    return new_state
+
+
+def _update_trailing_stops_for_open_positions(
+    conn, settings: dict,
+    *, bars_fetcher: Optional[Callable],
+    tracked_strategies: Optional[List[dict]] = None,
+    now_iso: Optional[str] = None,
+) -> List[dict]:
+    """Walk every open paper_trades buy. For strategies with a trailing-stop
+    config, advance their trailing stop using the latest bars. Returns a list
+    of update descriptors (one per position) for logging.
+    """
+    if bars_fetcher is None:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT strategy_id, symbol FROM paper_trades "
+        " WHERE side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') "
+    ).fetchall()
+    updates: List[dict] = []
+    for r in rows:
+        sid, sym = r["strategy_id"], r["symbol"]
+        if not sid or not sym:
+            continue
+        # Skip pairs that have a later SELL.
+        if _open_buy_for_pair(conn, sid, sym) is None:
+            continue
+        cfg = _resolve_trailing_config(sid, settings, tracked_strategies)
+        if cfg is None:
+            continue
+        open_buy = _open_buy_for_pair(conn, sid, sym)
+        entry_price = (
+            float(open_buy["fill_price"]) if open_buy["fill_price"] is not None
+            else float(open_buy["limit_price"]) if open_buy["limit_price"]
+            else None
+        )
+        if entry_price is None or entry_price <= 0:
+            continue
+        new_state = _advance_trailing_stop_for_position(
+            conn, strategy_id=sid, symbol=sym,
+            entry_price=entry_price, trailing_cfg=cfg,
+            bars_fetcher=bars_fetcher, now_iso=now_iso,
+        )
+        if new_state is None:
+            continue
+        updates.append({
+            "strategy_id": sid, "symbol": sym,
+            "method": new_state["method"],
+            "stop_price": new_state["stop_price"],
+            "extreme_price": new_state["extreme_price"],
+            "floored": bool(new_state.get("floored_to_entry_stop")),
+        })
+    return updates
+
+
+def _check_trailing_exit(
+    conn, *, strategy_id: str, symbol: str, current_price: float,
+) -> Optional[dict]:
+    """If a trailing stop is in force and current_price has crossed it,
+    return the trip descriptor; else None."""
+    from monitoring import trailing_stops as ts_mod
+    if not ts_mod.should_exit_on_trailing_stop(
+        conn, strategy_id=strategy_id, symbol=symbol,
+        current_price=current_price,
+    ):
+        return None
+    row = ts_mod.get_stop(conn, strategy_id=strategy_id, symbol=symbol)
+    return {
+        "stop_price": row["stop_price"] if row else None,
+        "method": row["method"] if row else None,
+        "extreme_price": row["extreme_price"] if row else None,
+    }
+
+
+def _process_exit(
+    conn, client, settings: dict, sig, dry_run: bool,
+    *, trailing_triggered: Optional[dict] = None,
+) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
     if _already_traded(conn, sig["id"], "sell"):
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
+    # If the caller hasn't pre-computed a trailing trip, do it now using the
+    # signal's close as the proxy current price.
+    if trailing_triggered is None:
+        current_price = float(sig["close"] or 0)
+        if current_price > 0:
+            trailing_triggered = _check_trailing_exit(
+                conn, strategy_id=sid, symbol=sym,
+                current_price=current_price,
+            )
     open_buy = _open_buy_for_pair(conn, sid, sym)
     if open_buy is None:
         return {"action": "SKIP_NO_POSITION", "strategy_id": sid, "symbol": sym}
     qty = int(open_buy["qty"])
 
+    exit_reason = "long_exit_signal"
+    notes_extra = ""
+    if trailing_triggered is not None:
+        exit_reason = "trailing_stop"
+        notes_extra = (
+            f"; trailing stop hit @ ${trailing_triggered.get('stop_price')} "
+            f"({trailing_triggered.get('method')})"
+        )
+
     if dry_run:
-        log(f"[DRY-RUN] SELL {qty} {sym} (close position from "
+        tag = "TRAILING_STOP " if trailing_triggered is not None else ""
+        log(f"[DRY-RUN] {tag}SELL {qty} {sym} (close position from "
             f"{open_buy['submitted_at'][:10]}) for {sid}", "INFO")
-        return {"action": "DRY_SELL", "strategy_id": sid, "symbol": sym,
-                "qty": qty, "signal_id": sig["id"],
-                "from_order_id": open_buy["alpaca_order_id"]}
+        out = {"action": "DRY_SELL", "strategy_id": sid, "symbol": sym,
+               "qty": qty, "signal_id": sig["id"],
+               "exit_reason": exit_reason,
+               "from_order_id": open_buy["alpaca_order_id"]}
+        if trailing_triggered is not None:
+            out["trailing"] = trailing_triggered
+        return out
 
     try:
         order = _submit_market_order(client, symbol=sym, qty=qty, side="sell")
@@ -517,11 +980,87 @@ def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
         "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
         "status": str(getattr(order, "status", "submitted")),
         "notes": f"auto-exit on bar_ts={sig['bar_ts']}; "
-                 f"closing buy {open_buy['alpaca_order_id']}",
+                 f"closing buy {open_buy['alpaca_order_id']}{notes_extra}",
     })
+    # Clear the trailing stop row now that the position is closing.
+    try:
+        from monitoring import trailing_stops as ts_mod
+        ts_mod.clear_stop(conn, strategy_id=sid, symbol=sym)
+    except Exception as e:
+        log(f"trailing stop clear failed for {sid}/{sym}: {e}", "WARNING")
     log(f"SELL {qty} {sym} order submitted: {order.id}", "SUCCESS")
-    return {"action": "SELL", "strategy_id": sid, "symbol": sym, "qty": qty,
-            "order_id": str(order.id), "signal_id": sig["id"]}
+    out = {"action": "SELL", "strategy_id": sid, "symbol": sym, "qty": qty,
+           "order_id": str(order.id), "signal_id": sig["id"],
+           "exit_reason": exit_reason}
+    if trailing_triggered is not None:
+        out["trailing"] = trailing_triggered
+    return out
+
+
+def _check_trailing_exits_for_open_positions(
+    conn, settings: dict,
+    *, client, dry_run: bool,
+    bars_fetcher: Optional[Callable],
+    tracked_strategies: Optional[List[dict]] = None,
+    asof: Optional[date] = None,
+) -> List[dict]:
+    """For every open position whose strategy uses trailing stops, check if
+    the latest bar's close crossed the stop. If so, synthesize a long_exit
+    signal and route it through _process_exit.
+
+    This is what makes trailing stops fire on bars where the strategy
+    itself didn't emit an exit signal.
+    """
+    if bars_fetcher is None:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT strategy_id, symbol FROM paper_trades "
+        " WHERE side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') "
+    ).fetchall()
+    actions: List[dict] = []
+    for r in rows:
+        sid, sym = r["strategy_id"], r["symbol"]
+        if not sid or not sym:
+            continue
+        if _open_buy_for_pair(conn, sid, sym) is None:
+            continue
+        cfg = _resolve_trailing_config(sid, settings, tracked_strategies)
+        if cfg is None:
+            continue
+        try:
+            bars = bars_fetcher(sym)
+        except Exception:
+            continue
+        if not bars:
+            continue
+        last_close = float(bars[-1].get("close") or 0)
+        if last_close <= 0:
+            continue
+        trip = _check_trailing_exit(
+            conn, strategy_id=sid, symbol=sym, current_price=last_close,
+        )
+        if trip is None:
+            continue
+        # Has a long_exit signal for this bar from THIS strategy already
+        # been processed in this run? If so, skip — _process_exit already
+        # handled it (and saw the trailing trigger via the in-line check).
+        synthetic_sig = {
+            "id": None,
+            "strategy_id": sid, "symbol": sym,
+            "signal_type": "long_exit",
+            "bar_ts": (asof or date.today()).isoformat(),
+            "close": last_close,
+        }
+        # Dedupe: synthetic exits aren't tied to a signal_id; we guard via
+        # _open_buy_for_pair (returns None once SELL is submitted).
+        action = _process_exit(
+            conn, client, settings, synthetic_sig, dry_run,
+            trailing_triggered=trip,
+        )
+        action["synthetic_trailing_exit"] = True
+        actions.append(action)
+    return actions
 
 
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
@@ -1258,6 +1797,15 @@ def process_signals(
     kill_switch_engaged = bool(kill_switch_state.get("live_trading_halted"))
     kill_switch_logged = False
 
+    # 4.7.1 — Advance trailing stops for every open position BEFORE we
+    # evaluate any signals this run. The ratchet is monotonic; advancing
+    # here means same-bar exit signals see the freshest stop.
+    trailing_updates = _update_trailing_stops_for_open_positions(
+        conn, settings,
+        bars_fetcher=bars_fetcher,
+        tracked_strategies=regime_tracked,
+    )
+
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
@@ -1407,6 +1955,20 @@ def process_signals(
                     "reason": str(e),
                 })
                 continue
+            # 4.7.2 — When there's an open position from this strategy/symbol
+            # already, route to the pyramiding decision branch instead of
+            # treating this as a fresh entry. The decision branch handles
+            # pyramidable opt-in, regime alignment, max tiers, and
+            # aggregate-cap enforcement.
+            if _open_buy_for_pair(conn, sig["strategy_id"], sig["symbol"]) is not None:
+                addon_action = _process_pyramid_addon(
+                    conn, strategy_client, settings, sig, dry_run,
+                    tracked_strategies=regime_tracked,
+                    market_regime=current_regime,
+                    asof=asof,
+                )
+                actions.append(addon_action)
+                continue
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
@@ -1414,6 +1976,8 @@ def process_signals(
                 portfolio_value=portfolio_value,
                 bars_fetcher=bars_fetcher,
                 throttle_multiplier=throttle_multiplier,
+                market_regime=current_regime,
+                tracked_strategies=regime_tracked,
             )
             actions.append(entry_action)
             if (max_open_per_strategy > 0
@@ -1441,10 +2005,25 @@ def process_signals(
                 continue
             actions.append(_process_exit(conn, strategy_client, settings, sig, dry_run))
 
+    # 4.7.1 — After the explicit signal pass, check whether the latest bar
+    # for any open position crossed its trailing stop. The default Alpaca
+    # paper client handles both paper and live for the trailing exits
+    # (live strategies are not currently expected to opt into trailing).
+    trailing_actions = _check_trailing_exits_for_open_positions(
+        conn, settings,
+        client=client, dry_run=dry_run,
+        bars_fetcher=bars_fetcher,
+        tracked_strategies=regime_tracked,
+        asof=asof,
+    )
+    actions.extend(trailing_actions)
+
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
            "actions": actions, "market_regime": current_regime}
     if throttle_info is not None:
         out["throttle"] = throttle_info
+    if trailing_updates:
+        out["trailing_updates"] = trailing_updates
     return out
 
 
