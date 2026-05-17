@@ -87,9 +87,10 @@ is exposed (3.2.4 onward).
   - **Notes:** Manual promotion is fine until we have ≥ 50 PASS records; this milestone is for when the validator backlog grows.
   - **Completed:** 2026-05-16 by milestone-builder · commit f0c7a13 (22 tests; score = mean_sharpe × √n_instruments; live dry-run surfaces rsi2-oversold on GDX as the next promotion candidate)
 
-- [ ] **3.3.2 Intraday-bar strategy variants**
+- [x] **3.3.2 Intraday-bar strategy variants**
   - **Deliverable:** new `strategies/intraday/` module + 2-3 representative strategies running on 5-min and 15-min bars
   - **Acceptance:** existing mean-reversion logic ports to intraday bars where Polygon data is available. Validator runs the same PASS/FAIL pipeline on intraday outcomes. Signals tagged with `bar_interval="5m"` or `"15m"` in the signals table. Tests: bar-loading on intraday TF, signal-shape parity with EOD path.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 83d3e5b (3 variants — 5-bar-low, 3-bar-low, consec-bearish; validator `--interval` flag; 16 tests covering shape parity, validator propagation, intraday source defaults)
 
 - [ ] **3.3.3 Regime-aware strategy rotation**
   - **Deliverable:** `monitoring/regime_router.py` + auto_trader consults it
