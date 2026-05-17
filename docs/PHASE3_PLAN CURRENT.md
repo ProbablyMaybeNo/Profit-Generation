@@ -141,10 +141,11 @@ is exposed (3.2.4 onward).
   - **Acceptance:** returns {alpaca: ok/blocked, db: ok, intraday_age_min: N, daily_report_age_h: N, tunnel_age_h: N, kill_switch: bool, open_positions: N}. UptimeRobot-style polling target. Tests: endpoint shape, stale-data flags.
   - **Completed:** 2026-05-16 by milestone-builder · commit 0d9c1fa (full subsystem rollup; always 200; intraday stale only when market_open; degraded list per-subsystem; 19 tests)
 
-- [ ] **3.5.4 PnL tax export**
+- [x] **3.5.4 PnL tax export**
   - **Deliverable:** `scripts/export_tax_8949.py`
   - **Acceptance:** generates Form 8949 CSV (one row per closed trade: description, date_acquired, date_sold, proceeds, cost_basis, gain_loss). Joins `paper_trades` entries to exits, computes accurate fills. Splits short-term vs long-term. CLI: `--year 2026`. Tests: roundtrip math, short/long-term split.
   - **Notes:** Useful once we go live; harmless to build now and run against paper for shape validation.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 5008a79 (IRS 8949 column shape; year-by-sell-date scope; rejected/canceled excluded; short/long split at 365-day boundary; net total in summary; 13 tests covering math + split + CLI)
 
 - [ ] **3.5.5 Disaster-recovery runbook**
   - **Deliverable:** `docs/RUNBOOK.md`
