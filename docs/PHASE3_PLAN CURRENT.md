@@ -147,9 +147,10 @@ is exposed (3.2.4 onward).
   - **Notes:** Useful once we go live; harmless to build now and run against paper for shape validation.
   - **Completed:** 2026-05-16 by milestone-builder · commit 5008a79 (IRS 8949 column shape; year-by-sell-date scope; rejected/canceled excluded; short/long split at 365-day boundary; net total in summary; 13 tests covering math + split + CLI)
 
-- [ ] **3.5.5 Disaster-recovery runbook**
+- [x] **3.5.5 Disaster-recovery runbook**
   - **Deliverable:** `docs/RUNBOOK.md`
   - **Acceptance:** documents recovery procedures for: machine reboot, Alpaca outage, Polygon outage, accidental kill_switch trip, corrupted trading.db, Cloudflare tunnel expired, accidental `dry_run: true` re-flip mid-session. Each procedure ≤ 5 steps.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 752c88f (7 procedures all <= 5 steps; concrete commands cross-refing preflight, kill_switch, reconcile, backup; operational schtask reference table appended)
 
 ---
 
