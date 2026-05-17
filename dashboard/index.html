@@ -396,6 +396,29 @@
   .edge-diff-cap-mid { color: var(--text); }
   .edge-diff-cap-lo { color: var(--red); }
 
+  /* Fill latency card (3.6.3) */
+  table.fill-latency { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.fill-latency th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: normal;
+    border-bottom: 1px solid var(--border);
+    padding: 4px 6px;
+  }
+  table.fill-latency td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.fill-latency td.r { text-align: right; }
+  table.fill-latency tr.has-outliers td .outlier-flag {
+    color: var(--amber);
+    font-weight: 600;
+    margin-left: 4px;
+  }
+  .latency-hi  { color: var(--red); }
+  .latency-mid { color: var(--amber); }
+  .latency-lo  { color: var(--green); }
+
   /* Slippage burn card (3.6.1) */
   .burn-row {
     display: flex;
@@ -966,6 +989,12 @@
   <div class="card">
     <h2>slippage burn — backtest edge vs paper fills <span class="count" id="slippage-burn-count"></span></h2>
     <div id="slippage-burn" class="loading">loading...</div>
+  </div>
+
+  <!-- Fill latency (3.6.3) -->
+  <div class="card">
+    <h2>fill latency — submitted_at &rarr; filled_at per strategy <span class="count" id="fill-latency-count"></span></h2>
+    <div id="fill-latency" class="loading">loading...</div>
   </div>
 
   <!-- Realized vs theoretical edge -->
@@ -1879,6 +1908,65 @@ function burnClass(burn) {
   return 'burn-lo';
 }
 
+function fmtSeconds(s) {
+  if (s === null || s === undefined) return '—';
+  if (s < 60) return s.toFixed(1) + 's';
+  if (s < 3600) return (s / 60).toFixed(1) + 'm';
+  return (s / 3600).toFixed(1) + 'h';
+}
+
+function latencyClass(s, threshold) {
+  if (s === null || s === undefined) return 'latency-mid';
+  if (s >= threshold) return 'latency-hi';
+  if (s >= threshold / 2) return 'latency-mid';
+  return 'latency-lo';
+}
+
+function renderFillLatency() {
+  const el = document.getElementById('fill-latency');
+  const count = document.getElementById('fill-latency-count');
+  fetch('/api/fill_latency', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+    .then(d => {
+      const thr = d.outlier_threshold_s || 300;
+      if (d.overall_median_s !== null && d.overall_median_s !== undefined) {
+        count.textContent = `${d.n_strategies} strats · ${d.n_trades_total} fills · overall median ${fmtSeconds(d.overall_median_s)}`;
+      } else {
+        count.textContent = `${d.n_strategies} strats`;
+      }
+      if (!d.rows.length) {
+        el.innerHTML = '<div class="empty">no filled paper trades with valid submitted_at + filled_at yet.</div>';
+        return;
+      }
+      let html = '<table class="fill-latency">';
+      html += '<thead><tr>'
+        + '<th>strategy</th>'
+        + '<th class="r">n</th>'
+        + '<th class="r">median</th>'
+        + '<th class="r">p95</th>'
+        + '<th class="r">outliers &gt; ' + fmtSeconds(thr) + '</th>'
+        + '</tr></thead><tbody>';
+      for (const r of d.rows) {
+        const cls = latencyClass(r.median_s, thr);
+        const hasOutliers = r.outliers > 0;
+        html += `<tr class="${hasOutliers ? 'has-outliers' : ''}">`
+          + `<td title="${escapeHtml(r.strategy_id)}">${escapeHtml(shortStrat(r.strategy_id))}</td>`
+          + `<td class="r">${r.n}</td>`
+          + `<td class="r ${cls}">${escapeHtml(fmtSeconds(r.median_s))}</td>`
+          + `<td class="r">${escapeHtml(fmtSeconds(r.p95_s))}</td>`
+          + `<td class="r">${r.outliers}`
+          + (hasOutliers ? ` <span class="outlier-flag">(${r.outlier_pct.toFixed(0)}%)</span>` : '')
+          + `</td>`
+          + `</tr>`;
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    })
+    .catch(e => {
+      el.innerHTML = `<div class="empty">fill-latency fetch failed: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
 function renderSlippageBurn() {
   const el = document.getElementById('slippage-burn');
   const count = document.getElementById('slippage-burn-count');
@@ -2213,6 +2301,7 @@ async function refresh() {
     renderEdgeSlices();
     renderStrategyCorrelation();
     renderSlippageBurn();
+    renderFillLatency();
     renderEdgeDiff();
     renderNewsSentimentOverlay();
     renderOpenPositions(s);

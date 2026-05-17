@@ -878,6 +878,21 @@ def slippage_burn():
         conn.close()
 
 
+@app.route("/api/fill_latency", methods=["GET"])
+def fill_latency():
+    """Per-strategy fill-time latency rollup (milestone 3.6.3).
+
+    Median + p95 fill-delta (filled_at - submitted_at) per strategy,
+    plus a count of outliers (> 5min). Sorted by median desc (worst
+    latency first)."""
+    from monitoring import fill_latency as fl
+    conn = db.init_db()
+    try:
+        return jsonify(fl.compute_fill_latency(conn))
+    finally:
+        conn.close()
+
+
 @app.route("/api/news_sentiment_overlay", methods=["GET"])
 def news_sentiment_overlay():
     """Per-strategy outcome returns sliced by entry-day news sentiment
