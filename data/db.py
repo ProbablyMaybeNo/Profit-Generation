@@ -231,6 +231,20 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_equity_snapshots_at ON equity_snapshots(recorded_at)",
+    """
+    CREATE TABLE IF NOT EXISTS paused_strategies (
+        strategy_id   TEXT PRIMARY KEY,
+        reason        TEXT,
+        paused_at     TEXT NOT NULL,
+        expires_at    TEXT,
+        source        TEXT,
+        live_mean_pct REAL,
+        backtest_mean_pct REAL,
+        sample_size   INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_paused_strategies_expires "
+    "ON paused_strategies(expires_at)",
 ]
 
 

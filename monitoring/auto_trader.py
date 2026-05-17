@@ -1344,6 +1344,27 @@ def process_signals(
                     **regime_skip_info,
                 })
                 continue
+            # Auto-pause from 3.3.4 — refuse entries on strategies the
+            # divergence checker has flagged. Exits remain unaffected so
+            # currently-open positions still close cleanly.
+            from monitoring import strategy_health as sh_mod
+            if sh_mod.is_paused(conn, sig["strategy_id"]):
+                row = conn.execute(
+                    "SELECT reason, paused_at, expires_at, source "
+                    "  FROM paused_strategies WHERE strategy_id=?",
+                    (sig["strategy_id"],),
+                ).fetchone()
+                actions.append({
+                    "action": "SKIP_PAUSED_STRATEGY",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "reason": (row["reason"] if row else "") or "",
+                    "paused_at": (row["paused_at"] if row else "") or "",
+                    "expires_at": (row["expires_at"] if row else "") or "",
+                    "source": (row["source"] if row else "") or "",
+                })
+                continue
             if max_open_per_strategy > 0:
                 cur_open = open_per_strategy.get(sig["strategy_id"], 0)
                 if cur_open >= max_open_per_strategy:
