@@ -107,14 +107,16 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ## 4.5 Phase 3 operational followups
 
-- [ ] **4.5.1 Preflight `--tunnel` check**
+- [x] **4.5.1 Preflight `--tunnel` check**
   - **Deliverable:** `scripts/preflight.py` extended with a dedicated `--tunnel` flag
   - **Acceptance:** replaces the inline Python one-liner that 3.5.5 RUNBOOK Procedure 6 currently uses to check tunnel_url.txt freshness. CLI: `py -3.13 scripts/preflight.py --tunnel` exits 0 if file < 1d old, non-zero otherwise. RUNBOOK gets updated to use the new flag. Tests: stale-file detection, missing-file case.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 1cf99ae
 
-- [ ] **4.5.2 Dashboard card helper extraction (deferred)**
+- [-] **4.5.2 Dashboard card helper extraction (deferred)**
   - **Deliverable:** `dashboard/index.html` refactored to share JS helpers between slippage / fill latency / divergence cards
   - **Acceptance:** ONLY ship if a 4th similar card is added. Three similar cards beats a premature abstraction (Phase 3 closing note). Reopen this milestone when card #4 lands.
   - **Notes:** Keep as a placeholder — agent should skip on first encounter and tick a `(deferred)` note rather than build.
+  - **Deferred:** 2026-05-17 by milestone-builder — no 4th similar card has landed. Three similar cards beats a premature abstraction. Reopen when card #4 ships.
 
 ---
 
