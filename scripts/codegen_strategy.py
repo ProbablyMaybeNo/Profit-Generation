@@ -136,10 +136,16 @@ def codegen_record(
     temperature: float = 0.1,
     dry_run: bool = False,
     source_url_override: str = "",
+    provider: str = "ollama",
+    on_usage=None,
 ) -> Dict:
     """
     Generate a compute_fn for one record. Pure function — does NOT touch
     records.jsonl or trading.db (callers do that).
+
+    `provider` ∈ {"ollama", "claude"} routes to the matching adapter.
+    Both adapters share the same input/output contract and the same
+    AST validator + smoke test (4.3.1).
 
     Returns:
       {ok: bool, fn_name, code (str), path (Path or None),
@@ -156,12 +162,24 @@ def codegen_record(
     if not entry or not exit_:
         return {"ok": False, "error": "record missing entry_rules or exit_rules"}
 
+    provider = (provider or "ollama").lower()
+    if provider not in ("ollama", "claude"):
+        return {"ok": False, "error": f"unknown provider {provider!r}"}
+
     fn_name = llm_codegen.fn_name_from_strategy_id(sid)
     try:
-        code = llm_codegen.generate_compute_fn(
-            fn_name, entry_rules=entry, exit_rules=exit_,
-            risk_management=risk, model=model, temperature=temperature,
-        )
+        if provider == "claude":
+            from monitoring import codegen_claude
+            code = codegen_claude.generate_compute_fn(
+                fn_name, entry_rules=entry, exit_rules=exit_,
+                risk_management=risk, model=model, temperature=temperature,
+                on_usage=on_usage,
+            )
+        else:
+            code = llm_codegen.generate_compute_fn(
+                fn_name, entry_rules=entry, exit_rules=exit_,
+                risk_management=risk, model=model, temperature=temperature,
+            )
     except Exception as e:
         return {"ok": False, "fn_name": fn_name, "error": f"codegen failed: {e!s:.300}"}
 

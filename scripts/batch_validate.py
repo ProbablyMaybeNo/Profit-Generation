@@ -92,6 +92,8 @@ def batch_run(
     promote: bool = False,
     promote_dry_run: bool = False,
     promoter=None,
+    provider: str = "ollama",
+    on_usage=None,
 ) -> Dict:
     """
     Returns a summary dict: {targets, by_verdict, codegen_failures, errors,
@@ -151,7 +153,8 @@ def batch_run(
         )
         if needs_codegen:
             print(f"  [{sid}] codegen...")
-            cg = codegen_record(r, model=model)
+            cg = codegen_record(r, model=model,
+                                provider=provider, on_usage=on_usage)
             if not cg["ok"]:
                 _mark_codegen_failed(r, cg.get("error") or "unknown")
                 outcome.update({"action": "codegen_failed",
@@ -258,7 +261,15 @@ def main():
                         help="don't regenerate functions; require existing generated file")
     parser.add_argument("--strategy-id", default=None,
                         help="restrict to a single strategy_id (overrides --max/--since)")
-    parser.add_argument("--model", default=None, help="override OLLAMA_MODEL")
+    parser.add_argument("--model", default=None,
+                        help="model override. Special value `claude` routes "
+                             "to the Anthropic codegen path (4.3.1). Any "
+                             "other value is passed verbatim to the active "
+                             "provider's API.")
+    parser.add_argument("--provider", default="ollama",
+                        choices=["ollama", "claude"],
+                        help="codegen provider (default ollama). Implicitly "
+                             "set to `claude` when --model claude is passed.")
     parser.add_argument("--promote", action="store_true",
                         help="auto-promote strategies whose verdict is "
                              "PASS/PASS_WITH_NUANCE (mutates monitoring/config.py)")
@@ -269,6 +280,14 @@ def main():
     universe = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
     since = date.fromisoformat(args.since) if args.since else None
 
+    # `--model claude` implies --provider claude and forwards no model
+    # override (the Claude adapter has its own DEFAULT_CLAUDE_MODEL).
+    provider = args.provider
+    model = args.model
+    if isinstance(model, str) and model.strip().lower() == "claude":
+        provider = "claude"
+        model = None
+
     summary = batch_run(
         universe=universe,
         lookback_days=args.lookback_days,
@@ -277,9 +296,10 @@ def main():
         force=args.force,
         skip_codegen=args.skip_codegen,
         strategy_id_filter=args.strategy_id,
-        model=args.model,
+        model=model,
         promote=args.promote,
         promote_dry_run=args.promote_dry_run,
+        provider=provider,
     )
 
     print()
