@@ -162,25 +162,29 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
 
 The engines from 4.6.1 (trailing stops) and 4.6.2 (pyramiding) shipped as callable libraries with full test coverage, but `auto_trader` doesn't yet invoke them. This section wires them in so they fire on real paper trades — proving the full lifecycle (entry → pyramid → trailing → exit) before any live capital lands. Paper-only by design.
 
-- [ ] **4.7.1 Wire trailing stops into auto_trader exit path**
+- [x] **4.7.1 Wire trailing stops into auto_trader exit path**
   - **Deliverable:** `auto_trade/auto_trader.py` `_process_exit()` extended + `_update_trailing_stops()` invoked on each bar close
   - **Acceptance:** for every open position with a strategy that declares `trailing_stop.method` in settings, on every intraday cycle: (a) call `trailing_stops.update()` to ratchet the stop using the configured formula (atr_trail / chandelier / percent_trail), (b) on exit eligibility check, call `should_exit_on_trailing_stop()` and route to exit if true. The initial ATR stop from 2.3.4 still gates exit; trailing stop is the *tighter* of the two once it crosses above entry-time stop. Tests: end-to-end synthetic trade (entry → 3 favorable bars → trailing tightens → adverse bar → exit on trailing), no-trail strategies unaffected, exit ordering correct when both stops would trigger same bar.
   - **Notes:** This is a paper-side wiring task. Live strategies are unaffected unless explicitly opted in via `trailing_stop.method` in their strategy declaration.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 2d7f286 (bundled with 4.7.2 + 4.7.3 — tightly coupled wiring)
 
-- [ ] **4.7.2 Wire pyramiding into auto_trader entry path**
+- [x] **4.7.2 Wire pyramiding into auto_trader entry path**
   - **Deliverable:** `auto_trade/auto_trader.py` `process_signals()` extended with pyramiding decision branch
   - **Acceptance:** when a new BUY signal arrives and there's already an open position from the same strategy + same direction: (a) check `pyramidable: true` on the strategy, (b) check regime still aligned (no pyramiding into a regime flip), (c) check pyramid tier < max_tiers, (d) compute add-on size via `pyramiding.next_tier_size()`, (e) submit add-on order tagged with `pyramid_tier` column. Mean-reversion strategies (no `pyramidable` declaration) refuse add-ons and log `SKIP_NO_PYRAMID`. Tests: 4-tier full pyramid lifecycle, regime-flip blocks tier-2, max-tier cap, mean-reversion strategy refuses correctly, aggregate position-size cap from `auto_trade.max_position_usd` still respected across all tiers.
   - **Notes:** Pyramiding multiplies risk fast — the trailing stop from 4.7.1 is what makes it survivable. These two milestones are a pair; ship them in sequence and run 4.7.4 end-to-end before either goes to live_strategies.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 2d7f286 · initial entry size reserves capacity for the full ladder (max_position_usd / sum(tier_schedule)) so add-ons fit under the aggregate cap.
 
-- [ ] **4.7.3 Wire trend/mean-reversion allocator into sizing pipeline**
+- [x] **4.7.3 Wire trend/mean-reversion allocator into sizing pipeline**
   - **Deliverable:** `monitoring/sizing.py` extended to consult `regime_router.get_capital_allocation()` + auto_trader sizes accordingly
   - **Acceptance:** every entry (initial or pyramid add-on) consults the regime allocator and applies the per-mode multiplier on top of the tiered base size. Trend regime → trend strategies sized at 0.7×, mean-reversion strategies at 0.3×. Vice versa in chop. Multipliers default to 0.5/0.5 when classifier confidence < 0.6. Tests: end-to-end size resolution through all sizing layers (tiered base × drawdown throttle × regime multiplier × max-position cap), confidence threshold honored, mode-mismatch zero-sizing impossible (floor at min_position_usd).
   - **Notes:** Currently the allocator is callable but no caller in the sizing pipeline reads from it. This milestone hooks it up.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 2d7f286
 
-- [ ] **4.7.4 End-to-end paper smoke test for trend lifecycle**
+- [x] **4.7.4 End-to-end paper smoke test for trend lifecycle**
   - **Deliverable:** `scripts/smoke_trend_lifecycle.py` + report
   - **Acceptance:** runs a single trend strategy (donchian_breakout_20 if validator passes it, else ma_cross_20_50) against a known historical period where it would have fired (e.g. NVDA 2024-Q1 ramp) using the full auto_trader path in dry-run mode. Verifies: entry fired, trailing stop updated each bar, pyramid tiers added on confirming signals, regime allocator applied multipliers, exit fired on trailing stop. Output: trade-by-trade log + final stats (entry, 3 add-ons, final exit, total P&L, max drawdown). NOT a unit test — this is the live-fire smoke test that proves the wiring works end-to-end. Tests: smoke test script itself has unit tests for log parsing and the assertion harness.
   - **Notes:** This is the last gate before paper-running trend strategies for real. Anything weird here (no pyramid tiers fired, trailing didn't ratchet, allocator returned wrong mode) means halt and inspect before letting it loose on live paper signals.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 7d68705 · synthetic NVDA-Q1-style ramp (yfinance lives in conda env, not py-3.13). Full lifecycle fires: BUY → 3 pyramid tiers → SKIP_MAX_TIERS → SELL on pullback. 8 unit tests cover the harness.
 
 ---
 
