@@ -125,10 +125,11 @@ is exposed (3.2.4 onward).
 
 ## 3.5 Operational maturity
 
-- [ ] **3.5.1 DEBUG REPORT lower-severity cleanup (PG-003 to PG-016)**
+- [x] **3.5.1 DEBUG REPORT lower-severity cleanup (PG-003 to PG-016)**
   - **Deliverable:** address each non-Critical issue from `DEBUG REPORT.md` in a single sweep + delete DEBUG REPORT.md when done
   - **Acceptance:** each PG-XXX gets either a code fix OR a note in the commit message explaining why it's WONTFIX. Tests pass before and after. Final commit deletes DEBUG REPORT.md.
   - **Notes:** Heavy hitters: PG-009 (intraday/TV signals never reconciled to outcomes — touches 3.1.4), PG-011 (dashboard + TV webhook auth), PG-013 (implicit shorts).
+  - **Completed:** 2026-05-16 by milestone-builder · commit e333a19 (code fixes for PG-007/008/009/010/011/012/013/014/015/016; PG-003/004/005/006 documented as already-resolved; DEBUG REPORT.md deleted; 20 regression tests added; dashboard now 127.0.0.1-default; tv_webhook refuses to boot without secret)
 
 - [ ] **3.5.2 Backup & restore script**
   - **Deliverable:** `scripts/backup.py` + nightly schtask
