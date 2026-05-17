@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 DB_FILE = Path(__file__).resolve().parent / "trading.db"
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 def _utc_now_iso() -> str:
@@ -173,6 +173,7 @@ _DDL = [
         fill_price      REAL,
         status          TEXT,
         notes           TEXT,
+        pyramid_tier    INTEGER,
         FOREIGN KEY(signal_id) REFERENCES signals(id)
     )
     """,
@@ -273,12 +274,24 @@ _DDL = [
 ]
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent column-add migrations for existing DBs. CREATE TABLE
+    IF NOT EXISTS is a no-op when the table already exists, so any new
+    column needs explicit ALTER TABLE here."""
+    cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info(paper_trades)"
+    ).fetchall()}
+    if "pyramid_tier" not in cols:
+        conn.execute("ALTER TABLE paper_trades ADD COLUMN pyramid_tier INTEGER")
+
+
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Create all tables/indexes if absent. Returns an open connection."""
     conn = connect(db_path)
     with conn:
         for stmt in _DDL:
             conn.execute(stmt)
+        _ensure_columns(conn)
         conn.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
