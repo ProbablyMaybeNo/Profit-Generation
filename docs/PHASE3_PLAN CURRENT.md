@@ -156,9 +156,10 @@ is exposed (3.2.4 onward).
 
 ## 3.6 Live-vs-backtest feedback loop
 
-- [ ] **3.6.1 Slippage / fill-quality dashboard widget**
+- [x] **3.6.1 Slippage / fill-quality dashboard widget**
   - **Deliverable:** extends `edge_diff.py` (built in 2.2.5) with a dashboard card
   - **Acceptance:** per-strategy widget: "expected: +0.97%/trade · actual: +0.42%/trade · slippage burn: 56%". Sorted by burn-rate desc. Tests: synthetic fills with known slippage, math correctness.
+  - **Completed:** 2026-05-17 by milestone-builder · commit bd116a6 (compute_slippage_burn + /api/slippage_burn route + compact card; excludes losing-backtest baselines and no-pair rows; 12 tests covering spec-example, sort order, median, exclusions, endpoint, index.html card)
 
 - [ ] **3.6.2 Live-vs-backtest weekly divergence report**
   - **Deliverable:** `monitoring/live_vs_backtest.py` + Notion weekly post
