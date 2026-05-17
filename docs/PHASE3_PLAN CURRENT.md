@@ -81,10 +81,11 @@ is exposed (3.2.4 onward).
 
 ## 3.3 Strategy roster expansion
 
-- [ ] **3.3.1 Promote top-N validated strategies**
+- [x] **3.3.1 Promote top-N validated strategies**
   - **Deliverable:** `scripts/promote_top_strategies.py` (auto-mode) + report
   - **Acceptance:** scans records.jsonl for PASS verdicts not yet in `TRACKED_STRATEGIES`, ranks by walk-forward-stable Sharpe × universe coverage, promotes top 10 via existing `--promote` machinery, prints a report. Idempotent. Dry-run flag. Tests: ranking math, dedupe against already-active list.
   - **Notes:** Manual promotion is fine until we have ≥ 50 PASS records; this milestone is for when the validator backlog grows.
+  - **Completed:** 2026-05-16 by milestone-builder · commit f0c7a13 (22 tests; score = mean_sharpe × √n_instruments; live dry-run surfaces rsi2-oversold on GDX as the next promotion candidate)
 
 - [ ] **3.3.2 Intraday-bar strategy variants**
   - **Deliverable:** new `strategies/intraday/` module + 2-3 representative strategies running on 5-min and 15-min bars
