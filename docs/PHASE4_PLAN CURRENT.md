@@ -27,10 +27,11 @@ operational followups from Phase 3's concerns sit in 4.5.
 
 ## 4.1 Live transition (equity + crypto)
 
-- [ ] **4.1.1 Live-promotion scorer**
+- [x] **4.1.1 Live-promotion scorer**
   - **Deliverable:** `scripts/score_live_candidates.py` + `tests/test_score_live_candidates.py`
   - **Acceptance:** ranks every active strategy by paper-trading track record. Score = mean live return × √N × stable_sharpe. Flags any strategy with N≥50 closed paper outcomes AND Sharpe > 0.4 AND positive mean return as `READY_FOR_LIVE`. Output: a single sorted report to stdout AND Notion. Does NOT flip anything — only surfaces candidates. Tests: scoring math, threshold gating, dedupe against already-live strategies.
   - **Notes:** This is the tool Ross will use to *decide* which strategies graduate to `auto_trade.live_strategies` (3.1.5). Manual flip remains a deliberate human decision.
+  - **Completed:** 2026-05-17 by milestone-builder · commit ee26ae5
 
 - [ ] **4.1.2 Live-credentials onboarding wizard**
   - **Deliverable:** `scripts/setup_live_credentials.py` + idempotent flow
