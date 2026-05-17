@@ -97,9 +97,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** reads current regime from latest snapshots row (existing `regime` field from `classify_market_regime`). Each strategy in `TRACKED_STRATEGIES` declares `active_in_regimes=["bull","chop"]` etc. Auto-trader skips entries on strategies whose declared regimes don't include current. Tests: regime mismatch skips, missing-declaration defaults to all-regimes-active.
   - **Completed:** 2026-05-16 by milestone-builder · commit 8a8dd61 (router reads from daily_reports.market_regime — closer-to-truth than snapshots; opt-in gating via active_in_regimes; 23 tests; exits unaffected; SKIP_REGIME_MISMATCH action surfaced in process_signals result)
 
-- [ ] **3.3.4 Strategy auto-deactivation on live divergence**
+- [x] **3.3.4 Strategy auto-deactivation on live divergence**
   - **Deliverable:** `monitoring/strategy_health.py` extended with auto-pause logic
   - **Acceptance:** if a strategy's last 20 LIVE outcomes have mean return < 30% of its backtest mean, auto-write a `paused_strategies` entry. Auto-trader respects it. Re-arm after 30 days OR manual `--unpause`. Telegram alert on every pause/unpause. Tests: synthetic outcomes, pause/unpause cycle.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 5cd80c8 (new paused_strategies table, evaluate_live_divergence + auto_pause_check, SKIP_PAUSED_STRATEGY auto_trader action, --auto-pause / --unpause / --list-paused CLI, 28 tests covering full lifecycle)
 
 ---
 
