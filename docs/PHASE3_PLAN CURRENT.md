@@ -32,9 +32,10 @@ is exposed (3.2.4 onward).
   - **Notes:** Telegram cmd implementation can defer to 3.1.2 if the bot doesn't already accept commands; the file-based switch is the minimum.
   - **Completed:** 2026-05-16 by milestone-builder · commit 92a9e81 (file switch + dashboard banner shipped; Telegram /halt /resume deferred to 3.1.2)
 
-- [ ] **3.1.2 Telegram bot command listener**
+- [x] **3.1.2 Telegram bot command listener**
   - **Deliverable:** `monitoring/telegram_listener.py` (long-poll worker) + new schtask `\TradingSystem\TelegramListener` running it.
   - **Acceptance:** listens for `/halt <reason>`, `/resume`, `/status`, `/positions`, `/pnl` from the configured `chat_id`. Ignores messages from other chats. `/halt` writes kill_switch.json; `/status` returns one-line system health; `/positions` lists open paper positions from Alpaca; `/pnl` shows today's realized P&L. Tests: command parsing, auth check (wrong chat_id rejected).
+  - **Completed:** 2026-05-16 by milestone-builder · commit c2616c4 (offset-persisting long-poll loop + schedulers/register_telegram_listener.bat at /sc onstart)
 
 - [ ] **3.1.3 Pre-flight checklist script**
   - **Deliverable:** `scripts/preflight.py` + `tests/test_preflight.py`
