@@ -150,10 +150,11 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
   - **Notes:** Expected behavior: win rate 30-40%, but the avg winner is 5-10× the avg loser (classic Turtle profile). Long flat periods between trends are normal — don't pull a strategy that's underperforming for 60 days unless the divergence report (3.6.2) shows it's actually broken.
   - **Completed:** 2026-05-17 by milestone-builder · commit 02efecc · **Validator gate NOT YET RUN** — yfinance lives in the `trading` conda env, not the py-3.13 unit env. Ross must run `validate_strategy.py` for each of the three before adding any to `auto_trade.live_strategies`. They are paper-only until that gate clears.
 
-- [ ] **4.6.4 Trend / mean-reversion regime allocator**
+- [x] **4.6.4 Trend / mean-reversion regime allocator**
   - **Deliverable:** `monitoring/regime_router.py` extended with capital-allocation logic
   - **Acceptance:** the existing regime router only does on/off gating per strategy. Extend it to *allocate capital* between the two modes based on current regime: clear trend → 70% trend / 30% mean-reversion; chop → reverse; mixed → 50/50. Allocation expressed as multipliers applied on top of tiered sizing from 3.2.1. Tests: allocation math, regime transitions, default-50/50 fallback when classifier confidence < 0.6.
   - **Notes:** Together with 4.6.1-3, this is the piece that makes the system actually adaptive — capital flows automatically to whichever strategy class fits current conditions, instead of every strategy fighting for the same dollars.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 2cdd1ac
 
 ---
 
