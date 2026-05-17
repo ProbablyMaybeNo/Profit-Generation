@@ -12,7 +12,7 @@ The cache file (data/cache.db) is unrelated and stays separate.
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -219,6 +219,18 @@ _DDL = [
         value  TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS equity_snapshots (
+        recorded_at      TEXT NOT NULL,
+        portfolio_value  REAL NOT NULL,
+        cash             REAL,
+        equity           REAL,
+        buying_power     REAL,
+        source           TEXT,
+        PRIMARY KEY(recorded_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_equity_snapshots_at ON equity_snapshots(recorded_at)",
 ]
 
 
@@ -778,6 +790,53 @@ def list_strategies(
         f"SELECT * FROM strategies WHERE current_verdict IN ({placeholders}) ORDER BY strategy_id",
         tuple(verdicts),
     ).fetchall())
+
+
+def record_equity_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    portfolio_value: float,
+    cash: Optional[float] = None,
+    equity: Optional[float] = None,
+    buying_power: Optional[float] = None,
+    source: str = "auto_trader",
+    recorded_at: Optional[str] = None,
+) -> None:
+    """Append (or replace by timestamp) one equity snapshot row."""
+    ts = recorded_at or _utc_now_iso()
+    with conn:
+        conn.execute(
+            "INSERT INTO equity_snapshots(recorded_at, portfolio_value, cash, "
+            "  equity, buying_power, source) VALUES(?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(recorded_at) DO UPDATE SET "
+            "  portfolio_value=excluded.portfolio_value, "
+            "  cash=excluded.cash, equity=excluded.equity, "
+            "  buying_power=excluded.buying_power, source=excluded.source",
+            (ts, float(portfolio_value),
+             cash if cash is None else float(cash),
+             equity if equity is None else float(equity),
+             buying_power if buying_power is None else float(buying_power),
+             source),
+        )
+
+
+def trailing_peak_portfolio_value(
+    conn: sqlite3.Connection, *, window_days: int = 30,
+    asof: Optional[str] = None,
+) -> Optional[float]:
+    """Max portfolio_value across equity_snapshots rows in the last
+    `window_days`. Returns None when no rows exist in window."""
+    asof = asof or _utc_now_iso()
+    cutoff = (datetime.fromisoformat(asof.replace("Z", "+00:00"))
+               - timedelta(days=window_days)).isoformat(timespec="seconds")
+    row = conn.execute(
+        "SELECT MAX(portfolio_value) AS peak FROM equity_snapshots "
+        " WHERE recorded_at >= ? AND recorded_at <= ?",
+        (cutoff, asof),
+    ).fetchone()
+    if row is None or row["peak"] is None:
+        return None
+    return float(row["peak"])
 
 
 if __name__ == "__main__":

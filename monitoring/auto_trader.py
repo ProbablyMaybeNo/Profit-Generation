@@ -316,7 +316,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     sleep_fn=None, now_fn=None,
                     data_client=None,
                     portfolio_value: Optional[float] = None,
-                    bars_fetcher: Optional[Callable] = None) -> dict:
+                    bars_fetcher: Optional[Callable] = None,
+                    throttle_multiplier: float = 1.0) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
@@ -334,7 +335,9 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         max_position_usd=float(settings.get("max_position_usd", 1000)),
         settings_tiered=settings.get("tiered"),
     )
-    notional = sizing["notional"]
+    notional = sizing["notional"] * float(throttle_multiplier)
+    sizing["throttle_multiplier"] = float(throttle_multiplier)
+    sizing["notional_after_throttle"] = round(notional, 2)
     if notional <= 0:
         return {"action": "SKIP_SIZING_ZERO", "strategy_id": sid, "symbol": sym,
                 "sizing": sizing}
@@ -1117,9 +1120,14 @@ def process_signals(
         is not None or "max_pct_per_symbol" in settings
     has_drawdown_setting = (settings.get("risk") or {}).get(
         "max_daily_loss_pct") is not None
+    # Drawdown auto-throttle (3.2.2) is always-on once an account_summary_fn
+    # is wired: we want it monitoring even when the user hasn't opted into
+    # the other risk knobs.
+    throttle_always_on = account_summary_fn is not None or not dry_run
     portfolio_value: Optional[float] = None
     account_summary: Dict = {}
-    if needs_kelly or has_cap_setting or has_drawdown_setting:
+    if (needs_kelly or has_cap_setting or has_drawdown_setting
+            or throttle_always_on):
         fn = account_summary_fn or (
             (lambda: get_account_summary()) if not dry_run else None
         )
@@ -1135,10 +1143,47 @@ def process_signals(
 
     drawdown_block = _drawdown_circuit_breaker(settings, account_summary)
 
+    # Portfolio drawdown auto-throttle (3.2.2).
+    throttle_info = None
+    throttle_multiplier = 1.0
+    if portfolio_value is not None and portfolio_value > 0:
+        try:
+            db.record_equity_snapshot(
+                conn,
+                portfolio_value=portfolio_value,
+                cash=account_summary.get("cash") if account_summary else None,
+                equity=account_summary.get("equity") if account_summary else None,
+                buying_power=(account_summary.get("buying_power")
+                              if account_summary else None),
+                source="auto_trader",
+            )
+        except Exception as e:
+            log(f"equity snapshot insert failed: {e}", "WARNING")
+        from monitoring import drawdown_throttle as dt_mod
+        throttle_cfg = (settings.get("drawdown_throttle") or {})
+        peak = db.trailing_peak_portfolio_value(
+            conn,
+            window_days=int(dt_mod._coerce_settings(throttle_cfg)["window_days"]),
+        )
+        throttle_info = dt_mod.evaluate(
+            current_pv=portfolio_value, peak_pv=peak,
+            settings_throttle=throttle_cfg,
+        )
+        throttle_multiplier = float(throttle_info["multiplier"])
+        if throttle_info.get("trip_kill_switch"):
+            try:
+                dt_mod.maybe_engage_kill_switch(throttle_info)
+                log(f"DRAWDOWN_THROTTLE_HALT: {throttle_info['reason']}", "ERROR")
+            except Exception as e:
+                log(f"drawdown throttle: kill switch engage failed: {e}", "WARNING")
+
     concentration_blocks = _concentration_block_map(
         conn, settings, sigs, portfolio_value=portfolio_value,
     )
 
+    # Read the kill switch AFTER the throttle has had a chance to engage
+    # it for this run — that way a brutal in-session drawdown trips the
+    # switch and immediately halts further entries the same run.
     from monitoring import kill_switch as ks_mod
     kill_switch_state = ks_mod.load_state()
     kill_switch_engaged = bool(kill_switch_state.get("live_trading_halted"))
@@ -1248,6 +1293,7 @@ def process_signals(
                 data_client=data_client,
                 portfolio_value=portfolio_value,
                 bars_fetcher=bars_fetcher,
+                throttle_multiplier=throttle_multiplier,
             ))
         elif sig["signal_type"] == "long_exit":
             try:
@@ -1269,8 +1315,11 @@ def process_signals(
                 continue
             actions.append(_process_exit(conn, strategy_client, settings, sig, dry_run))
 
-    return {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
-            "actions": actions}
+    out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
+           "actions": actions}
+    if throttle_info is not None:
+        out["throttle"] = throttle_info
+    return out
 
 
 def main():
