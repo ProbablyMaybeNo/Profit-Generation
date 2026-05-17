@@ -652,3 +652,113 @@ def test_dry_run_with_limit_inside_spread_reports_limit_price(
     assert actions[0]["action"] == "DRY_BUY"
     assert actions[0]["order_type"] == "limit_inside_spread"
     assert actions[0]["limit_price"] == 100.0
+
+
+# ----- Kill switch (3.1.1) -----
+
+@pytest.fixture()
+def isolated_kill_switch(tmp_path, monkeypatch):
+    """Point monitoring.kill_switch.KILL_SWITCH_FILE at a tmp path so each
+    test starts from a clean off-state."""
+    from monitoring import kill_switch as ks
+    test_file = tmp_path / "kill_switch.json"
+    monkeypatch.setattr(ks, "KILL_SWITCH_FILE", test_file)
+    return test_file
+
+
+def test_kill_switch_off_does_not_block_entries(
+    isolated_db, winner_settings, isolated_kill_switch,
+):
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=winner_settings)
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "DRY_BUY"
+
+
+def test_kill_switch_engaged_halts_entry(
+    isolated_db, winner_settings, isolated_kill_switch,
+):
+    from monitoring import kill_switch as ks
+    ks.engage("manual halt for test")
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=winner_settings)
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert len(actions) == 1
+    assert actions[0]["action"] == "KILL_SWITCH_HALT"
+    assert actions[0]["reason"] == "manual halt for test"
+    assert actions[0]["symbol"] == "GDX"
+    # No paper_trades row written.
+    n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+    assert n == 0
+
+
+def test_kill_switch_does_not_block_exits(
+    isolated_db, winner_settings, isolated_kill_switch, stub_submit,
+):
+    """Exits MUST still flow when the kill switch is engaged — we want to
+    be able to close existing positions even while halted."""
+    from monitoring import kill_switch as ks
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    # First open a position with the switch off.
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    settings = {**winner_settings, "dry_run": False}
+    at.process_signals(conn, asof=date(2026, 5, 14),
+                       settings=settings, client=_mk_client())
+    # Now engage the switch and fire an exit.
+    ks.engage("halt before exit")
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-15", signal_type="long_exit",
+                     close=72.0, bar_interval="1d")
+    res2 = at.process_signals(conn, asof=date(2026, 5, 15),
+                               settings=settings, client=_mk_client())
+    sells = [a for a in res2["actions"] if a["strategy_id"] == "winner"]
+    assert len(sells) == 1
+    assert sells[0]["action"] == "SELL"
+
+
+def test_kill_switch_logs_once_per_run(
+    isolated_db, winner_settings, isolated_kill_switch, monkeypatch,
+):
+    """Even with multiple entry signals, KILL_SWITCH_HALT should log exactly once."""
+    from monitoring import kill_switch as ks
+    ks.engage("once-per-run test")
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    for sym in ("GDX", "KRE", "XLF"):
+        db.record_signal(conn, strategy_id="winner", symbol=sym,
+                         bar_ts="2026-05-14", signal_type="long_entry",
+                         close=70.0, bar_interval="1d")
+    log_calls = []
+    monkeypatch.setattr(at, "log", lambda msg, level="INFO": log_calls.append((level, msg)))
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=winner_settings)
+    halts = [a for a in res["actions"] if a["action"] == "KILL_SWITCH_HALT"]
+    assert len(halts) == 3  # one action per signal
+    halt_logs = [c for c in log_calls if "KILL_SWITCH_HALT" in c[1]]
+    assert len(halt_logs) == 1  # but only one log line
+
+
+def test_kill_switch_idempotent_re_run(
+    isolated_db, winner_settings, isolated_kill_switch,
+):
+    """Re-running the same asof with the switch engaged → same KILL_SWITCH_HALT
+    actions; nothing accumulates in paper_trades."""
+    from monitoring import kill_switch as ks
+    ks.engage("idempotency test")
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=70.0, bar_interval="1d")
+    for _ in range(3):
+        res = at.process_signals(conn, asof=date(2026, 5, 14),
+                                  settings=winner_settings)
+        actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+        assert actions[0]["action"] == "KILL_SWITCH_HALT"
+    n = conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+    assert n == 0

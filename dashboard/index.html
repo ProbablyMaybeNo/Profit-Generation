@@ -89,6 +89,27 @@
   .dot.closed{ background: var(--red);   box-shadow: 0 0 6px var(--red-dim); }
   .dot.warn  { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
 
+  /* Kill-switch banner — sits at the very top when engaged */
+  .kill-banner {
+    display: none;
+    background: var(--red);
+    color: #fff;
+    padding: 10px 14px;
+    margin: 0 0 14px 0;
+    border-radius: 2px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    box-shadow: 0 0 12px rgba(255, 68, 85, 0.45);
+  }
+  .kill-banner.engaged { display: block; }
+  .kill-banner .kb-title { display: block; font-size: 14px; margin-bottom: 4px; }
+  .kill-banner .kb-meta {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    font-size: 11.5px; font-weight: 400;
+  }
+  .kill-banner .kb-meta code { background: rgba(0,0,0,0.25); padding: 1px 6px; }
+
   /* Macro strip — sits between header and first card */
   .macro-strip {
     display: flex;
@@ -807,6 +828,16 @@
     </div>
   </header>
 
+  <!-- KILL SWITCH banner — only visible when live_trading_halted=true -->
+  <div class="kill-banner" id="kill-banner" role="alert">
+    <span class="kb-title">⛔ LIVE TRADING HALTED — auto-trader refusing all new entries</span>
+    <div class="kb-meta">
+      <span>reason: <code id="kb-reason">—</code></span>
+      <span>set at: <code id="kb-set-at">—</code></span>
+      <button id="kb-release" class="guide-btn" style="margin-left:auto;">release</button>
+    </div>
+  </div>
+
   <!-- MACRO strip — VIX / T10Y2Y / DXY -->
   <div class="macro-strip" id="macro-strip">
     <span class="empty">macro: loading…</span>
@@ -1341,6 +1372,41 @@ function renderHeader(s) {
   }
   document.getElementById('now').textContent = s.now ? s.now.replace('T', ' ') : '';
 }
+
+function renderKillSwitch(s) {
+  const banner = document.getElementById('kill-banner');
+  const ks = s.kill_switch || {};
+  if (!ks.live_trading_halted) {
+    banner.classList.remove('engaged');
+    return;
+  }
+  banner.classList.add('engaged');
+  document.getElementById('kb-reason').textContent = ks.reason || '(none)';
+  document.getElementById('kb-set-at').textContent = ks.set_at || '?';
+}
+
+async function releaseKillSwitch() {
+  if (!confirm('Release kill switch and resume new entries?')) return;
+  try {
+    const r = await fetch('/api/kill_switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'release' }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || ('http ' + r.status));
+    }
+    refresh();
+  } catch (e) {
+    alert('release failed: ' + e.message);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('kb-release');
+  if (btn) btn.addEventListener('click', releaseKillSwitch);
+});
 
 function macroValueClass(seriesId, value) {
   if (value === null || value === undefined) return '';
@@ -2046,6 +2112,7 @@ async function refresh() {
     if (!r.ok) throw new Error('http ' + r.status);
     const s = await r.json();
     renderHeader(s);
+    renderKillSwitch(s);
     renderMacro(s);
     renderTunnel(s);
     renderActionQueue(s);

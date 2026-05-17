@@ -389,6 +389,13 @@ def _state_paper_trades_today(conn) -> list:
     return [dict(r) for r in rows]
 
 
+def _state_kill_switch() -> dict:
+    """Read config/kill_switch.json. Always returns a well-formed dict,
+    even when the file is absent / malformed."""
+    from monitoring import kill_switch
+    return kill_switch.load_state()
+
+
 def _state_tunnel_url() -> dict:
     """Read data/tunnel_url.txt if present. Empty dict otherwise."""
     path = DATA_DIR / "tunnel_url.txt"
@@ -471,9 +478,38 @@ def state():
             "intraday_alerts_tail": _state_intraday_tail(),
             "macro": _state_macro_strip(),
             "tv_tunnel": _state_tunnel_url(),
+            "kill_switch": _state_kill_switch(),
         })
     finally:
         conn.close()
+
+
+@app.route("/api/kill_switch", methods=["POST"])
+def kill_switch_post():
+    """Engage or release the live-trading kill switch. Loopback only.
+
+    Body: {"action": "engage", "reason": "..."} or {"action": "release"}.
+    Returns the new state. Engaging is idempotent (re-engages with the new
+    reason / set_at); releasing is idempotent too.
+    """
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    try:
+        body = request.get_json(force=True, silent=False)
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return jsonify({"error": "expected JSON object"}), 400
+    action = (body.get("action") or "").lower().strip()
+    from monitoring import kill_switch as ks
+    if action == "engage":
+        reason = body.get("reason") or "(manual via dashboard)"
+        state = ks.engage(str(reason))
+    elif action == "release":
+        state = ks.release()
+    else:
+        return jsonify({"error": "action must be 'engage' or 'release'"}), 400
+    return jsonify({"ok": True, "kill_switch": state})
 
 
 @app.route("/api/auto_trade/toggle", methods=["POST"])

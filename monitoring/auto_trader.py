@@ -1092,12 +1092,35 @@ def process_signals(
         conn, settings, sigs, portfolio_value=portfolio_value,
     )
 
+    from monitoring import kill_switch as ks_mod
+    kill_switch_state = ks_mod.load_state()
+    kill_switch_engaged = bool(kill_switch_state.get("live_trading_halted"))
+    kill_switch_logged = False
+
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
     sentiment_cache: Dict[str, Optional[dict]] = {}
     for sig in sigs:
         if sig["signal_type"] == "long_entry":
+            if kill_switch_engaged:
+                if not kill_switch_logged:
+                    log(
+                        "KILL_SWITCH_HALT: refusing all entries — "
+                        f"reason={kill_switch_state.get('reason') or '(none)'} "
+                        f"set_at={kill_switch_state.get('set_at') or '?'}",
+                        "WARNING",
+                    )
+                    kill_switch_logged = True
+                actions.append({
+                    "action": "KILL_SWITCH_HALT",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "reason": kill_switch_state.get("reason") or "",
+                    "set_at": kill_switch_state.get("set_at") or "",
+                })
+                continue
             if drawdown_block is not None:
                 actions.append({
                     "action": "SKIP_DAILY_DRAWDOWN",
