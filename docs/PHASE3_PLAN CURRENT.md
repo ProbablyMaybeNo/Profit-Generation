@@ -161,9 +161,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** per-strategy widget: "expected: +0.97%/trade · actual: +0.42%/trade · slippage burn: 56%". Sorted by burn-rate desc. Tests: synthetic fills with known slippage, math correctness.
   - **Completed:** 2026-05-17 by milestone-builder · commit bd116a6 (compute_slippage_burn + /api/slippage_burn route + compact card; excludes losing-backtest baselines and no-pair rows; 12 tests covering spec-example, sort order, median, exclusions, endpoint, index.html card)
 
-- [ ] **3.6.2 Live-vs-backtest weekly divergence report**
+- [x] **3.6.2 Live-vs-backtest weekly divergence report**
   - **Deliverable:** `monitoring/live_vs_backtest.py` + Notion weekly post
   - **Acceptance:** every Sunday, computes per-strategy mean return for the LIVE outcomes of the past week vs the same strategy's backtest mean. Flags any strategy where live < 50% of backtest as ⚠️. Posts to Notion. Tests: aggregation math, edge case (strategy with no live trades this week).
+  - **Completed:** 2026-05-17 by milestone-builder · commit 86386be (compute_divergence with warn/watch/ok/info bands at 0.5 / 0.8 thresholds; live = outcomes backed by paper_trades BUY rows; Sunday schtask now runs weekly_digest + live_vs_backtest in sequence; 17 tests; both Notion posts share the daily-reports DB with distinct tags)
 
 - [ ] **3.6.3 Fill-time / latency tracking**
   - **Deliverable:** auto_trader records `submitted_at` and `filled_at` in `paper_trades` (columns exist) and dashboard surfaces the delta
