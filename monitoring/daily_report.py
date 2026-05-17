@@ -285,6 +285,17 @@ def render_markdown(report: DailyReport) -> str:
         )
     lines.append("")
 
+    # Position reconciliation: spliced in if the latest reconcile run
+    # left a snapshot file. Silent no-op when the file is absent.
+    try:
+        from monitoring import reconcile_positions
+        rec = reconcile_positions.load_snapshot()
+        if rec is not None:
+            lines.append(reconcile_positions.format_section(rec))
+            lines.append("")
+    except Exception:
+        pass
+
     lines.append("## Notes for future Claude")
     lines.append("_Patterns to watch, hypotheses, anything that should surface during tomorrow's startup ritual._")
     lines.append("")
