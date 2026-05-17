@@ -1,0 +1,13 @@
+{
+  "_readme": "Multi-account capital allocation registry. Each entry maps to a credentials section. capital_pct across enabled accounts must sum to 100. live_strategies on a live account routes ONLY those strategy_ids to that account; everything else stays on the paper account(s). Adding a live account requires the matching credentials section in credentials.json (e.g. alpaca_live).",
+  "accounts": [
+    {
+      "id":                  "paper-main",
+      "type":                "paper",
+      "credentials_section": "alpaca",
+      "capital_pct":         100.0,
+      "live_strategies":     [],
+      "enabled":             true
+    }
+  ]
+}
