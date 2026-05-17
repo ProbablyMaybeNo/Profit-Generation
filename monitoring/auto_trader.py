@@ -1227,6 +1227,12 @@ def process_signals(
         conn, settings, sigs, portfolio_value=portfolio_value,
     )
 
+    # Regime-aware strategy rotation (3.3.3). One lookup per pipeline run.
+    from monitoring import regime_router as rr_mod
+    from monitoring.config import TRACKED_STRATEGIES as _TRACKED
+    current_regime = rr_mod.latest_regime(conn)
+    regime_tracked = _TRACKED  # captured for tests via monkeypatch
+
     # Concurrent open-position cap by strategy (3.2.3).
     max_open_per_strategy = _coerce_max_open_per_strategy(
         (settings.get("risk") or {}).get("max_open_per_strategy",
@@ -1324,6 +1330,20 @@ def process_signals(
             if block is not None:
                 actions.append(block)
                 continue
+            regime_skip_info = rr_mod.regime_skip(
+                sig["strategy_id"],
+                regime=current_regime,
+                tracked_strategies=regime_tracked,
+            )
+            if regime_skip_info is not None:
+                actions.append({
+                    "action": "SKIP_REGIME_MISMATCH",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    **regime_skip_info,
+                })
+                continue
             if max_open_per_strategy > 0:
                 cur_open = open_per_strategy.get(sig["strategy_id"], 0)
                 if cur_open >= max_open_per_strategy:
@@ -1392,7 +1412,7 @@ def process_signals(
             actions.append(_process_exit(conn, strategy_client, settings, sig, dry_run))
 
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
-           "actions": actions}
+           "actions": actions, "market_regime": current_regime}
     if throttle_info is not None:
         out["throttle"] = throttle_info
     return out
