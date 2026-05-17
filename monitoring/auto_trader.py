@@ -516,6 +516,52 @@ def _process_exit(conn, client, settings: dict, sig, dry_run: bool) -> dict:
 
 
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
+DEFAULT_MAX_OPEN_PER_STRATEGY = 3
+
+
+def _coerce_max_open_per_strategy(raw) -> int:
+    """Cap value coerced from settings.risk.max_open_per_strategy.
+    Zero or negative disables the cap (returns 0 → unbounded)."""
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_OPEN_PER_STRATEGY
+    if v < 0:
+        return 0
+    return v
+
+
+def _open_position_count_per_strategy(conn) -> Dict[str, int]:
+    """Return {strategy_id: open_qty_position_count}. An "open" position
+    is a BUY whose later SELL hasn't filled (excluding canceled/rejected).
+    Counts per-(strategy, symbol) so two BUYs on the same symbol from
+    different strategies are tracked separately, but two BUYs on the same
+    (strategy, symbol) only count once."""
+    rows = conn.execute(
+        "SELECT DISTINCT strategy_id, symbol FROM paper_trades "
+        " WHERE side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') ",
+    ).fetchall()
+    out: Dict[str, int] = {}
+    for r in rows:
+        sid, sym = r["strategy_id"], r["symbol"]
+        if sid is None or sym is None:
+            continue
+        # Filter out (sid, sym) pairs that have a later SELL.
+        later_sell = conn.execute(
+            "SELECT 1 FROM paper_trades pt1 "
+            " WHERE pt1.strategy_id=? AND pt1.symbol=? AND pt1.side='sell' "
+            "   AND pt1.status NOT IN ('canceled', 'rejected') "
+            "   AND pt1.submitted_at > ("
+            "     SELECT MAX(submitted_at) FROM paper_trades "
+            "      WHERE strategy_id=? AND symbol=? AND side='buy' "
+            "        AND status NOT IN ('canceled', 'rejected')) LIMIT 1",
+            (sid, sym, sid, sym),
+        ).fetchone()
+        if later_sell is not None:
+            continue
+        out[sid] = out.get(sid, 0) + 1
+    return out
 
 
 def _coerce_max_daily_loss_pct(raw) -> Optional[float]:
@@ -1181,6 +1227,14 @@ def process_signals(
         conn, settings, sigs, portfolio_value=portfolio_value,
     )
 
+    # Concurrent open-position cap by strategy (3.2.3).
+    max_open_per_strategy = _coerce_max_open_per_strategy(
+        (settings.get("risk") or {}).get("max_open_per_strategy",
+                                          DEFAULT_MAX_OPEN_PER_STRATEGY),
+    )
+    open_per_strategy = (_open_position_count_per_strategy(conn)
+                         if max_open_per_strategy > 0 else {})
+
     # Read the kill switch AFTER the throttle has had a chance to engage
     # it for this run — that way a brutal in-session drawdown trips the
     # switch and immediately halts further entries the same run.
@@ -1270,6 +1324,22 @@ def process_signals(
             if block is not None:
                 actions.append(block)
                 continue
+            if max_open_per_strategy > 0:
+                cur_open = open_per_strategy.get(sig["strategy_id"], 0)
+                if cur_open >= max_open_per_strategy:
+                    actions.append({
+                        "action": "SKIP_MAX_OPEN_PER_STRATEGY",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sig["symbol"],
+                        "signal_id": sig["id"],
+                        "open_count": cur_open,
+                        "cap": max_open_per_strategy,
+                        "reason": (
+                            f"strategy already has {cur_open} open "
+                            f"position(s) (cap={max_open_per_strategy})"
+                        ),
+                    })
+                    continue
             try:
                 strategy_client = _resolve_strategy_client(
                     sig["strategy_id"],
@@ -1287,14 +1357,20 @@ def process_signals(
                     "reason": str(e),
                 })
                 continue
-            actions.append(_process_entry(
+            entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
                 data_client=data_client,
                 portfolio_value=portfolio_value,
                 bars_fetcher=bars_fetcher,
                 throttle_multiplier=throttle_multiplier,
-            ))
+            )
+            actions.append(entry_action)
+            if (max_open_per_strategy > 0
+                    and entry_action.get("action") in ("BUY", "DRY_BUY")):
+                open_per_strategy[sig["strategy_id"]] = (
+                    open_per_strategy.get(sig["strategy_id"], 0) + 1
+                )
         elif sig["signal_type"] == "long_exit":
             try:
                 strategy_client = _resolve_strategy_client(
