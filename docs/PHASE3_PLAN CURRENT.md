@@ -92,9 +92,10 @@ is exposed (3.2.4 onward).
   - **Acceptance:** existing mean-reversion logic ports to intraday bars where Polygon data is available. Validator runs the same PASS/FAIL pipeline on intraday outcomes. Signals tagged with `bar_interval="5m"` or `"15m"` in the signals table. Tests: bar-loading on intraday TF, signal-shape parity with EOD path.
   - **Completed:** 2026-05-16 by milestone-builder · commit 83d3e5b (3 variants — 5-bar-low, 3-bar-low, consec-bearish; validator `--interval` flag; 16 tests covering shape parity, validator propagation, intraday source defaults)
 
-- [ ] **3.3.3 Regime-aware strategy rotation**
+- [x] **3.3.3 Regime-aware strategy rotation**
   - **Deliverable:** `monitoring/regime_router.py` + auto_trader consults it
   - **Acceptance:** reads current regime from latest snapshots row (existing `regime` field from `classify_market_regime`). Each strategy in `TRACKED_STRATEGIES` declares `active_in_regimes=["bull","chop"]` etc. Auto-trader skips entries on strategies whose declared regimes don't include current. Tests: regime mismatch skips, missing-declaration defaults to all-regimes-active.
+  - **Completed:** 2026-05-16 by milestone-builder · commit 8a8dd61 (router reads from daily_reports.market_regime — closer-to-truth than snapshots; opt-in gating via active_in_regimes; 23 tests; exits unaffected; SKIP_REGIME_MISMATCH action surfaced in process_signals result)
 
 - [ ] **3.3.4 Strategy auto-deactivation on live divergence**
   - **Deliverable:** `monitoring/strategy_health.py` extended with auto-pause logic
