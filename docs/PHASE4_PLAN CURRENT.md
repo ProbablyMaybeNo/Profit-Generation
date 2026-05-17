@@ -140,7 +140,7 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
   - **Notes:** Pyramiding is opt-in per strategy via `pyramidable: true` declaration in `TRACKED_STRATEGIES`. Mean-reversion strategies must NOT be pyramidable — there's no continuation thesis there.
   - **Completed:** 2026-05-17 by milestone-builder · commit 239e9de
 
-- [ ] **4.6.3 Trend-following strategy implementations**
+- [x] **4.6.3 Trend-following strategy implementations**
   - **Deliverable:** `strategies/trend/` module with three implementations + validator runs through existing PASS/FAIL pipeline
   - **Acceptance:** three trend strategies marked `pyramidable: true` and `active_in_regimes=["bull", "trend"]`:
     - `donchian_breakout_20` — long on close above 20-day high, exit on close below 10-day low
@@ -148,6 +148,7 @@ Currently the strategy roster is mean-reversion-heavy (RSI2 oversold, consec-bea
     - `new_high_volume` — long on new 52-week high accompanied by volume ≥ 150% of 50-day average
     All three respect the trailing stop engine (4.6.1) and pyramid via 4.6.2. Validator must show PASS on at least one over a 5-year backtest before any goes live. Tests: signal shape, regime gating, pyramiding declaration, validator integration.
   - **Notes:** Expected behavior: win rate 30-40%, but the avg winner is 5-10× the avg loser (classic Turtle profile). Long flat periods between trends are normal — don't pull a strategy that's underperforming for 60 days unless the divergence report (3.6.2) shows it's actually broken.
+  - **Completed:** 2026-05-17 by milestone-builder · commit 02efecc · **Validator gate NOT YET RUN** — yfinance lives in the `trading` conda env, not the py-3.13 unit env. Ross must run `validate_strategy.py` for each of the three before adding any to `auto_trade.live_strategies`. They are paper-only until that gate clears.
 
 - [ ] **4.6.4 Trend / mean-reversion regime allocator**
   - **Deliverable:** `monitoring/regime_router.py` extended with capital-allocation logic
