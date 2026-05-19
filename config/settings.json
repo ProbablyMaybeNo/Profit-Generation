@@ -24,6 +24,8 @@
     "min_sharpe_ish": 0.1,
     "max_position_usd": 1000,
     "skip_intraday_signals": true,
+    "intraday_enabled": false,
+    "intraday_intervals": ["15m"],
     "cool_down_losers": 3,
     "cool_down_days": 5,
     "earnings_veto_days": 2,
@@ -31,7 +33,8 @@
     "negative_sentiment_threshold": 2,
     "negative_sentiment_window_hours": 24,
     "live_strategies": [],
-    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable. Negative-sentiment veto: when veto_negative_sentiment=true, skip entries on symbols with >= negative_sentiment_threshold negative-sentiment news items in the last negative_sentiment_window_hours hours (requires news.sentiment populated by news_fetcher). Live-strategies routing: each strategy_id listed in live_strategies submits to a separate `alpaca_live` credentials section (paper=false). Empty list (default) keeps every strategy on paper. Adding a strategy here requires an alpaca_live section in credentials.json — without it, those signals SKIP_LIVE_CREDS_MISSING and never submit."
+    "grace_period_size_multiplier": 0.25,
+    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Strategies with `grace_period: true` in their TRACKED_STRATEGIES declaration bypass the min_outcomes gate while they accumulate data, and their max_position_usd is reduced by grace_period_size_multiplier (default 0.25 → quarter size). Once n >= min_outcomes the strategy graduates and normal thresholds apply. Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable. Negative-sentiment veto: when veto_negative_sentiment=true, skip entries on symbols with >= negative_sentiment_threshold negative-sentiment news items in the last negative_sentiment_window_hours hours (requires news.sentiment populated by news_fetcher). Live-strategies routing: each strategy_id listed in live_strategies submits to a separate `alpaca_live` credentials section (paper=false). Empty list (default) keeps every strategy on paper. Adding a strategy here requires an alpaca_live section in credentials.json — without it, those signals SKIP_LIVE_CREDS_MISSING and never submit. Intraday master switch (5.2.3): intraday_enabled=false → auto_trader_intraday.process_intraday short-circuits with DISABLED_INTRADAY; intraday_fires still records signals (observe-only). intraday_enabled=true → intraday signals at each interval in intraday_intervals (default ['15m']) are processed through the same eligibility/sizing/regime pipeline as EOD signals."
   },
   "notes": "These are non-secret settings. Edit freely."
 }
