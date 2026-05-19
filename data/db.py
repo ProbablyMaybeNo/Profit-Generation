@@ -271,6 +271,17 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_trailing_stops_symbol "
     "ON trailing_stops(symbol)",
+    """
+    CREATE TABLE IF NOT EXISTS liquidity_snapshots (
+        symbol                  TEXT PRIMARY KEY,
+        as_of_date              TEXT NOT NULL,
+        avg_dollar_volume_20d   REAL NOT NULL,
+        last_close              REAL,
+        updated_at              TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_liquidity_snapshots_date "
+    "ON liquidity_snapshots(as_of_date)",
 ]
 
 
@@ -889,6 +900,70 @@ def trailing_peak_portfolio_value(
     if row is None or row["peak"] is None:
         return None
     return float(row["peak"])
+
+
+def upsert_liquidity_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    symbol: str,
+    as_of_date: str,
+    avg_dollar_volume_20d: float,
+    last_close: Optional[float] = None,
+) -> None:
+    """Insert / replace a per-symbol liquidity snapshot (5.5.2.1)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO liquidity_snapshots(symbol, as_of_date, "
+            "  avg_dollar_volume_20d, last_close, updated_at) "
+            "VALUES(?, ?, ?, ?, ?) "
+            "ON CONFLICT(symbol) DO UPDATE SET "
+            "  as_of_date=excluded.as_of_date, "
+            "  avg_dollar_volume_20d=excluded.avg_dollar_volume_20d, "
+            "  last_close=excluded.last_close, "
+            "  updated_at=excluded.updated_at",
+            (
+                symbol.upper(),
+                as_of_date,
+                float(avg_dollar_volume_20d),
+                None if last_close is None else float(last_close),
+                _utc_now_iso(),
+            ),
+        )
+
+
+def get_liquidity_snapshots(
+    conn: sqlite3.Connection,
+    symbols: Optional[Iterable[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return {symbol: {as_of_date, avg_dollar_volume_20d, last_close, updated_at}}.
+
+    If `symbols` is None, returns the full table.
+    """
+    if symbols is None:
+        rows = conn.execute(
+            "SELECT symbol, as_of_date, avg_dollar_volume_20d, last_close, "
+            "       updated_at FROM liquidity_snapshots"
+        ).fetchall()
+    else:
+        upper = [s.upper() for s in symbols]
+        if not upper:
+            return {}
+        placeholders = ",".join(["?"] * len(upper))
+        rows = conn.execute(
+            f"SELECT symbol, as_of_date, avg_dollar_volume_20d, last_close, "
+            f"       updated_at FROM liquidity_snapshots "
+            f" WHERE symbol IN ({placeholders})",
+            upper,
+        ).fetchall()
+    return {
+        row["symbol"]: {
+            "as_of_date": row["as_of_date"],
+            "avg_dollar_volume_20d": row["avg_dollar_volume_20d"],
+            "last_close": row["last_close"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    }
 
 
 if __name__ == "__main__":
