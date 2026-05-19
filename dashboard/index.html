@@ -1027,6 +1027,12 @@
     <div id="paper-trades" class="loading">loading...</div>
   </div>
 
+  <!-- Intraday signals today (5.6.1) -->
+  <div class="card" id="intraday-signals-card">
+    <h2>intraday signals today <span class="count" id="intra-sig-count"></span></h2>
+    <div id="intraday-signals" class="loading">loading...</div>
+  </div>
+
   <!-- Bottom row: signals + news -->
   <div class="row two">
     <div class="card">
@@ -2260,7 +2266,7 @@ function renderPaperTrades(s) {
     return;
   }
   let h = '<table><thead><tr>' +
-    '<th>time</th><th>side</th><th>strategy</th><th>symbol</th>' +
+    '<th>time</th><th>order type</th><th>side</th><th>strategy</th><th>symbol</th>' +
     '<th class="num">qty</th><th class="num">fill price</th>' +
     '<th>status</th><th>order id</th>' +
     '</tr></thead><tbody>';
@@ -2272,8 +2278,14 @@ function renderPaperTrades(s) {
     const statusCls = (r.status === 'filled' || r.status === 'accepted') ? 'pos'
                     : (r.status === 'rejected' || r.status === 'canceled') ? 'neg'
                     : 'neutral';
-    h += `<tr>
+    // 5.6.2 — INTRADAY (interval) vs EOD (1d) tag, sortable by source.
+    const interval = r.bar_interval || '1d';
+    const isIntraday = interval !== '1d';
+    const orderType = isIntraday ? `INTRADAY (${escapeHtml(interval)})` : 'EOD (1d)';
+    const orderTypeCls = isIntraday ? 'interval-tag intraday' : 'interval-tag';
+    h += `<tr data-bar-interval="${escapeHtml(interval)}">
       <td class="dim">${escapeHtml(t)}</td>
+      <td><span class="${orderTypeCls}">${orderType}</span></td>
       <td class="${sideCls}"><strong>${sideUp}</strong></td>
       <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
       <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
@@ -2281,6 +2293,40 @@ function renderPaperTrades(s) {
       <td class="num">${fmt$(r.fill_price)}</td>
       <td class="${statusCls}">${escapeHtml(r.status || '?')}</td>
       <td class="dim" title="${escapeHtml(r.alpaca_order_id || '')}">${escapeHtml(oid)}</td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  el.innerHTML = h;
+}
+
+function renderIntradaySignals(s) {
+  // 5.6.1 — Intraday signals fired today (5m / 15m / 1h).
+  const el = document.getElementById('intraday-signals');
+  if (!el) return;
+  const rows = s.intraday_signals_today || [];
+  const cnt = document.getElementById('intra-sig-count');
+  if (cnt) cnt.textContent = `${rows.length} today`;
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty">no intraday signals today.</div>';
+    return;
+  }
+  let h = '<table><thead><tr>' +
+    '<th>time</th><th>interval</th><th>strategy</th>' +
+    '<th>symbol</th><th>type</th><th class="num">close</th>' +
+    '</tr></thead><tbody>';
+  for (const r of rows) {
+    const tcls = r.signal_type === 'long_entry' ? 'entry' : 'exit';
+    const tlabel = r.signal_type === 'long_entry' ? 'ENTRY' : 'EXIT';
+    // bar_ts on intraday is full ISO; show HH:MM.
+    const bt = (r.bar_ts || '');
+    const t = bt.length > 16 ? bt.slice(11, 16) : ((r.ts || '').slice(11, 19) || '—');
+    h += `<tr>
+      <td class="dim">${escapeHtml(t)}</td>
+      <td><span class="interval-tag intraday">${escapeHtml(r.bar_interval)}</span></td>
+      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
+      <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
+      <td class="${tcls}">${tlabel}</td>
+      <td class="num">${fmt$(r.close)}</td>
     </tr>`;
   }
   h += '</tbody></table>';
@@ -2360,6 +2406,7 @@ async function refresh() {
       () => renderNewsSentimentOverlay(),
       () => renderOpenPositions(s),
       () => renderPaperTrades(s),
+      () => renderIntradaySignals(s),
       () => renderSignals(s),
       () => renderNews(s),
     ];

@@ -249,6 +249,26 @@ def _state_today_signals(conn, *, limit: int = 30) -> list:
     return [dict(r) for r in rows]
 
 
+def _state_intraday_signals_today(conn, *, limit: int = 20) -> list:
+    """5.6.1 — Last N intraday signals fired today.
+
+    "Intraday" = signals.bar_interval IN ('5m','15m','1h') (everything
+    except '1d'). bar_ts on intraday signals carries the full ISO
+    timestamp ('2026-05-14T14:30:00'); we filter on substr(bar_ts,1,10).
+    """
+    today = _today_iso()
+    rows = conn.execute(
+        "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, "
+        "       signal_type, close "
+        "  FROM signals "
+        " WHERE substr(bar_ts, 1, 10) = ? "
+        "   AND COALESCE(bar_interval, '1d') != '1d' "
+        " ORDER BY ts DESC, id DESC LIMIT ?",
+        (today, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _state_recent_news(conn, *, limit: int = 15) -> list:
     rows = conn.execute(
         "SELECT id, published_utc, symbol, publisher, title, url "
@@ -443,13 +463,22 @@ def _is_loopback_request() -> bool:
 
 
 def _state_paper_trades_today(conn) -> list:
-    """Today's submitted paper orders (any status, any side)."""
+    """Today's submitted paper orders (any status, any side).
+
+    5.6.2 — Joins through signals to surface the originating
+    `bar_interval` so the dashboard can tag each row as INTRADAY (15m/5m)
+    vs EOD (1d). Defaults to '1d' for trades whose signal_id can't be
+    resolved (e.g. manual or legacy rows).
+    """
     rows = conn.execute(
-        "SELECT id, alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
-        "       order_type, submitted_at, filled_at, fill_price, status, notes "
-        "  FROM paper_trades "
-        " WHERE DATE(submitted_at) = DATE(?) "
-        " ORDER BY submitted_at DESC, id DESC",
+        "SELECT pt.id, pt.alpaca_order_id, pt.signal_id, pt.strategy_id, "
+        "       pt.symbol, pt.side, pt.qty, pt.order_type, pt.submitted_at, "
+        "       pt.filled_at, pt.fill_price, pt.status, pt.notes, "
+        "       COALESCE(s.bar_interval, '1d') AS bar_interval "
+        "  FROM paper_trades pt "
+        "  LEFT JOIN signals s ON s.id = pt.signal_id "
+        " WHERE DATE(pt.submitted_at) = DATE(?) "
+        " ORDER BY pt.submitted_at DESC, pt.id DESC",
         (_today_iso(),),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -581,6 +610,7 @@ def state():
             "strategy_edge_pending": _state_tracked_pending(conn),
             "open_positions": _state_open_positions(conn),
             "today_signals": _state_today_signals(conn),
+            "intraday_signals_today": _state_intraday_signals_today(conn),
             "recent_news": _state_recent_news(conn),
             "paper_trades_today": _state_paper_trades_today(conn),
             "auto_trade_settings": _read_auto_trade_settings(),
