@@ -126,10 +126,11 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
 
 ## 5.5.5 Scheduler wiring
 
-- [ ] **5.5.5.1 EOD scanner trigger**
+- [x] **5.5.5.1 EOD scanner trigger**
   - **Deliverable:** `schedulers/run_daily.bat` extended; new schtask step
   - **Acceptance:** the existing 14:30 PT DailyReport schtask, AFTER `monitoring.daily_report` runs (which handles the normal narrow universe), invokes `monitoring.trend_scanner` to scan the wide universe. New trend signals get processed by `auto_trader` in the same pipeline run. Tests: full sequence, exit-code propagation, failure isolation (scanner failure doesn't poison daily report).
   - **Notes:** The scanner is conditional on `auto_trade.trend_scanner_enabled` (default `false`). Same observe-only-first pattern as intraday — code is built, master flag flipped after first-day playbook walkthrough.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 89ac532 · wired inside daily_report.main() so run_daily.bat needs no change; maybe_run_trend_scanner() is the test seam.
 
 ---
 
