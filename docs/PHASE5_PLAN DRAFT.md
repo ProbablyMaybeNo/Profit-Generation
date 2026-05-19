@@ -78,26 +78,30 @@ Currently `auto_trader.process_signals()` hardcodes `bar_interval='1d'` in its s
   - **Acceptance:** when invoked, walks today's unprocessed intraday signals (filtered by `auto_trade.intraday_intervals` setting, default `["15m"]`) and processes each through `process_signals(bar_interval=...)`. Records paper trades the same way as the EOD path. Tests: end-to-end synthetic intraday signal → paper order, intraday-disabled config blocks processing.
   - **Completed:** 2026-05-18 by milestone-builder · commit 6c23aaa
 
-- [ ] **5.2.3 Flip `skip_intraday_signals` to false (per setting)**
+- [x] **5.2.3 Flip `skip_intraday_signals` to false (per setting)**
   - **Deliverable:** `config/settings.json` `auto_trade` block extended with `intraday_enabled: false` (default off — safety) and `intraday_intervals: ["15m"]`
   - **Acceptance:** auto_trader_intraday only fires when `intraday_enabled=true`. When false (default), the intraday scan still records signals but no paper orders are submitted — same observe-only pattern as Phase 2 had. Tests: enabled / disabled gating.
   - **Notes:** This is the master kill-switch for intraday trading at the config level. Ross flips it on once the rest of Phase 5 is shipped and validated.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 7288f7c
 
 ---
 
 ## 5.3 Intraday strategy roster
 
-- [ ] **5.3.1 Promote `mean_reversion_intraday` to TRACKED_STRATEGIES**
+- [x] **5.3.1 Promote `mean_reversion_intraday` to TRACKED_STRATEGIES**
   - **Deliverable:** `monitoring/config.py` extended with the intraday MR strategy declaration; INSERT into `strategies` table
   - **Acceptance:** declaration uses `bar_interval: "15m"`, `active_on: ["SPY", "QQQ", "IWM"]`, `grace_period: true`, `pyramidable: false` (MR shouldn't pyramid). Strategy fires via 5.1.2 on 15-min bars during market hours. Tests: declaration shape, signal generation against a known intraday bar fixture.
+  - **Completed:** 2026-05-19 by milestone-builder · commit e8805b1
 
-- [ ] **5.3.2 Promote `orbo` (Opening-Range Breakout) to TRACKED_STRATEGIES**
+- [x] **5.3.2 Promote `orbo` (Opening-Range Breakout) to TRACKED_STRATEGIES**
   - **Deliverable:** `monitoring/config.py` + INSERT
   - **Acceptance:** ORBO declares `bar_interval: "5m"`, `active_in_window: ["09:35-10:30 ET"]` (only fires during the opening hour), `active_on: ["SPY", "QQQ", "IWM", "NVDA", "TSLA"]`, `grace_period: true`. New `active_in_window` filter in `intraday_fires` skips signals outside the window. Tests: time-window filter, ORB high/low computation correctness.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 3efb112
 
-- [ ] **5.3.3 Promote `orb_pivots` to TRACKED_STRATEGIES**
+- [x] **5.3.3 Promote `orb_pivots` to TRACKED_STRATEGIES**
   - **Deliverable:** declaration + INSERT
   - **Acceptance:** same shape as 5.3.2 but with pivot-level confirmation. Tests as above.
+  - **Completed:** 2026-05-19 by milestone-builder · commit fb77859
 
 ---
 
@@ -105,46 +109,54 @@ Currently `auto_trader.process_signals()` hardcodes `bar_interval='1d'` in its s
 
 Critical safety: live capital accounts under $25k can only execute 3 round-trip day trades per rolling 5-day window. Alpaca paper has no limit, but if any intraday strategy goes live we need the guard built and tested first.
 
-- [ ] **5.4.1 PDT counter + guard**
+- [x] **5.4.1 PDT counter + guard**
   - **Deliverable:** `monitoring/pdt_guard.py` + `auto_trader.py` integration
   - **Acceptance:** tracks closed round-trips per trading day from `paper_trades` table. On any new intraday entry, checks `count_round_trips_last_5_days(account_value)` — if account < $25k AND count >= 3, refuses the trade with `SKIP_PDT_GUARD`. Paper accounts (>= $25k always since 100k start) effectively never trigger but the guard is still computed. Tests: counter math, threshold gating, paper-bypass case, edge case of account exactly at $25k.
+  - **Completed:** 2026-05-19 by milestone-builder · commit f7a39a8
 
-- [ ] **5.4.2 PDT dashboard surface**
+- [x] **5.4.2 PDT dashboard surface**
   - **Deliverable:** dashboard Monitor card extended with PDT day-trade counter
   - **Acceptance:** shows "Day trades today: N/3" and "5-day rolling: N/3" (where the "3" is the live restriction, paper shows the same numbers but with a "paper unlimited" subtitle). Tests: counter render.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 3a303ca
 
 ---
 
 ## 5.5 Intraday-specific risk controls
 
-- [ ] **5.5.1 Intraday sizing tier**
+- [x] **5.5.1 Intraday sizing tier**
   - **Deliverable:** `monitoring/sizing.py` extended with `intraday_size_multiplier` (default 0.5 of equivalent EOD size)
   - **Acceptance:** intraday entries are sized at half the EOD-equivalent. Higher turnover means more slippage exposure; the multiplier compensates. Configurable per-strategy via `intraday_size_multiplier` override on the declaration. Tests: math, override path.
+  - **Completed:** 2026-05-19 by milestone-builder · commit ea1c893
 
-- [ ] **5.5.2 Same-day round-trip cap per symbol**
+- [x] **5.5.2 Same-day round-trip cap per symbol**
   - **Deliverable:** `auto_trader.py` extended with `max_intraday_round_trips_per_symbol` setting (default 2)
   - **Acceptance:** when a symbol has already been round-tripped N times today on intraday signals, additional intraday entries on that symbol skip with `SKIP_INTRADAY_SYMBOL_CAP`. EOD signals on the same symbol are unaffected. Tests: per-symbol counter, daily reset, EOD-not-affected.
+  - **Completed:** 2026-05-19 by milestone-builder · commit afea761
 
-- [ ] **5.5.3 Intraday EOD close-out**
+- [x] **5.5.3 Intraday EOD close-out**
   - **Deliverable:** new task `monitoring.close_intraday_positions` invoked from `run_daily.bat` at 16:00 ET (15:00 PT)
   - **Acceptance:** any open intraday-strategy positions are closed at market close (Alpaca MOC order or fallback to market). EOD strategies' positions stay open. Tracks closed positions and PnL. Tests: identification of intraday-only positions, MOC fallback.
   - **Notes:** Intraday strategies should not hold overnight — that's a different risk profile (gap risk). This forces the discipline.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 49ab1e4
 
 ---
 
 ## 5.6 Dashboard updates
 
-- [ ] **5.6.1 Intraday signals card on Monitor**
+- [x] **5.6.1 Intraday signals card on Monitor**
   - **Deliverable:** `dashboard/index.html` + `/api/state` extension
   - **Acceptance:** new card "intraday signals today" showing the last 20 intraday signals fired today (5m, 15m, 1h) with strategy, symbol, bar_ts, signal_type. Auto-refresh 30s shows new fires as they happen. Tests: API shape, render against fixture.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 044d748
 
-- [ ] **5.6.2 Intraday paper trades stream**
+- [x] **5.6.2 Intraday paper trades stream**
   - **Deliverable:** dashboard `paper_trades_today` card extended to highlight intraday vs EOD orders
   - **Acceptance:** order type column shows "INTRADAY (15m)" / "EOD (1d)" tag. Sortable. Tests: render against mixed fixture.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 044d748
 
-- [ ] **5.6.3 Intraday status badge on auto-trader control card**
+- [x] **5.6.3 Intraday status badge on auto-trader control card**
   - **Deliverable:** mode badge extended
   - **Acceptance:** when `intraday_enabled=true`, badge shows "ACTIVE + INTRADAY". When false, shows existing "ACTIVE". Visually distinguishes the two operating modes so Ross can tell at a glance whether intraday is firing. Tests: render against both states.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 08d59a7
 
 ---
 
