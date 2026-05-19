@@ -113,9 +113,10 @@ optional early-exit on trend strategies that fires whichever comes first
 between SAR and the trailing stop — it can lock in profit when momentum
 stalls before the trailing stop would have triggered. Opt-in per strategy.
 
-- [ ] **6.4.1 SAR computation + overlay engine**
+- [x] **6.4.1 SAR computation + overlay engine**
   - **Deliverable:** `monitoring/sar_overlay.py` + auto_trader integration
   - **Acceptance:** standard Parabolic SAR computation (acceleration factor starting at 0.02, increments of 0.02, max 0.2 — Wilder's defaults). For any strategy with `sar_overlay: true` in its declaration, the exit check is `should_exit = trailing_stop_hit OR sar_flip`. SAR state persisted per open position. Tests: SAR math against known-good Wilder sequence, overlay precedence (whichever fires first wins), no-overlay-when-disabled.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 2e05833
 
 - [ ] **6.4.2 SAR overlay opt-in for trend strategies**
   - **Deliverable:** strategy declarations updated + 30-day A/B record
