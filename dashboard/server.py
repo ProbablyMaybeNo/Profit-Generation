@@ -751,6 +751,68 @@ def _state_macro_strip() -> list:
         return []
 
 
+def _state_kelly_fractions(conn) -> list:
+    """6.2.3 — Per-strategy Kelly fraction with guard status.
+
+    Returns a list of dicts (one per strategy that has at least one
+    closed outcome) with:
+      {strategy_id, fraction, raw_fraction?, n_closed, win_rate, b,
+       guard, samples_needed, sized_quarter}
+
+    `guard` is one of:
+      "qualifying"        — Kelly is computed and within the cap
+      "capped"            — raw Kelly > 0.25, returning the capped value
+      "no_edge"           — negative or zero Kelly (skip)
+      "need_more_samples" — below the 50-sample guard
+
+    `sized_quarter` is the ¼-Kelly fraction that the auto-trader's
+    kelly_quarter sizing tier would actually stake (raw × 0.25, capped
+    by the default 0.05 max_position_fraction).
+    """
+    from monitoring import kelly as kelly_mod
+    rows = conn.execute(
+        "SELECT DISTINCT s.strategy_id "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='closed' AND o.return_pct IS NOT NULL"
+    ).fetchall()
+    out = []
+    for r in rows:
+        sid = r["strategy_id"]
+        diag = kelly_mod.kelly_diagnostic(conn, sid)
+        stats = diag.get("stats", {}) or {}
+        fraction = diag.get("fraction")
+        sized = None
+        if fraction is not None:
+            sized_raw = 0.25 * fraction
+            sized = min(sized_raw, 0.05)
+            sized = round(sized, 6)
+        out.append({
+            "strategy_id": sid,
+            "fraction": fraction,
+            "raw_fraction": diag.get("raw_fraction"),
+            "n_closed": stats.get("n", 0),
+            "wins": stats.get("wins", 0),
+            "losses": stats.get("losses", 0),
+            "win_rate": stats.get("win_rate", 0.0),
+            "b": stats.get("b", 0.0),
+            "guard": diag.get("guard"),
+            "samples_needed": diag.get("samples_needed", 0),
+            "sized_quarter": sized,
+            "min_samples": diag.get("min_samples"),
+        })
+    # Order: qualifying first (best edge), then capped, then need_more, then no_edge.
+    guard_order = {
+        "qualifying": 0, "capped": 1,
+        "need_more_samples": 2, "no_edge": 3,
+    }
+    out.sort(key=lambda x: (
+        guard_order.get(x["guard"], 99),
+        -(x["fraction"] or 0),
+        -(x["n_closed"] or 0),
+    ))
+    return out
+
+
 def _state_intraday_tail(n: int = 10) -> list:
     if not INTRADAY_LOG.exists():
         return []
@@ -819,6 +881,7 @@ def state():
             "tv_tunnel": _state_tunnel_url(),
             "kill_switch": _state_kill_switch(),
             "pdt": _state_pdt(conn),
+            "kelly_fractions": _state_kelly_fractions(conn),
         })
     finally:
         conn.close()

@@ -1098,6 +1098,12 @@
     <div id="open-positions" class="loading">loading...</div>
   </div>
 
+  <!-- Kelly fractions per strategy (6.2.3) -->
+  <div class="card" id="kelly-card">
+    <h2>kelly · per-strategy fraction <span class="count" id="kelly-count"></span></h2>
+    <div id="kelly-fractions" class="loading">loading...</div>
+  </div>
+
   <!-- Paper trades today -->
   <div class="card">
     <h2>auto-trader · paper orders today <span class="count" id="paper-count"></span></h2>
@@ -1814,6 +1820,56 @@ function renderEdge(s) {
       <td class="num ${pctClass(r.sharpe_ish)}">${r.sharpe_ish.toFixed(3)}</td>
       <td class="num neg">${fmtPct(r.max_loss)}</td>
       <td class="num pos">${fmtPct(r.max_win)}</td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+  el.innerHTML = h;
+}
+
+function renderKelly(s) {
+  // 6.2.3 — Per-strategy Kelly fraction card.
+  const el = document.getElementById('kelly-fractions');
+  if (!el) return;
+  const rows = s.kelly_fractions || [];
+  const countEl = document.getElementById('kelly-count');
+  if (countEl) countEl.textContent = `${rows.length} strategies`;
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty">no closed outcomes yet.</div>';
+    return;
+  }
+  const guardBadge = (guard, samplesNeeded) => {
+    if (guard === 'qualifying') {
+      return '<span class="pos" title="kelly guard satisfied — sizing tier active">✓ qualifying</span>';
+    }
+    if (guard === 'capped') {
+      return '<span class="pos" title="raw kelly above 0.25 cap; using cap">✓ capped @ 0.25</span>';
+    }
+    if (guard === 'need_more_samples') {
+      return `<span class="neg" title="kelly guard fails — falls back to tiered sizing">✗ need ${samplesNeeded} more</span>`;
+    }
+    if (guard === 'no_edge') {
+      return '<span class="neg" title="negative edge — strategy is not sized via kelly">✗ no edge</span>';
+    }
+    return `<span>${escapeHtml(guard || '')}</span>`;
+  };
+  let h = '<table><thead><tr>' +
+    '<th>strategy</th><th class="num">n</th><th class="num">win%</th>' +
+    '<th class="num">b</th><th class="num">kelly f*</th>' +
+    '<th class="num">¼ kelly sized</th><th>guard</th>' +
+    '</tr></thead><tbody>';
+  for (const r of rows) {
+    const fraction = (r.fraction !== null && r.fraction !== undefined)
+      ? r.fraction.toFixed(3) : '—';
+    const sized = (r.sized_quarter !== null && r.sized_quarter !== undefined)
+      ? (r.sized_quarter * 100).toFixed(2) + '%' : '—';
+    h += `<tr>
+      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
+      <td class="num">${r.n_closed}</td>
+      <td class="num">${((r.win_rate || 0) * 100).toFixed(1)}%</td>
+      <td class="num">${(r.b || 0).toFixed(2)}</td>
+      <td class="num">${fraction}</td>
+      <td class="num">${sized}</td>
+      <td>${guardBadge(r.guard, r.samples_needed)}</td>
     </tr>`;
   }
   h += '</tbody></table>';
@@ -2562,6 +2618,7 @@ async function refresh() {
       () => renderEdgeDiff(),
       () => renderNewsSentimentOverlay(),
       () => renderOpenPositions(s),
+      () => renderKelly(s),
       () => renderPaperTrades(s),
       () => renderIntradaySignals(s),
       () => renderSignals(s),
