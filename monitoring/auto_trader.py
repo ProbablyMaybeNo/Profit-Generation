@@ -82,8 +82,17 @@ def _config() -> dict:
     return out
 
 
-def _is_eligible(conn, strategy_id: str, settings: dict) -> tuple:
-    """Return (ok: bool, stats: dict). Stats always populated for logging."""
+def _is_eligible(conn, strategy_id: str, settings: dict,
+                 *, grace_period: bool = False) -> tuple:
+    """Return (ok: bool, stats: dict). Stats always populated for logging.
+
+    When `grace_period=True`, the strategy is allowed to fire orders even
+    before it accumulates `min_outcomes` closed trades — the size is
+    expected to be reduced by the caller (via the grace_period_size_multiplier
+    setting). Stats includes `in_grace=True` so callers can apply that
+    multiplier. Once n >= min_outcomes, grace mode is ignored and the
+    normal mean / sharpe thresholds apply.
+    """
     rows = conn.execute(
         "SELECT o.return_pct FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
@@ -92,15 +101,24 @@ def _is_eligible(conn, strategy_id: str, settings: dict) -> tuple:
     ).fetchall()
     rets = [r["return_pct"] for r in rows]
     n = len(rets)
-    stats = {"n": n, "mean": 0.0, "sharpe": 0.0}
+    min_n = settings.get("min_outcomes", 30)
+    stats = {"n": n, "mean": 0.0, "sharpe": 0.0, "in_grace": False}
     if n == 0:
+        if grace_period:
+            stats["in_grace"] = True
+            return True, stats
         return False, stats
     mean = sum(rets) / n
     sd = statistics.stdev(rets) if n > 1 else 0.0
     sharpe = (mean / sd) if sd > 0 else 0.0
     stats["mean"] = round(mean, 4)
     stats["sharpe"] = round(sharpe, 4)
-    if n < settings.get("min_outcomes", 30):
+    if n < min_n:
+        if grace_period:
+            # Still accumulating — let it fire but flag for size reduction.
+            # Skip mean/sharpe gates since the sample is too thin to trust.
+            stats["in_grace"] = True
+            return True, stats
         return False, stats
     if mean < settings.get("min_mean_ret_pct", 0.0):
         return False, stats
@@ -366,7 +384,10 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
-    eligible, stats = _is_eligible(conn, sid, settings)
+    decl = _resolve_strategy_declaration(sid, tracked_strategies)
+    grace_period_flag = bool((decl or {}).get("grace_period", False))
+    eligible, stats = _is_eligible(conn, sid, settings,
+                                   grace_period=grace_period_flag)
     if not eligible:
         return {"action": "SKIP_INELIGIBLE", "strategy_id": sid, "symbol": sym,
                 "reason": "fails edge thresholds", "stats": stats}
@@ -378,12 +399,19 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         max_pos_usd = crypto_mod.crypto_max_position_usd(settings)
     else:
         max_pos_usd = float(settings.get("max_position_usd", 1000))
+    # Grace period: strategy is firing before it has enough closed outcomes
+    # to gauge edge. Reduce the cap so paper-data collection happens at
+    # smaller size while the strategy proves itself. Multiplier is global
+    # via settings.auto_trade.grace_period_size_multiplier (default 0.25).
+    in_grace = bool(stats.get("in_grace", False))
+    if in_grace:
+        grace_mult = float(settings.get("grace_period_size_multiplier", 0.25))
+        max_pos_usd = max_pos_usd * grace_mult
     # 4.7.2 — When the strategy is pyramidable, reserve capacity for the
     # full pyramid ladder by sizing the initial (tier-0) entry to
     # max_position_usd / sum(tier_schedule). That way pyramid add-ons
     # fit under the aggregate cap rather than being refused by the
     # SKIP_PYRAMID_OVER_CAP guard.
-    decl = _resolve_strategy_declaration(sid, tracked_strategies)
     is_pyramidable = bool((decl or {}).get("pyramidable", False))
     if is_pyramidable:
         from monitoring import pyramiding as py_mod
@@ -1672,8 +1700,16 @@ def process_signals(
     data_client=None,
     account_summary_fn: Optional[Callable] = None,
     bars_fetcher: Optional[Callable] = None,
+    bar_interval: str = "1d",
 ) -> dict:
-    """Walk today's '1d' signals; submit Alpaca paper market orders per eligibility + dedupe.
+    """Walk today's signals at `bar_interval`; submit Alpaca paper market orders
+    per eligibility + dedupe.
+
+    Defaults to bar_interval='1d' so existing EOD callers are unaffected.
+    Intraday callers pass bar_interval='5m', '15m', '1h', etc.; the SELECT
+    then matches signals.bar_ts that fall within the asof date AND have a
+    matching bar_interval. The same eligibility, sizing, regime, pyramid,
+    and risk-gate logic applies regardless of interval.
 
     Returns {status, dry_run, asof, actions}. Status 'DISABLED' / 'BLOCKED_LIVE_MODE'
     when guard rails trigger; 'OK' otherwise.
@@ -1697,13 +1733,24 @@ def process_signals(
         live_client_factory = lambda: get_alpaca_client(live=True)
     live_cache: Dict[str, object] = {}
 
-    sigs = conn.execute(
-        "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, signal_type, close "
-        "  FROM signals "
-        " WHERE bar_ts = ? AND bar_interval = '1d' "
-        " ORDER BY id ASC",
-        (asof.isoformat(),),
-    ).fetchall()
+    if bar_interval == "1d":
+        sigs = conn.execute(
+            "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, signal_type, close "
+            "  FROM signals "
+            " WHERE bar_ts = ? AND bar_interval = ? "
+            " ORDER BY id ASC",
+            (asof.isoformat(), bar_interval),
+        ).fetchall()
+    else:
+        # Intraday bar_ts is an ISO datetime ("YYYY-MM-DDTHH:MM:SS..."); match
+        # any signal whose bar_ts starts with the asof date string.
+        sigs = conn.execute(
+            "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, signal_type, close "
+            "  FROM signals "
+            " WHERE bar_ts LIKE ? AND bar_interval = ? "
+            " ORDER BY id ASC",
+            (f"{asof.isoformat()}%", bar_interval),
+        ).fetchall()
 
     # portfolio_value is needed by Kelly sizing, by the per-symbol
     # concentration cap, AND by the daily drawdown circuit breaker. We
