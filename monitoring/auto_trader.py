@@ -2019,6 +2019,27 @@ def process_signals(
                         **pdt_block,
                     })
                     continue
+                # 5.5.2 — Per-symbol same-day round-trip cap. Default 2;
+                # configurable via auto_trade.max_intraday_round_trips_per_symbol.
+                # Only intraday entries can trip this — EOD entries
+                # don't accumulate same-day round trips by definition.
+                from monitoring import intraday_symbol_cap as isc_mod
+                sym_cap = int(settings.get(
+                    "max_intraday_round_trips_per_symbol",
+                    isc_mod.DEFAULT_MAX_INTRADAY_ROUND_TRIPS_PER_SYMBOL,
+                ))
+                sym_block = isc_mod.check_intraday_symbol_cap(
+                    conn, symbol=sig["symbol"], asof=asof, cap=sym_cap,
+                )
+                if sym_block is not None:
+                    actions.append({
+                        "action": "SKIP_INTRADAY_SYMBOL_CAP",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sig["symbol"],
+                        "signal_id": sig["id"],
+                        **sym_block,
+                    })
+                    continue
             try:
                 strategy_client = _resolve_strategy_client(
                     sig["strategy_id"],
