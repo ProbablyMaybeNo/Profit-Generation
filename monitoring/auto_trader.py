@@ -1103,6 +1103,7 @@ def _check_trailing_exits_for_open_positions(
 
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
 DEFAULT_MAX_OPEN_PER_STRATEGY = 3
+DEFAULT_MAX_NEW_ENTRIES_PER_DAY = 5  # 5.5.4.2
 
 
 def _coerce_max_open_per_strategy(raw) -> int:
@@ -1115,6 +1116,68 @@ def _coerce_max_open_per_strategy(raw) -> int:
     if v < 0:
         return 0
     return v
+
+
+def _coerce_max_new_entries_per_day(raw) -> int:
+    """Cap value for `auto_trade.max_new_entries_per_day` (5.5.4.2).
+
+    Missing / non-numeric → DEFAULT_MAX_NEW_ENTRIES_PER_DAY (5).
+    0 or negative → 0 (cap disabled). Positive integers pass through.
+    """
+    if raw is None:
+        return DEFAULT_MAX_NEW_ENTRIES_PER_DAY
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_NEW_ENTRIES_PER_DAY
+    if v < 0:
+        return 0
+    return v
+
+
+def _reorder_signals_by_rank(
+    sigs,
+    *,
+    regime: str,
+    tracked_strategies,
+    conn,
+):
+    """Sort `long_entry` signals by signal_ranker score DESC; keep
+    `long_exit` and other signal types in their original relative order
+    at the start (exits before entries so positions close first).
+
+    `sigs` is an iterable of sqlite3.Row from the signals SELECT.
+    Returns a list. Pure ordering — no DB writes.
+    """
+    sig_list = list(sigs)
+    entries = [s for s in sig_list if s["signal_type"] == "long_entry"]
+    others = [s for s in sig_list if s["signal_type"] != "long_entry"]
+    if not entries:
+        return sig_list
+
+    from monitoring import signal_ranker as _sr
+    fire_dicts = [
+        {"strategy_id": s["strategy_id"], "symbol": s["symbol"], "_id": s["id"]}
+        for s in entries
+    ]
+    sharpe = _sr.sharpe_lookup_from_db(
+        {f["strategy_id"] for f in fire_dicts}, conn=conn,
+    )
+    dvol = _sr.dollar_volume_lookup_from_db(
+        {f["symbol"] for f in fire_dicts}, conn=conn,
+    )
+    ranked = _sr.rank_signals(
+        fire_dicts, regime=regime,
+        strategy_decls=tracked_strategies,
+        sharpe_by_strategy=sharpe,
+        dollar_volume_by_symbol=dvol,
+    )
+    by_id = {s["id"]: s for s in entries}
+    ranked_sigs = [by_id[r["_id"]] for r in ranked if r["_id"] in by_id]
+    # Exits first, then ranked entries — exits closing positions before
+    # new entries lets the capacity counter see the corrected position
+    # count for any session-end exits.
+    return others + ranked_sigs
 
 
 def _open_position_count_per_strategy(conn) -> Dict[str, int]:
@@ -1863,6 +1926,23 @@ def process_signals(
         tracked_strategies=regime_tracked,
     )
 
+    # 5.5.4.2 — Wide-universe capacity cap. When the scanner fires 30+
+    # signals on a trending day, we can only hold ~10 concurrent positions.
+    # `max_new_entries_per_day` caps the count of NEW entries this run
+    # submits; lower-ranked signals get logged as SKIP_CAPACITY. 0 disables.
+    max_new_entries_per_day = _coerce_max_new_entries_per_day(
+        settings.get("max_new_entries_per_day"))
+    # When the cap is active, reorder long_entry signals by signal_ranker
+    # score so the BEST ones are tried first. Non-entry signals (long_exit)
+    # stay in their original position.
+    if max_new_entries_per_day > 0:
+        sigs = _reorder_signals_by_rank(
+            sigs, regime=current_regime,
+            tracked_strategies=regime_tracked,
+            conn=conn,
+        )
+    entries_submitted_this_run = 0
+
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
@@ -2071,6 +2151,26 @@ def process_signals(
                 )
                 actions.append(addon_action)
                 continue
+            # 5.5.4.2 — Capacity cap. Applied AFTER all skip gates but
+            # BEFORE _process_entry so we don't waste an Alpaca call on a
+            # signal we'd just skip. Pyramid add-ons aren't gated here
+            # (they're handled above and don't consume new-entry budget).
+            if (max_new_entries_per_day > 0
+                    and entries_submitted_this_run >= max_new_entries_per_day):
+                actions.append({
+                    "action": "SKIP_CAPACITY",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "max_new_entries_per_day": max_new_entries_per_day,
+                    "entries_submitted_this_run": entries_submitted_this_run,
+                    "reason": (
+                        f"capacity reached: {entries_submitted_this_run} "
+                        f"entries already submitted this run "
+                        f"(cap={max_new_entries_per_day})"
+                    ),
+                })
+                continue
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
@@ -2082,11 +2182,12 @@ def process_signals(
                 tracked_strategies=regime_tracked,
             )
             actions.append(entry_action)
-            if (max_open_per_strategy > 0
-                    and entry_action.get("action") in ("BUY", "DRY_BUY")):
-                open_per_strategy[sig["strategy_id"]] = (
-                    open_per_strategy.get(sig["strategy_id"], 0) + 1
-                )
+            if entry_action.get("action") in ("BUY", "DRY_BUY"):
+                entries_submitted_this_run += 1
+                if max_open_per_strategy > 0:
+                    open_per_strategy[sig["strategy_id"]] = (
+                        open_per_strategy.get(sig["strategy_id"], 0) + 1
+                    )
         elif sig["signal_type"] == "long_exit":
             try:
                 strategy_client = _resolve_strategy_client(
