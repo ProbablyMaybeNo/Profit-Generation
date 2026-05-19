@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 220" font-family="Cascadia Code, Consolas, monospace" font-size="11">
+  <style>
+    .wick { stroke: #d1d5db; stroke-width: 1; }
+    .body-up { fill: #00ff88; stroke: #00ff88; }
+    .body-down { fill: #ff4455; stroke: #ff4455; }
+    .label { fill: #d1d5db; }
+    .dim { fill: #6b7280; }
+    .level { stroke: #ffb700; stroke-width: 1.2; stroke-dasharray: 5,3; }
+    .entry { fill: #4488ff; }
+  </style>
+  <!-- 20-day high level: horizontal dashed line -->
+  <line class="level" x1="25" y1="75" x2="415" y2="75"/>
+  <text style="fill: #ffb700" x="20" y="70" font-size="10">20-day high</text>
+
+  <!-- Several bars below the level (consolidation) -->
+  <line class="wick" x1="60"  y1="90"  x2="60"  y2="135"/>  <rect class="body-down" x="55" y="95" width="10" height="30"/>
+  <line class="wick" x1="90"  y1="85"  x2="90"  y2="120"/>  <rect class="body-up"   x="85" y="90" width="10" height="25"/>
+  <line class="wick" x1="120" y1="100" x2="120" y2="140"/>  <rect class="body-down" x="115" y="105" width="10" height="30"/>
+  <line class="wick" x1="150" y1="90"  x2="150" y2="125"/>  <rect class="body-up"   x="145" y="95" width="10" height="25"/>
+  <line class="wick" x1="180" y1="80"  x2="180" y2="115"/>  <rect class="body-up"   x="175" y="85" width="10" height="22"/>
+  <line class="wick" x1="210" y1="85"  x2="210" y2="120"/>  <rect class="body-down" x="205" y="92" width="10" height="22"/>
+  <line class="wick" x1="240" y1="80"  x2="240" y2="110"/>  <rect class="body-up"   x="235" y="85" width="10" height="22"/>
+  <line class="wick" x1="270" y1="80"  x2="270" y2="115"/>  <rect class="body-up"   x="265" y="85" width="10" height="20"/>
+
+  <!-- BREAKOUT bar: closes above 20-day high -->
+  <line class="wick" x1="320" y1="40" x2="320" y2="95"/>
+  <rect class="entry" x="313" y="45" width="14" height="40"/>
+
+  <!-- Arrow pointing to breakout -->
+  <path d="M 360 50 L 335 50" stroke="#4488ff" stroke-width="1.5" fill="none"/>
+  <polygon points="335,46 327,50 335,54" fill="#4488ff"/>
+  <text class="label" x="365" y="44">close above</text>
+  <text class="label" x="365" y="58">20-day high</text>
+  <text class="dim" x="365" y="72">= ENTRY</text>
+
+  <text class="dim" x="160" y="205" text-anchor="middle">prior 20 days capped here</text>
+</svg>

@@ -855,6 +855,16 @@
     word-wrap: break-word;
   }
   .guide-body * { max-width: 100%; box-sizing: border-box; }
+  .guide-body img.guide-img {
+    display: block;
+    max-width: 460px;
+    width: 100%;
+    margin: 12px auto;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(68, 136, 255, 0.32);
+    border-radius: 2px;
+    padding: 8px;
+  }
   .guide-body h1 { font-size: 15px; color: var(--green); margin: 14px 0 8px; font-weight: 600; }
   .guide-body h2 { font-size: 13px; color: var(--text-hi); margin: 18px 0 6px;
                    border-bottom: 1px dashed var(--border); padding-bottom: 3px; }
@@ -1164,12 +1174,15 @@ function escapeHtml(s) {
 
 // ---------- minimal markdown → HTML renderer (no external deps) ----------
 function renderMarkdown(md) {
-  // Inline pass: code → strong → em → links. Run on text, not raw HTML.
+  // Inline pass: code → strong → em → images → links. Run on text, not raw HTML.
+  // Images first so ![alt](url) doesn't get caught by the [text](url) link regex.
   function inline(text) {
     let out = escapeHtml(text);
     out = out.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
     out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+                       (_m, alt, src) => `<img src="${src}" alt="${alt}" class="guide-img" />`);
     out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
                        (_m, t, u) => `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${t}</a>`);
     return out;

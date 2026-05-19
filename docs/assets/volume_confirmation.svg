@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 220" font-family="Cascadia Code, Consolas, monospace" font-size="11">
+  <style>
+    .wick { stroke: #d1d5db; stroke-width: 1; }
+    .body-up { fill: #00ff88; stroke: #00ff88; }
+    .body-down { fill: #ff4455; stroke: #ff4455; }
+    .vol-bar { fill: #4a5158; }
+    .vol-bar-hot { fill: #ffb700; }
+    .vol-bar-up { fill: #00ff88; opacity: 0.6; }
+    .label { fill: #d1d5db; }
+    .dim { fill: #6b7280; }
+    .axis { stroke: #6b7280; stroke-width: 0.5; }
+    .level { stroke: #ffb700; stroke-width: 1; stroke-dasharray: 4,2; }
+  </style>
+  <!-- Top: price panel -->
+  <text class="dim" x="10" y="14">PRICE</text>
+
+  <!-- Resistance level -->
+  <line class="level" x1="30" y1="55" x2="410" y2="55"/>
+  <text style="fill: #ffb700" x="15" y="50" font-size="9">R</text>
+
+  <!-- Consolidation bars below resistance -->
+  <line class="wick" x1="60"  y1="60" x2="60"  y2="100"/> <rect class="body-down" x="55" y="65" width="10" height="25"/>
+  <line class="wick" x1="100" y1="60" x2="100" y2="95"/>  <rect class="body-up"   x="95" y="65" width="10" height="22"/>
+  <line class="wick" x1="140" y1="60" x2="140" y2="100"/> <rect class="body-down" x="135" y="65" width="10" height="25"/>
+  <line class="wick" x1="180" y1="60" x2="180" y2="92"/>  <rect class="body-up"   x="175" y="65" width="10" height="22"/>
+
+  <!-- BREAKOUT bar -->
+  <line class="wick" x1="240" y1="25" x2="240" y2="65"/>  <rect class="body-up" x="232" y="30" width="16" height="22"/>
+
+  <!-- Continuation bars -->
+  <line class="wick" x1="290" y1="18" x2="290" y2="45"/> <rect class="body-up" x="285" y="22" width="10" height="20"/>
+  <line class="wick" x1="330" y1="10" x2="330" y2="40"/> <rect class="body-up" x="325" y="15" width="10" height="22"/>
+
+  <!-- Separator -->
+  <line class="axis" x1="0" y1="125" x2="440" y2="125"/>
+
+  <!-- Volume panel -->
+  <text class="dim" x="10" y="138">VOLUME</text>
+
+  <!-- Avg volume line -->
+  <line class="level" x1="30" y1="180" x2="410" y2="180" stroke="#6b7280"/>
+  <text class="dim" x="412" y="183">avg</text>
+
+  <!-- Volume bars matching the price candles -->
+  <rect class="vol-bar" x="55" y="186" width="10" height="14"/>
+  <rect class="vol-bar" x="95" y="184" width="10" height="16"/>
+  <rect class="vol-bar" x="135" y="186" width="10" height="14"/>
+  <rect class="vol-bar" x="175" y="183" width="10" height="17"/>
+
+  <!-- BIG volume on breakout bar -->
+  <rect class="vol-bar-hot" x="232" y="140" width="16" height="60"/>
+
+  <!-- Continuation volume -->
+  <rect class="vol-bar-up" x="285" y="170" width="10" height="30"/>
+  <rect class="vol-bar-up" x="325" y="165" width="10" height="35"/>
+
+  <!-- Annotation -->
+  <text class="label" x="240" y="218" text-anchor="middle">breakout + volume = real</text>
+</svg>

@@ -361,12 +361,7 @@ This section is for when you're looking at a TradingView chart and trying to dec
 
 ### 21.0 Candle anatomy refresher
 
-```
-       │      ← upper wick (high)
-      ┃┃      ← body (open → close)
-      ┃┃         green body = close > open
-       │      ← lower wick (low)
-```
+![Candle anatomy](/api/assets/candle_anatomy.svg)
 
 **Green body:** close > open. Buyers won the bar.
 **Red body:** close < open. Sellers won the bar.
@@ -378,15 +373,7 @@ This section is for when you're looking at a TradingView chart and trying to dec
 
 ### 21.1 Bullish engulfing — reversal at lows
 
-```
-    ▌       ▐
-    ▌       █
-    ▌       █  ← green body fully engulfs prior red body
-    ▌  →    █
-    ▌       █
-    │       █
-            │
-```
+![Bullish engulfing](/api/assets/bullish_engulfing.svg)
 
 A red bar then a green bar whose body is larger than the red's body (engulfs it from open to close). The green bar's open is below the red's close; the green's close is above the red's open.
 
@@ -400,14 +387,7 @@ A red bar then a green bar whose body is larger than the red's body (engulfs it 
 
 ### 21.2 Morning star — three-bar reversal
 
-```
-   ┃         ▌
-   ┃         ▌
-   ┃   ▪    ▐
-   ┃        ▐
-   ┃        ▐
-   ┃        ▐
-```
+![Morning star](/api/assets/morning_star.svg)
 
 Three bars: (1) big red, (2) small body (color irrelevant — often a doji), (3) big green that closes above the midpoint of bar 1.
 
@@ -421,14 +401,7 @@ Three bars: (1) big red, (2) small body (color irrelevant — often a doji), (3)
 
 ### 21.3 Hammer / pin bar — single-bar rejection at lows
 
-```
-    │
-    █     ← small body at top
-    │
-    │
-    │
-    │     ← long lower wick = price tried lower, rejected
-```
+![Hammer](/api/assets/hammer.svg)
 
 One candle with a small body near the top and a long lower wick (at least 2× the body length). Color of body matters less than the rejection.
 
@@ -442,13 +415,7 @@ One candle with a small body near the top and a long lower wick (at least 2× th
 
 ### 21.4 Three white soldiers — trend confirmation
 
-```
-                  █
-              █   █
-          █   █   █
-          █   █   █
-          █   █   █
-```
+![Three white soldiers](/api/assets/three_white_soldiers.svg)
 
 Three consecutive green bars, each opening within the prior body and closing above the prior close. Each bar adds higher highs and higher closes. Body sizes should be roughly similar (not shrinking).
 
@@ -462,18 +429,7 @@ Three consecutive green bars, each opening within the prior body and closing abo
 
 ### 21.5 Bullish flag — continuation in an uptrend
 
-```
-                        █
-                       █
-                      █▌
-                     █ ▌▌▌
-                    █     ▌▌▌
-                   █          █
-                  █          █
-                 █          █
-            ▌▌▌▌█          █  ← pullback flag, then breakout
-        ▌▌▌▌
-```
+![Bullish flag](/api/assets/bullish_flag.svg)
 
 Strong rally up (the "pole"), then a brief 2-5 bar consolidation that tilts slightly down or sideways (the "flag"). Volume drops during the flag, then expands on the breakout.
 
@@ -487,17 +443,7 @@ Strong rally up (the "pole"), then a brief 2-5 bar consolidation that tilts slig
 
 ### 21.6 Inside bar breakout — coiled spring
 
-```
-       █
-      █ █  ← outer bar high/low
-      █ █
-      █ █
-      █▐▌█
-      █▐▌█  ← inside bar fully within prior bar's range
-      █ █
-      █ █
-       █
-```
+![Inside bar breakout](/api/assets/inside_bar.svg)
 
 A bar whose entire range (high to low) is inside the prior bar's range. Compressed price action = volatility about to expand.
 
@@ -511,20 +457,7 @@ A bar whose entire range (high to low) is inside the prior bar's range. Compress
 
 ### 21.7 Donchian breakout — what our trend strategy actually trades
 
-```
-   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─    ← 20-day high level
-                                    █
-                                   █
-                                  █  ← close above 20-day high = ENTRY
-   █                         █  █
-  █ █                       █  █
- █   █     █                █ █
-█     █   █ █              █
-       █ █   █     ▐█▌    █
-        █     █   █  █   █
-               █ █    █ █
-                █      █
-```
+![Donchian breakout](/api/assets/donchian_breakout.svg)
 
 Look at the past 20 daily highs. Today's close is above ALL of them. **That's the Donchian-20 signal — `trend-donchian-breakout-20` fires today.**
 
@@ -538,18 +471,7 @@ Look at the past 20 daily highs. Today's close is above ALL of them. **That's th
 
 ### 21.8 Higher highs + higher lows — the trend itself
 
-```
-                           HH
-                          ╱  ╲
-                      HH ╱    ╲    HH
-                     ╱  ╲    ╱  ╲ ╱
-                    ╱    ╲  ╱    HL
-                HH ╱      HL
-               ╱  ╲      
-              ╱    HL
-             ╱
-            HL
-```
+![Higher highs + higher lows](/api/assets/higher_highs_lows.svg)
 
 Each subsequent **swing high** is higher than the prior swing high (HH). Each subsequent **swing low** is higher than the prior swing low (HL). This IS what an uptrend is.
 
@@ -562,6 +484,8 @@ Each subsequent **swing high** is higher than the prior swing high (HH). Each su
 ---
 
 ### 21.9 Volume confirmation — the missing variable
+
+![Volume confirmation](/api/assets/volume_confirmation.svg)
 
 Volume doesn't have a candle shape, but it's the single most underrated indicator. Three rules:
 

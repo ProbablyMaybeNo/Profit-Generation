@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 220" font-family="Cascadia Code, Consolas, monospace" font-size="11">
+  <style>
+    .wick { stroke: #d1d5db; stroke-width: 1.5; }
+    .body-up { fill: #00ff88; stroke: #00ff88; }
+    .body-down { fill: #ff4455; stroke: #ff4455; }
+    .label { fill: #d1d5db; }
+    .dim { fill: #6b7280; }
+    .ref { stroke: #4488ff; stroke-width: 0.5; stroke-dasharray: 3,2; }
+  </style>
+  <!-- Outer bar -->
+  <line class="wick" x1="140" y1="30" x2="140" y2="180"/>
+  <rect class="body-down" x="131" y="50" width="18" height="110"/>
+
+  <!-- Inside bar — fully within outer's range -->
+  <line class="wick" x1="250" y1="70" x2="250" y2="140"/>
+  <rect class="body-up" x="241" y="80" width="18" height="40"/>
+
+  <!-- Breakout candle: closes above outer high -->
+  <line class="wick" x1="360" y1="15" x2="360" y2="80"/>
+  <rect class="body-up" x="351" y="20" width="18" height="50"/>
+
+  <!-- Reference lines showing inside bar within outer's range -->
+  <line class="ref" x1="120" y1="30" x2="380" y2="30"/>
+  <text class="dim" x="395" y="33">outer high</text>
+  <line class="ref" x1="120" y1="180" x2="380" y2="180"/>
+  <text class="dim" x="395" y="183">outer low</text>
+
+  <text class="dim" x="140" y="200" text-anchor="middle">outer</text>
+  <text class="dim" x="250" y="200" text-anchor="middle">inside bar</text>
+  <text class="dim" x="360" y="200" text-anchor="middle">breakout</text>
+</svg>

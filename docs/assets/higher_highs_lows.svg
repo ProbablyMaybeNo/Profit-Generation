@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 220" font-family="Cascadia Code, Consolas, monospace" font-size="11">
+  <style>
+    .trend { stroke: #00ff88; stroke-width: 2; fill: none; }
+    .hi-dot { fill: #00ff88; }
+    .lo-dot { fill: #ff4455; }
+    .hi-label { fill: #00ff88; font-weight: bold; }
+    .lo-label { fill: #ff4455; font-weight: bold; }
+    .dim { fill: #6b7280; }
+    .axis { stroke: #6b7280; stroke-width: 0.5; stroke-dasharray: 3,2; }
+  </style>
+  <!-- Zigzag uptrend showing HH/HL pattern -->
+  <polyline class="trend" points="30,180 70,150 100,170 140,110 170,140 210,80 240,110 280,40 310,75 350,30"/>
+
+  <!-- Mark each swing point -->
+  <circle class="lo-dot" cx="30" cy="180" r="3"/>  <text class="lo-label" x="36" y="194">LL</text>
+  <circle class="hi-dot" cx="70" cy="150" r="3"/>  <text class="hi-label" x="76" y="148">H</text>
+  <circle class="lo-dot" cx="100" cy="170" r="3"/> <text class="lo-label" x="106" y="184">HL</text>
+  <circle class="hi-dot" cx="140" cy="110" r="3"/> <text class="hi-label" x="146" y="108">HH</text>
+  <circle class="lo-dot" cx="170" cy="140" r="3"/> <text class="lo-label" x="176" y="154">HL</text>
+  <circle class="hi-dot" cx="210" cy="80"  r="3"/> <text class="hi-label" x="216" y="78">HH</text>
+  <circle class="lo-dot" cx="240" cy="110" r="3"/> <text class="lo-label" x="246" y="124">HL</text>
+  <circle class="hi-dot" cx="280" cy="40"  r="3"/> <text class="hi-label" x="286" y="38">HH</text>
+  <circle class="lo-dot" cx="310" cy="75"  r="3"/> <text class="lo-label" x="316" y="89">HL</text>
+  <circle class="hi-dot" cx="350" cy="30"  r="3"/> <text class="hi-label" x="356" y="28">HH</text>
+
+  <text class="dim" x="220" y="210" text-anchor="middle">each high &gt; prior high · each low &gt; prior low</text>
+</svg>

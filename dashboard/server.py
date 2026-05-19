@@ -1112,6 +1112,25 @@ def list_guides():
     return jsonify({"available": sorted(GUIDES.keys())})
 
 
+@app.route("/api/assets/<path:fname>", methods=["GET"])
+def get_asset(fname: str):
+    """Serve image / static assets referenced from the dashboard guide.
+    Scoped to docs/assets/ — path traversal blocked by send_from_directory
+    + filename whitelist check."""
+    assets_dir = DOCS_DIR / "assets"
+    # Reject anything with .. or absolute paths
+    if ".." in fname or fname.startswith("/") or fname.startswith("\\"):
+        return jsonify({"error": "invalid path"}), 400
+    # Only allow safe extensions
+    allowed_ext = {".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    ext = Path(fname).suffix.lower()
+    if ext not in allowed_ext:
+        return jsonify({"error": f"extension {ext} not allowed"}), 400
+    if not (assets_dir / fname).exists():
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(str(assets_dir), fname)
+
+
 @app.route("/api/run/<trigger_id>", methods=["POST"])
 def manual_trigger(trigger_id: str):
     if not _is_loopback_request():
