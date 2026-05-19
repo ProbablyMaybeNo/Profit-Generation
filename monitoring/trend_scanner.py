@@ -57,11 +57,13 @@ def trend_strategies(declarations: List[Dict]) -> List[Dict]:
 
 def _default_bar_loader(symbols: List[str], lookback_days: int,
                        interval: str = "1d") -> Dict[str, "pd.DataFrame"]:
-    """Default bar loader: backtest.data.load_bars."""
-    from backtest.data import load_bars
-    end = (date.today() + timedelta(days=1)).isoformat()
-    start = (date.today() - timedelta(days=lookback_days)).isoformat()
-    return load_bars(symbols, start, end, interval)
+    """Default bar loader: batched Alpaca fetch via wide_bars (5.5.3.2).
+
+    `lookback_days` here is the requested bar count — wide_bars handles
+    the date math.
+    """
+    from monitoring.wide_bars import fetch_wide_daily_bars
+    return fetch_wide_daily_bars(symbols, lookback_bars=lookback_days)
 
 
 def scan_trend_universe(
