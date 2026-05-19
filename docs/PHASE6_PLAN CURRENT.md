@@ -87,7 +87,7 @@ broken level, sacrificing some hit-rate for a much tighter stop and
 higher R:R. Regime-gated to trending markets only via the existing
 regime_router.
 
-- [ ] **6.3.1 Donchian breakout-retest strategy**
+- [x] **6.3.1 Donchian breakout-retest strategy**
   - **Deliverable:** `strategies/breakout/donchian_retest.py` + validator integration
   - **Acceptance:** signal logic:
     1. `level = highest_high_20`. Breakout fires on close > level.
@@ -96,6 +96,7 @@ regime_router.
     4. If 5 bars elapse with no retest, cancel the pending entry (no chase).
     Declared `active_in_regimes=["bull", "trend"]`, `pyramidable=false` (the retest IS the entry — no add-on logic). Stop method `atr_initial` (6.1.1) with `k=1.0` (tight). Validator must PASS on a 5-year backtest before going live. Tests: signal sequencing, pending-window expiry, retest tolerance, no-chase enforcement.
   - **Notes:** Expected hit rate ~40-50% with R:R near 3:1 — the inverse profile of mean-reversion. Don't compare its win-rate directly to RSI2; compare expectancy.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 52c10d7 (5-year backtest gate to live is Ross-runs-it via conda trading env)
 
 - [ ] **6.3.2 Resistance-level breakout-retest (short side)**
   - **Deliverable:** `strategies/breakout/donchian_retest_short.py`
