@@ -142,9 +142,10 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
   - **Notes:** On Research not Monitor because it's strategy-level analytics. Monitor still shows the actual paper orders (which include the submitted scanner fires).
   - **Completed:** 2026-05-19 by milestone-builder · commit b605607 · derives action labels at query time (SUBMITTED / SKIP_INELIGIBLE / SKIP_CAPACITY / PENDING); SKIP_LIQUIDITY excluded from rows because filter runs before signals are recorded.
 
-- [ ] **5.5.6.2 Scanner-fire indicator on paper orders**
+- [x] **5.5.6.2 Scanner-fire indicator on paper orders**
   - **Deliverable:** Monitor `paper_trades_today` card extended with "scanner" tag
   - **Acceptance:** paper trades originating from the scanner (vs. the narrow active_on path) get a visual tag — small "🔍" or "scanner" badge. Tests: render against mixed fixture.
+  - **Completed:** 2026-05-19 by milestone-builder · commit acc9b72 · `is_scanner` flag added to /api/state paper_trades_today; Monitor renderer paints a magnifying-glass badge next to the strategy cell on scanner-sourced rows.
 
 ---
 
