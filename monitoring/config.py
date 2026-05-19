@@ -58,6 +58,21 @@ INTRADAY_ORB_DECLARATIONS = [
         "grace_period": True,
         "pyramidable": False,
     },
+    # 5.3.3 — Opening-Range Breakout with classic floor-pivot R1
+    # confirmation. Same 5m / opening-hour window as ORBO but only enters
+    # when R1 confirms breakout strength (R1 > or_high AND bar.open < or_high).
+    # Lower fire rate, higher quality. Initial stop = prior-day low.
+    {
+        "id": "intraday-orb-pivots-5m",
+        "compute": "compute_orb_pivots_intraday",
+        "module": "strategies.orb.orb_pivots_intraday",
+        "strategy_class": "breakout",
+        "bar_interval": "5m",
+        "active_on": ["SPY", "QQQ", "IWM", "NVDA", "TSLA"],
+        "active_in_window": ["09:35-10:30 ET"],
+        "grace_period": True,
+        "pyramidable": False,
+    },
 ]
 
 TRACKED_STRATEGIES = [

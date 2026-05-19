@@ -30,8 +30,9 @@ from strategies.orb import orbo_intraday as oi  # noqa: E402
 
 def test_orb_declaration_shape():
     decls = mcfg.INTRADAY_ORB_DECLARATIONS
-    assert len(decls) == 1
-    decl = decls[0]
+    ids = [d["id"] for d in decls]
+    assert "intraday-orbo-5m" in ids
+    decl = next(d for d in decls if d["id"] == "intraday-orbo-5m")
     assert decl["id"] == "intraday-orbo-5m"
     assert decl["compute"] == "compute_orbo_intraday"
     assert decl["bar_interval"] == "5m"
