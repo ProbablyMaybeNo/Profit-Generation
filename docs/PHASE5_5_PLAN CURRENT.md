@@ -67,10 +67,11 @@ mean-reversion on its tightly-validated subset.
 
 ## 5.5.2 Liquidity filter
 
-- [ ] **5.5.2.1 Dollar-volume filter**
+- [x] **5.5.2.1 Dollar-volume filter**
   - **Deliverable:** `monitoring/liquidity.py` + `data/db.py` snapshot helper
   - **Acceptance:** `filter_by_dollar_volume(symbols, min_usd=50_000_000)` returns subset where 20-day avg (close × volume) ≥ threshold. Pulls from `snapshots` table (already populated daily). Tests: math correctness, missing-snapshot fallback (exclude conservatively).
-  - **Notes:** $50M/day is a reasonable default — keeps liquid mid-caps and above, knocks out micro-caps where fills slip badly. Configurable per-strategy via `liquidity_floor_usd` on the declaration.
+  - **Notes:** $50M/day is a reasonable default — keeps liquid mid-caps and above, knocks out micro-caps where fills slip badly. Configurable per-strategy via `liquidity_floor_usd` on the declaration. **Implementation note:** new `liquidity_snapshots` table (purpose-built, instead of extending generic `snapshots` which has no volume column).
+  - **Completed:** 2026-05-19 by milestone-builder · commit 74900b3
 
 - [ ] **5.5.2.2 Spread estimate filter (optional second guard)**
   - **Deliverable:** extension to liquidity.py
