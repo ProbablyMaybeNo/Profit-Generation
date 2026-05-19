@@ -66,10 +66,11 @@ plus a min-sample-size guard is what professional shops actually use.
   - **Acceptance:** `calc_kelly_fraction(strategy_name)` queries `paper_trades` for that strategy's closed outcomes, computes `p = wins / total`, `b = mean_winner / abs(mean_loser)`, returns `f* = (p*(b+1) - 1) / b`. Returns `None` if fewer than 50 closed outcomes (sample-size guard). Returns `0` if `f*` is negative (negative-edge strategy — should not be sized at all). Caps raw `f*` at `0.25` (no single strategy claims more than a quarter of portfolio even if math says it should). Tests: math correctness, sample guard, negative-edge handling, cap enforcement.
   - **Completed:** 2026-05-19 by milestone-builder · commit 190c661
 
-- [ ] **6.2.2 Fractional Kelly sizing tier**
+- [x] **6.2.2 Fractional Kelly sizing tier**
   - **Deliverable:** `monitoring/sizing.py` new sizing tier `kelly_quarter`
   - **Acceptance:** new tier slots into existing tiered-sizing chain. When a strategy has Kelly guard satisfied (5.2.1 returns non-None), size = `portfolio_value × min(0.25 × kelly_fraction, per_strategy_max)`. When guard fails, falls back to current tier (3.2.1) — Kelly is opt-in via `sizing.method = kelly_quarter` per strategy. Per-strategy max-fraction setting (default 0.05) hard-caps any single position. Tests: fallback path, math against known-good inputs, max-fraction cap, fraction-of-Kelly multiplier (default 0.25, configurable for ¼ / ½ / full).
   - **Notes:** Default to ¼ Kelly. Ross can flip to ½ Kelly per-strategy after a strategy has 200+ closed outcomes — but never full Kelly. The acceptance test enforces a hard ceiling at 0.5 (½ Kelly) in code.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 0f30d1b
 
 - [ ] **6.2.3 Kelly dashboard card**
   - **Deliverable:** `dashboard/index.html` + dashboard API extension
