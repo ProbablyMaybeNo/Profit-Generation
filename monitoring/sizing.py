@@ -396,6 +396,7 @@ def resolve_atr_multiplier(
     strategy_id: Optional[str],
     settings_stops: Optional[Dict] = None,
     legacy_multiple: Optional[float] = None,
+    strategy_class: Optional[str] = None,
     default: float = DEFAULT_ATR_INITIAL_MULTIPLIER,
 ) -> float:
     """Return the ATR multiplier to use for this strategy.
@@ -404,8 +405,11 @@ def resolve_atr_multiplier(
       1. `legacy_multiple` (the existing `auto_trade.stop_loss_atr_multiple`
          setting), when truthy — preserves Phase 4.6 behavior.
       2. `settings_stops["per_strategy"][strategy_id]["atr_multiplier"]`
-      3. `settings_stops["atr_multiplier"]`
-      4. `default` (2.5).
+      3. `settings_stops["by_class"][strategy_class]["atr_multiplier"]`
+         — 6.1.2 added this so all mean-reversion strategies inherit
+         `k=2.0` without listing every id explicitly.
+      4. `settings_stops["atr_multiplier"]`
+      5. `default` (2.5).
 
     Non-numeric / non-positive values at any level fall through to the
     next source so a typo never silently zeros out the stop.
@@ -421,6 +425,18 @@ def resolve_atr_multiplier(
         per = settings_stops.get("per_strategy")
         if isinstance(per, dict) and strategy_id:
             entry = per.get(strategy_id)
+            if isinstance(entry, dict):
+                v = entry.get("atr_multiplier")
+                if v is not None:
+                    try:
+                        f = float(v)
+                        if f > 0:
+                            return f
+                    except (TypeError, ValueError):
+                        pass
+        by_class = settings_stops.get("by_class")
+        if isinstance(by_class, dict) and strategy_class:
+            entry = by_class.get(strategy_class)
             if isinstance(entry, dict):
                 v = entry.get("atr_multiplier")
                 if v is not None:
@@ -517,6 +533,7 @@ def resolve_initial_stop(
     settings_stops: Optional[Dict] = None,
     legacy_multiple: Optional[float] = None,
     side: str = "long",
+    strategy_class: Optional[str] = None,
     default_multiplier: float = DEFAULT_ATR_INITIAL_MULTIPLIER,
 ) -> Dict:
     """One-shot resolver used by the auto-trader.
@@ -539,6 +556,7 @@ def resolve_initial_stop(
         strategy_id=strategy_id,
         settings_stops=settings_stops,
         legacy_multiple=legacy_multiple,
+        strategy_class=strategy_class,
         default=default_multiplier,
     )
     out: Dict = {

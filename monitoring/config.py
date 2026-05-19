@@ -75,14 +75,19 @@ INTRADAY_ORB_DECLARATIONS = [
     },
 ]
 
+# 6.1.2 — All legacy botnet101 strategies are mean-reversion (3-bar-low,
+# 5-day-low, consec-bearish, 4-bar reversal, consec-below-EMA) or calendar-
+# effect mean-reversion (turn-of-month, turn-around-tuesday). Declaring
+# strategy_class="mean_reversion" lets the auto-trader apply MR-specific
+# stop policy (tighter k=2.0 ATR multiplier per 6.1.2).
 TRACKED_STRATEGIES = [
-    {"id": "botnet101-3-bar-low",            "compute": "compute_3bar_low",                  "active_on": ["QQQ", "IWM", "XLE", "KRE", "XHB"]},
-    {"id": "botnet101-buy-5day-low",         "compute": "compute_5day_low",                   "active_on": ["XBI", "KRE", "XHB", "GDX"]},
-    {"id": "botnet101-consec-bearish",       "compute": "compute_consecutive_bearish",        "active_on": ["IWM", "KRE", "XHB"]},
-    {"id": "botnet101-4bar-momentum-reversal","compute": "compute_4bar_momentum_reversal",    "active_on": ["IWM", "XBI", "XME", "GDX"]},
-    {"id": "botnet101-consec-below-ema",     "compute": "compute_consecutive_below_ema",      "active_on": ["XOP", "XBI", "KRE", "XME", "GDX"]},
-    {"id": "botnet101-turn-around-tuesday",  "compute": "compute_turn_around_tuesday",        "active_on": ["XOP", "XME", "GDX"]},
-    {"id": "botnet101-turn-of-month",        "compute": "compute_turn_of_month",              "active_on": ["XME", "GDX"]},
+    {"id": "botnet101-3-bar-low",            "compute": "compute_3bar_low",                  "strategy_class": "mean_reversion", "active_on": ["QQQ", "IWM", "XLE", "KRE", "XHB"]},
+    {"id": "botnet101-buy-5day-low",         "compute": "compute_5day_low",                   "strategy_class": "mean_reversion", "active_on": ["XBI", "KRE", "XHB", "GDX"]},
+    {"id": "botnet101-consec-bearish",       "compute": "compute_consecutive_bearish",        "strategy_class": "mean_reversion", "active_on": ["IWM", "KRE", "XHB"]},
+    {"id": "botnet101-4bar-momentum-reversal","compute": "compute_4bar_momentum_reversal",    "strategy_class": "mean_reversion", "active_on": ["IWM", "XBI", "XME", "GDX"]},
+    {"id": "botnet101-consec-below-ema",     "compute": "compute_consecutive_below_ema",      "strategy_class": "mean_reversion", "active_on": ["XOP", "XBI", "KRE", "XME", "GDX"]},
+    {"id": "botnet101-turn-around-tuesday",  "compute": "compute_turn_around_tuesday",        "strategy_class": "mean_reversion", "active_on": ["XOP", "XME", "GDX"]},
+    {"id": "botnet101-turn-of-month",        "compute": "compute_turn_of_month",              "strategy_class": "mean_reversion", "active_on": ["XME", "GDX"]},
     *TREND_DECLARATIONS,
     *INTRADAY_MR_DECLARATIONS,
     *INTRADAY_ORB_DECLARATIONS,

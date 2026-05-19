@@ -511,6 +511,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             entry_fill=float(sig["close"] or 0),
             qty=qty, client_order_id=client_order_id,
             bars_fetcher=bars_fetcher, dry_run=True,
+            strategy_class=strategy_class,
         )
         stop_note = (
             f" stop @ ${stop_info['stop_price']:.4f}"
@@ -584,6 +585,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         qty=qty,
         client_order_id=client_order_id,
         bars_fetcher=bars_fetcher,
+        strategy_class=strategy_class,
     )
 
     # 6.1.1 — record the stop method on the entry row so audit queries
@@ -1650,6 +1652,7 @@ def _maybe_attach_stop(
     client_order_id: Optional[str],
     bars_fetcher: Optional[Callable],
     dry_run: bool = False,
+    strategy_class: Optional[str] = None,
 ) -> Optional[dict]:
     """Compute + (if not dry-run) submit an initial stop. Routes through
     sizing.resolve_initial_stop so the same path serves trend (4.6),
@@ -1694,6 +1697,7 @@ def _maybe_attach_stop(
         strategy_id=sig["strategy_id"],
         settings_stops=settings_stops,
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
+        strategy_class=strategy_class,
     )
     info: dict = {
         "requested_multiple": multiplier,
@@ -1742,6 +1746,7 @@ def _maybe_attach_stop(
         settings_stops=settings_stops,
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
         side=side,
+        strategy_class=strategy_class,
     )
     info["stop_price"] = resolved["stop_price"]
     info["stop_method"] = resolved["method"]
