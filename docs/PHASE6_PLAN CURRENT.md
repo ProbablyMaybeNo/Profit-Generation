@@ -46,9 +46,10 @@ strategy benefits — including mean-reversion, which currently uses fixed
   - **Notes:** This is the milestone where ATR stops actually start *making money* for us — trend strategies (4.6) already had ATR from the start, but the bulk of the roster is mean-reversion.
   - **Completed:** 2026-05-19 by milestone-builder · commit c45c5f0
 
-- [ ] **6.1.3 Regime-aware ATR multiplier**
+- [x] **6.1.3 Regime-aware ATR multiplier**
   - **Deliverable:** `monitoring/regime_router.py` extended + sizing integration
   - **Acceptance:** `k` is no longer a fixed per-strategy constant. It scales by current regime classifier output: `k_effective = k_base × regime_multiplier` where regime_multiplier is `1.25` in high-vol regimes and `0.85` in low-vol regimes (so stops widen in chop, tighten in calm). Multiplier capped to `[0.7, 1.5]` to prevent extreme stops. Tests: multiplier math, cap enforcement, default-1.0 when classifier confidence < 0.6.
+  - **Completed:** 2026-05-19 by milestone-builder · commit d724cf7
 
 ---
 
