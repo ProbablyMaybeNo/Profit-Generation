@@ -156,9 +156,10 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
   - **Acceptance:** exercises the full pipeline against a synthetic universe (20 fake symbols with known bullish breakout setups). Verifies: universe load, liquidity filter applied, fires generated, ranking computed, capacity capping correct, paper orders tagged. Output: pipeline trace log + final stats. Tests: harness self-tests.
   - **Completed:** 2026-05-19 by milestone-builder · commit f2c6e93 · 20-symbol universe (12 breakouts + 6 flats + 2 illiquids); 12 fires → top-5 by ranker → 5 BUYs + 7 SKIP_CAPACITY at cap=5. Flagged: scanner persists bar_ts from df.index which under live Alpaca daily bars is an ISO datetime — auto_trader's bar_ts = asof.isoformat() join breaks. Out of scope for 5.5.7.1; needs a follow-up.
 
-- [ ] **5.5.7.2 First-day scanner playbook**
+- [x] **5.5.7.2 First-day scanner playbook**
   - **Deliverable:** `docs/TREND_SCANNER_FIRST_DAY.md`
   - **Acceptance:** the procedure for first flip of `trend_scanner_enabled=true`. Includes: pre-flight checks, what to watch in the first hour, signs of trouble (too many fires, illiquid fills, regime mismatch), rollback steps. ≤ 10 procedures, each ≤ 5 steps.
+  - **Completed:** 2026-05-19 by milestone-builder · commit b21259b · 10 procedures × 5 steps with structure-check test enforcing the contract.
 
 ---
 
