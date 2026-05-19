@@ -35,9 +35,10 @@ trend strategies. Phase 5 generalizes that infrastructure so *every*
 strategy benefits — including mean-reversion, which currently uses fixed
 % stops that get whipsawed in volatile regimes.
 
-- [ ] **6.1.1 ATR-based initial stops**
+- [x] **6.1.1 ATR-based initial stops**
   - **Deliverable:** `monitoring/sizing.py` extended with `atr_initial_stop()` + integration into auto_trader entry path
   - **Acceptance:** at entry time, stop is set at `entry_price − (k × ATR_14)` for longs (mirror for shorts). `k` configurable per strategy via new `stops.atr_multiplier` setting (default 2.5). Falls back to the existing fixed-% stop if ATR can't be computed (e.g. <14 bars of history). New `entry_stops` column on `paper_trades` records which method was used. Tests: ATR math, fallback path, per-strategy multiplier override, short-direction handling.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 1cffdff
 
 - [ ] **6.1.2 ATR stops as default for mean-reversion strategies**
   - **Deliverable:** strategy declarations updated + tests
