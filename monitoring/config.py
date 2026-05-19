@@ -23,6 +23,25 @@ NOTION_PATTERNS_DS         = "5b0d18f3-d7cc-4af0-906c-26dc429a1ee4"
 NOTION_PARENT_PAGE_ID      = "24ac5770777180bda375eb9ae8e53194"
 
 # Tracked strategies that have a non-FAIL verdict — these get fire-checked daily
+from strategies.trend import TREND_DECLARATIONS
+
+# 5.3.1 — Promote mean_reversion_intraday (3-bar-low port) to TRACKED_STRATEGIES.
+# Fires on 15-min bars during market hours via monitoring.intraday_fires.
+# Grace period: yes (no prior intraday outcomes). Not pyramidable —
+# mean-reversion entries are single-shot.
+INTRADAY_MR_DECLARATIONS = [
+    {
+        "id": "intraday-mr-3bar-low-15m",
+        "compute": "compute_3bar_low_intraday",
+        "module": "strategies.intraday.mean_reversion_intraday",
+        "strategy_class": "mean_reversion",
+        "bar_interval": "15m",
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "grace_period": True,
+        "pyramidable": False,
+    },
+]
+
 TRACKED_STRATEGIES = [
     {"id": "botnet101-3-bar-low",            "compute": "compute_3bar_low",                  "active_on": ["QQQ", "IWM", "XLE", "KRE", "XHB"]},
     {"id": "botnet101-buy-5day-low",         "compute": "compute_5day_low",                   "active_on": ["XBI", "KRE", "XHB", "GDX"]},
@@ -31,6 +50,8 @@ TRACKED_STRATEGIES = [
     {"id": "botnet101-consec-below-ema",     "compute": "compute_consecutive_below_ema",      "active_on": ["XOP", "XBI", "KRE", "XME", "GDX"]},
     {"id": "botnet101-turn-around-tuesday",  "compute": "compute_turn_around_tuesday",        "active_on": ["XOP", "XME", "GDX"]},
     {"id": "botnet101-turn-of-month",        "compute": "compute_turn_of_month",              "active_on": ["XME", "GDX"]},
+    *TREND_DECLARATIONS,
+    *INTRADAY_MR_DECLARATIONS,
 ]
 
 # Schedule (Eastern Time). Cron-style trigger times.

@@ -22,6 +22,11 @@ from monitoring.config import TRACKED_STRATEGIES
 # not two.
 _COMPUTE_FN_MODULES = [
     "strategies.mean_reversion.botnet101",
+    "strategies.trend",
+    "strategies.trend.donchian_breakout_20",
+    "strategies.trend.ma_cross_20_50",
+    "strategies.trend.new_high_volume",
+    "strategies.intraday.mean_reversion_intraday",
 ]
 
 

@@ -54,6 +54,7 @@ def main() -> int:
     inserted_or_updated = 0
     overlaid = 0
     skipped = 0
+    seeded_ids = set()
     for r in records:
         extra = r.get("extra", {})
         sid = extra.get("strategy_id") or r.get("strategy_id")
@@ -62,6 +63,7 @@ def main() -> int:
             continue
         db.upsert_strategy(conn, r)
         inserted_or_updated += 1
+        seeded_ids.add(sid)
         if sid in tracked:
             db.set_strategy_active_on(
                 conn,
@@ -71,13 +73,38 @@ def main() -> int:
             )
             overlaid += 1
 
+    # 5.3.1 — Promoted strategies that don't originate from records.jsonl
+    # (trend, intraday) still need a row in the strategies table so the
+    # auto_trader's FK constraint on signals is satisfied. Upsert any
+    # TRACKED_STRATEGIES entries that weren't seeded from the bundle.
+    promoted = 0
+    for sid, entry in tracked.items():
+        if sid in seeded_ids:
+            continue
+        db.upsert_strategy(conn, {
+            "extra": {
+                "strategy_id": sid,
+                "title": entry.get("id"),
+                "methodology_family": entry.get("strategy_class"),
+                "current_verdict": "PROMOTED",
+            }
+        })
+        db.set_strategy_active_on(
+            conn,
+            strategy_id=sid,
+            symbols=entry.get("active_on", []),
+            compute_fn=entry.get("compute"),
+        )
+        promoted += 1
+
     total = conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0]
     by_verdict = conn.execute(
         "SELECT current_verdict, COUNT(*) FROM strategies GROUP BY current_verdict"
     ).fetchall()
     conn.close()
 
-    print(f"seed complete: upserted={inserted_or_updated}  overlaid={overlaid}  skipped={skipped}")
+    print(f"seed complete: upserted={inserted_or_updated}  overlaid={overlaid}  "
+          f"promoted={promoted}  skipped={skipped}")
     print(f"strategies in db: {total}")
     for v, n in by_verdict:
         print(f"  {v or '(null)'}: {n}")
