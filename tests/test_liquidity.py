@@ -279,6 +279,100 @@ def test_populate_liquidity_snapshots_loader_failure_returns_empty(isolated_db):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Spread filter (5.5.2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_spread_bps_basic():
+    # 100/100.50 → spread 0.5 / mid 100.25 = ~49.88 bps
+    bps = liquidity._spread_bps(100.0, 100.50)
+    assert bps == pytest.approx((0.5 / 100.25) * 10_000)
+
+
+def test_spread_bps_handles_bad_inputs():
+    assert liquidity._spread_bps(None, 100.0) is None
+    assert liquidity._spread_bps(100.0, None) is None
+    assert liquidity._spread_bps(0.0, 100.0) is None
+    assert liquidity._spread_bps(100.0, 99.0) is None  # crossed
+
+
+def test_filter_by_spread_keeps_tight_drops_wide():
+    liquidity.clear_spread_cache()
+    quotes = {
+        "AAPL": (100.00, 100.05),  # 5 bps -> keep
+        "MSFT": (400.00, 400.40),  # 10 bps -> keep
+        "WIDE": (10.00, 10.10),    # 100 bps -> drop
+    }
+    def fetcher(sym): return quotes.get(sym, (None, None))
+
+    out = liquidity.filter_by_spread(
+        ["AAPL", "MSFT", "WIDE"],
+        max_spread_bps=50.0,
+        quote_fetcher=fetcher,
+    )
+    assert out == ["AAPL", "MSFT"]
+
+
+def test_filter_by_spread_excludes_unfetchable():
+    liquidity.clear_spread_cache()
+    def fetcher(sym): return (None, None)
+    out = liquidity.filter_by_spread(
+        ["AAPL", "MSFT"], quote_fetcher=fetcher,
+    )
+    assert out == []
+
+
+def test_filter_by_spread_caches_within_ttl():
+    liquidity.clear_spread_cache()
+    calls = []
+    def fetcher(sym):
+        calls.append(sym)
+        return (100.0, 100.05)
+
+    # First pass: fetch
+    liquidity.filter_by_spread(
+        ["AAPL"], quote_fetcher=fetcher, cache_ttl_sec=3600, now=1000.0,
+    )
+    assert calls == ["AAPL"]
+
+    # Second pass within TTL: cache hit, no fetch
+    liquidity.filter_by_spread(
+        ["AAPL"], quote_fetcher=fetcher, cache_ttl_sec=3600, now=1500.0,
+    )
+    assert calls == ["AAPL"]
+
+
+def test_filter_by_spread_refetches_after_ttl():
+    liquidity.clear_spread_cache()
+    calls = []
+    def fetcher(sym):
+        calls.append(sym)
+        return (100.0, 100.05)
+
+    liquidity.filter_by_spread(
+        ["AAPL"], quote_fetcher=fetcher, cache_ttl_sec=3600, now=1000.0,
+    )
+    # Past TTL → refetch
+    liquidity.filter_by_spread(
+        ["AAPL"], quote_fetcher=fetcher, cache_ttl_sec=3600, now=5000.0,
+    )
+    assert calls == ["AAPL", "AAPL"]
+
+
+def test_filter_by_spread_dedupes():
+    liquidity.clear_spread_cache()
+    calls = []
+    def fetcher(sym):
+        calls.append(sym)
+        return (100.0, 100.02)
+    out = liquidity.filter_by_spread(
+        ["aapl", "AAPL", "aapl"], quote_fetcher=fetcher,
+    )
+    assert out == ["AAPL"]
+    assert calls == ["AAPL"]
+
+
 def test_populate_then_filter_end_to_end(isolated_db):
     conn = db.init_db()
     try:

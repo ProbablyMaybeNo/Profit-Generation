@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -34,6 +35,13 @@ from data import db  # noqa: E402
 DEFAULT_MIN_USD = 50_000_000.0  # $50M/day
 DEFAULT_LOOKBACK_DAYS = 20
 SNAPSHOT_STALENESS_DAYS = 7  # snapshot older than this is treated as missing
+
+DEFAULT_MAX_SPREAD_BPS = 50.0  # 0.5% of midpoint
+SPREAD_CACHE_TTL_SEC = 3600  # 1 hour
+
+# (symbol → (bps, expires_at_epoch_seconds)) — module-level so the CLI run
+# benefits from it; tests can monkeypatch / reset.
+_SPREAD_CACHE: Dict[str, Tuple[float, float]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +194,83 @@ def populate_liquidity_snapshots(
             conn.close()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Spread filter (5.5.2.2) — belt-and-suspenders second guard
+# ---------------------------------------------------------------------------
+
+
+def _now_epoch() -> float:
+    return time.time()
+
+
+def _default_quote_fetcher(symbol: str) -> Tuple[Optional[float], Optional[float]]:
+    """Default live quote fetch via Alpaca. Reuses auto_trader's wrapper."""
+    try:
+        from monitoring.auto_trader import _fetch_latest_quote
+        return _fetch_latest_quote(symbol)
+    except Exception as exc:  # noqa: BLE001
+        log(f"liquidity: spread quote fetch failed for {symbol}: {exc}",
+            level="WARNING")
+        return (None, None)
+
+
+def _spread_bps(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
+    """Return spread in basis points (1 bp = 0.01%) of midpoint, or None."""
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return None
+    return ((ask - bid) / mid) * 10_000.0
+
+
+def filter_by_spread(
+    symbols: Iterable[str],
+    *,
+    max_spread_bps: float = DEFAULT_MAX_SPREAD_BPS,
+    quote_fetcher: Optional[Callable[[str], Tuple[Optional[float], Optional[float]]]] = None,
+    cache_ttl_sec: float = SPREAD_CACHE_TTL_SEC,
+    now: Optional[float] = None,
+) -> List[str]:
+    """Return symbols whose live bid/ask spread is ≤ `max_spread_bps`.
+
+    Symbols where the quote can't be fetched (no live data, market closed)
+    are EXCLUDED — same conservative pattern as the dollar-volume filter.
+
+    Cached per-symbol for `cache_ttl_sec` to avoid hammering Alpaca on
+    repeat scans within the same hour.
+    """
+    fetcher = quote_fetcher if quote_fetcher is not None else _default_quote_fetcher
+    cutoff = now if now is not None else _now_epoch()
+
+    out: List[str] = []
+    seen = set()
+    for raw in symbols:
+        sym = raw.upper()
+        if sym in seen:
+            continue
+        seen.add(sym)
+
+        cached = _SPREAD_CACHE.get(sym)
+        if cached and cached[1] > cutoff:
+            bps = cached[0]
+        else:
+            bid, ask = fetcher(sym)
+            bps = _spread_bps(bid, ask)
+            if bps is not None:
+                _SPREAD_CACHE[sym] = (bps, cutoff + cache_ttl_sec)
+        if bps is None:
+            continue
+        if bps <= max_spread_bps:
+            out.append(sym)
+    return out
+
+
+def clear_spread_cache() -> None:
+    """Reset the spread cache. Test seam — not exposed in CLI."""
+    _SPREAD_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
