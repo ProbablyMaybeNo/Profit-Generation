@@ -962,20 +962,52 @@ def _update_trailing_stops_for_open_positions(
 
 def _check_trailing_exit(
     conn, *, strategy_id: str, symbol: str, current_price: float,
+    strategy_meta: Optional[dict] = None,
+    bar_low: Optional[float] = None,
+    bar_high: Optional[float] = None,
 ) -> Optional[dict]:
     """If a trailing stop is in force and current_price has crossed it,
-    return the trip descriptor; else None."""
+    return the trip descriptor; else None.
+
+    6.4.1 — When `strategy_meta` has `sar_overlay: true`, also consult
+    the Parabolic SAR overlay engine. The exit fires on
+    `trailing_stop_hit OR sar_flip` (whichever first). The trip
+    descriptor's `reason` field reports which.
+    """
     from monitoring import trailing_stops as ts_mod
-    if not ts_mod.should_exit_on_trailing_stop(
+    from monitoring import sar_overlay as sar_mod
+    trailing_hit = ts_mod.should_exit_on_trailing_stop(
         conn, strategy_id=strategy_id, symbol=symbol,
         current_price=current_price,
-    ):
+    )
+    sar_enabled = sar_mod.strategy_has_sar_overlay(strategy_meta)
+    if not trailing_hit and not sar_enabled:
+        return None
+    if not sar_enabled:
+        row = ts_mod.get_stop(conn, strategy_id=strategy_id, symbol=symbol)
+        return {
+            "stop_price": row["stop_price"] if row else None,
+            "method": row["method"] if row else None,
+            "extreme_price": row["extreme_price"] if row else None,
+            "reason": "trailing_stop_hit",
+            "sar_flip": False,
+        }
+    overlay = sar_mod.should_exit_with_sar_overlay(
+        conn, strategy_id=strategy_id, symbol=symbol,
+        current_price=current_price,
+        bar_low=bar_low, bar_high=bar_high,
+        trailing_stop_hit=trailing_hit,
+    )
+    if not overlay["should_exit"]:
         return None
     row = ts_mod.get_stop(conn, strategy_id=strategy_id, symbol=symbol)
     return {
         "stop_price": row["stop_price"] if row else None,
         "method": row["method"] if row else None,
         "extreme_price": row["extreme_price"] if row else None,
+        "reason": overlay["reason"],
+        "sar_flip": overlay["sar_flip"],
+        "sar": overlay.get("sar"),
     }
 
 
