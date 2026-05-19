@@ -1985,6 +1985,30 @@ def process_signals(
                         ),
                     })
                     continue
+            # 5.4.1 — Pattern Day Trader guard. Only applies to intraday
+            # entries (EOD signals are by definition not day trades). When
+            # account_value < $25k AND >= 3 round trips in the last 5 days,
+            # refuse the entry. Paper accounts effectively never trip the
+            # guard (100k seed), but the guard is always computed so that
+            # any strategy promoted to live via auto_trade.live_strategies
+            # automatically picks up the same enforcement.
+            sig_bar_interval = sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
+            if (sig_bar_interval or "1d") != "1d":
+                from monitoring import pdt_guard as pdt_mod
+                pdt_block = pdt_mod.check_pdt_guard(
+                    conn,
+                    account_value=portfolio_value,
+                    asof=asof,
+                )
+                if pdt_block is not None:
+                    actions.append({
+                        "action": "SKIP_PDT_GUARD",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sig["symbol"],
+                        "signal_id": sig["id"],
+                        **pdt_block,
+                    })
+                    continue
             try:
                 strategy_client = _resolve_strategy_client(
                     sig["strategy_id"],
