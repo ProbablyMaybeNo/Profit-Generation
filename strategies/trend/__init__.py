@@ -31,6 +31,9 @@ TREND_DECLARATIONS = [
         "strategy_class": "trend",
         "active_in_regimes": ["bull", "trend"],
         "pyramidable": True,
+        "grace_period": True,
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
     },
     {
         "id": "trend-ma-cross-20-50",
@@ -39,6 +42,9 @@ TREND_DECLARATIONS = [
         "strategy_class": "trend",
         "active_in_regimes": ["bull", "trend"],
         "pyramidable": True,
+        "grace_period": True,
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
     },
     {
         "id": "trend-new-high-volume",
@@ -47,6 +53,9 @@ TREND_DECLARATIONS = [
         "strategy_class": "trend",
         "active_in_regimes": ["bull", "trend"],
         "pyramidable": True,
+        "grace_period": True,
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
     },
 ]
 

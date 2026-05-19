@@ -88,6 +88,44 @@ def test_ineligible_no_outcomes(isolated_db, winner_settings):
     assert stats["n"] == 0
 
 
+def test_grace_period_passes_with_zero_outcomes(isolated_db, winner_settings):
+    # New strategy with grace_period=True can fire even at n=0
+    ok, stats = at._is_eligible(db.init_db(), "untested", winner_settings,
+                                grace_period=True)
+    assert ok is True
+    assert stats["n"] == 0
+    assert stats["in_grace"] is True
+
+
+def test_grace_period_passes_below_min_outcomes(isolated_db, winner_settings):
+    # 10 outcomes < min_outcomes=30, normally rejected; grace lets it pass
+    _seed_outcomes("winner", [2.0, 1.0] * 5)
+    ok, stats = at._is_eligible(db.init_db(), "winner", winner_settings,
+                                grace_period=True)
+    assert ok is True
+    assert stats["n"] == 10
+    assert stats["in_grace"] is True
+
+
+def test_grace_period_graduates_at_min_outcomes(isolated_db, winner_settings):
+    # Once n >= min_outcomes, grace_period is irrelevant — normal gates apply
+    _seed_outcomes("winner", [2.0, 1.0] * 18)  # n=36, mean ~1.5%
+    ok, stats = at._is_eligible(db.init_db(), "winner", winner_settings,
+                                grace_period=True)
+    assert ok is True
+    assert stats["in_grace"] is False  # graduated out of grace
+
+
+def test_grace_period_still_fails_negative_edge_after_graduation(isolated_db,
+                                                                  winner_settings):
+    # Strategy graduates (n=30+) but has negative mean — grace doesn't save it
+    _seed_outcomes("loser", [-1.0, 0.0] * 18)
+    ok, stats = at._is_eligible(db.init_db(), "loser", winner_settings,
+                                grace_period=True)
+    assert ok is False
+    assert stats["in_grace"] is False
+
+
 # ----- Sizing -----
 
 def test_calc_qty_floor():
