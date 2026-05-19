@@ -86,7 +86,9 @@ def check_alpaca(*, account_summary_fn: Optional[Callable] = None,
             blocked = bool(acct.get("blocked", False))
     except Exception as e:
         return _fail(name, f"alpaca client/account lookup failed: {e}")
-    if str(status).upper() != "ACTIVE":
+    # alpaca-py returns AccountStatus.ACTIVE enum; coerce to last token + uppercase.
+    status_str = str(status).rsplit(".", 1)[-1].upper()
+    if status_str != "ACTIVE":
         return _fail(name, f"account status={status} (expected ACTIVE)")
     if blocked:
         return _fail(name, "account is blocked")
