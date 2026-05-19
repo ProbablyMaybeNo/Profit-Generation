@@ -33,9 +33,25 @@ KELLY_CAP = 0.25
 SIZING_METHOD_FIXED = "fixed"
 SIZING_METHOD_KELLY = "kelly"
 SIZING_METHOD_TIERED = "tiered"
+SIZING_METHOD_KELLY_QUARTER = "kelly_quarter"  # 6.2.2
 SUPPORTED_SIZING_METHODS = {
     SIZING_METHOD_FIXED, SIZING_METHOD_KELLY, SIZING_METHOD_TIERED,
+    SIZING_METHOD_KELLY_QUARTER,
 }
+
+# 6.2.2 — Fractional-Kelly sizing tier defaults.
+# fraction_of_kelly: how much of the raw Kelly fraction we actually
+#   stake (0.25 = ¼ Kelly is the default — full Kelly is famously
+#   brutal on noisy estimates). Code hard-caps this to 0.5 (½ Kelly)
+#   so a typo can't accidentally route a strategy through full Kelly.
+# max_position_fraction: hard ceiling on any single position as a
+#   fraction of portfolio (0.05 = 5%).
+# min_samples: number of closed outcomes required before Kelly fires;
+#   below that, fall back to the previous sizing tier.
+DEFAULT_FRACTION_OF_KELLY = 0.25
+HARD_CAP_FRACTION_OF_KELLY = 0.50  # never above ½ Kelly
+DEFAULT_MAX_POSITION_FRACTION = 0.05
+DEFAULT_KELLY_MIN_SAMPLES = 50
 
 # Tiered sizing defaults (per-tier capital in USD). All overridable via
 # settings.auto_trade.tiered.{tier_0_usd, tier_1_usd, tier_2_usd,
@@ -249,6 +265,155 @@ def resolve_intraday_multiplier(
     return float(default)
 
 
+def _coerce_kelly_settings(raw: Optional[Dict]) -> Dict:
+    """Merge `settings.sizing.kelly` (or `settings.kelly`) over Phase 6.2.2
+    defaults. Any non-numeric / out-of-range override falls back to the
+    default so a typo never accidentally routes through full Kelly.
+
+    Defaults:
+      fraction_of_kelly = 0.25 (¼ Kelly)
+      max_position_fraction = 0.05 (5% of portfolio per position)
+      min_samples = 50
+    """
+    out = {
+        "fraction_of_kelly": DEFAULT_FRACTION_OF_KELLY,
+        "max_position_fraction": DEFAULT_MAX_POSITION_FRACTION,
+        "min_samples": DEFAULT_KELLY_MIN_SAMPLES,
+    }
+    if not isinstance(raw, dict):
+        return out
+    # fraction_of_kelly — clamped at hard cap so the 6.2.2 acceptance
+    # test ("never above ½ Kelly") is enforced in code.
+    v = raw.get("fraction_of_kelly")
+    if v is not None:
+        try:
+            f = float(v)
+            if 0 < f <= HARD_CAP_FRACTION_OF_KELLY:
+                out["fraction_of_kelly"] = f
+            elif f > HARD_CAP_FRACTION_OF_KELLY:
+                # Hard-clamp to ½ Kelly so a typo can't push to full.
+                out["fraction_of_kelly"] = HARD_CAP_FRACTION_OF_KELLY
+        except (TypeError, ValueError):
+            pass
+    # max_position_fraction — non-numeric / non-positive falls back.
+    v = raw.get("max_position_fraction")
+    if v is not None:
+        try:
+            f = float(v)
+            if 0 < f <= 1.0:
+                out["max_position_fraction"] = f
+        except (TypeError, ValueError):
+            pass
+    # min_samples — non-int / negative falls back.
+    v = raw.get("min_samples")
+    if v is not None:
+        try:
+            n = int(v)
+            if n >= 0:
+                out["min_samples"] = n
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def kelly_quarter_notional(
+    conn: sqlite3.Connection,
+    strategy_id: str,
+    portfolio_value: Optional[float],
+    *,
+    max_position_usd: float,
+    settings_kelly: Optional[Dict] = None,
+    cap: float = KELLY_CAP,
+) -> Dict:
+    """Phase 6.2.2 fractional-Kelly sizing tier.
+
+    Routes through `monitoring.kelly.calc_kelly_fraction`. When the
+    Kelly guard fails (None — fewer than min_samples closed outcomes),
+    returns `{notional: None, ...}` so the auto-trader's compute_notional
+    can fall back to the previous tier. Otherwise:
+
+        notional = portfolio_value × min(
+            fraction_of_kelly × kelly_fraction,
+            max_position_fraction,
+        )
+        notional = min(notional, max_position_usd)
+
+    `fraction_of_kelly` defaults to 0.25 (¼ Kelly) and is hard-capped
+    in code at 0.5 (½ Kelly). `max_position_fraction` defaults to 0.05
+    (5% of portfolio per position).
+
+    Returns the shape:
+      {notional: float | None,
+       fraction: float,            # the raw Kelly (0.25-capped)
+       sized_fraction: float,      # fraction_of_kelly × fraction
+       fraction_of_kelly: float,
+       max_position_fraction: float,
+       stats: dict,                # kelly_stats payload
+       guard_status: str,          # qualifying / need_more_samples / no_edge / capped
+       fallback: bool}             # True when caller should drop to next tier
+    """
+    from monitoring import kelly as kelly_mod
+    settings = _coerce_kelly_settings(settings_kelly)
+    diag = kelly_mod.kelly_diagnostic(
+        conn, strategy_id,
+        min_samples=settings["min_samples"], cap=cap,
+    )
+    raw_fraction = diag.get("fraction")
+    if raw_fraction is None:
+        # Guard failed → caller falls back to previous tier.
+        return {
+            "notional": None,
+            "fraction": None,
+            "sized_fraction": None,
+            "fraction_of_kelly": settings["fraction_of_kelly"],
+            "max_position_fraction": settings["max_position_fraction"],
+            "stats": diag.get("stats"),
+            "guard_status": diag.get("guard"),
+            "fallback": True,
+        }
+    if raw_fraction <= 0:
+        # Negative edge → no entry sized at all. Return 0 (not None) so
+        # the caller knows we evaluated Kelly and decided to skip.
+        return {
+            "notional": 0.0,
+            "fraction": 0.0,
+            "sized_fraction": 0.0,
+            "fraction_of_kelly": settings["fraction_of_kelly"],
+            "max_position_fraction": settings["max_position_fraction"],
+            "stats": diag.get("stats"),
+            "guard_status": diag.get("guard"),
+            "fallback": False,
+        }
+    sized_fraction = min(
+        settings["fraction_of_kelly"] * raw_fraction,
+        settings["max_position_fraction"],
+    )
+    if portfolio_value is None or portfolio_value <= 0:
+        return {
+            "notional": 0.0,
+            "fraction": raw_fraction,
+            "sized_fraction": round(sized_fraction, 6),
+            "fraction_of_kelly": settings["fraction_of_kelly"],
+            "max_position_fraction": settings["max_position_fraction"],
+            "stats": diag.get("stats"),
+            "guard_status": diag.get("guard"),
+            "fallback": False,
+        }
+    target = sized_fraction * float(portfolio_value)
+    if max_position_usd and max_position_usd > 0:
+        target = min(target, float(max_position_usd))
+    return {
+        "notional": round(target, 2),
+        "fraction": raw_fraction,
+        "sized_fraction": round(sized_fraction, 6),
+        "fraction_of_kelly": settings["fraction_of_kelly"],
+        "max_position_fraction": settings["max_position_fraction"],
+        "stats": diag.get("stats"),
+        "guard_status": diag.get("guard"),
+        "fallback": False,
+    }
+
+
 def compute_notional(
     conn: sqlite3.Connection,
     strategy_id: str,
@@ -258,10 +423,12 @@ def compute_notional(
     max_position_usd: float,
     cap: float = KELLY_CAP,
     settings_tiered: Optional[Dict] = None,
+    settings_kelly: Optional[Dict] = None,
     regime_multiplier: Optional[float] = None,
     strategy_class: Optional[str] = None,
     min_position_usd: float = 0.0,
     intraday_multiplier: Optional[float] = None,
+    fallback_method: str = SIZING_METHOD_TIERED,
 ) -> Dict:
     """Single entry point for the auto-trader.
 
@@ -270,7 +437,9 @@ def compute_notional(
     For "fixed", notional is just max_position_usd (the existing
     behavior); for "kelly" it routes through kelly_notional; for
     "tiered" it routes through tiered_notional with max_position_usd
-    as a hard ceiling.
+    as a hard ceiling; for "kelly_quarter" it routes through
+    `kelly_quarter_notional` with auto-fallback to `fallback_method`
+    when the Kelly guard fails.
 
     When `regime_multiplier` is supplied (milestone 4.7.3), the base
     notional from the chosen method is multiplied by it. The product
@@ -296,6 +465,50 @@ def compute_notional(
             max_position_usd=max_position_usd,
         )
         out["sizing_method"] = method
+    elif method == SIZING_METHOD_KELLY_QUARTER:
+        kq = kelly_quarter_notional(
+            conn, strategy_id, portfolio_value,
+            max_position_usd=max_position_usd,
+            settings_kelly=settings_kelly, cap=cap,
+        )
+        if kq.get("fallback"):
+            # Drop to fallback tier (default tiered). Preserve the Kelly
+            # diagnostic on the result so downstream consumers can log
+            # why Kelly didn't fire.
+            fb_method = normalize_sizing_method(fallback_method)
+            if fb_method == SIZING_METHOD_TIERED:
+                out = tiered_notional(
+                    conn, strategy_id,
+                    settings_tiered=settings_tiered,
+                    max_position_usd=max_position_usd,
+                )
+            elif fb_method == SIZING_METHOD_KELLY:
+                out = kelly_notional(
+                    conn, strategy_id, portfolio_value,
+                    max_position_usd=max_position_usd, cap=cap,
+                )
+            else:
+                out = {
+                    "notional": float(max_position_usd),
+                    "fraction": None,
+                    "stats": None,
+                }
+            out["sizing_method"] = fb_method
+            out["kelly_quarter"] = {
+                "guard_status": kq.get("guard_status"),
+                "stats": kq.get("stats"),
+                "fallback": True,
+                "fraction_of_kelly": kq.get("fraction_of_kelly"),
+                "max_position_fraction": kq.get("max_position_fraction"),
+            }
+        else:
+            out = {
+                "notional": kq["notional"],
+                "fraction": kq["fraction"],
+                "stats": kq["stats"],
+                "sizing_method": SIZING_METHOD_KELLY_QUARTER,
+                "kelly_quarter": kq,
+            }
     else:
         out = {
             "notional": float(max_position_usd),
