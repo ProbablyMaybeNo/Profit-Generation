@@ -428,6 +428,39 @@ def to_notion_properties(report: DailyReport) -> Dict:
     }
 
 
+def maybe_run_trend_scanner() -> Optional[int]:
+    """Run the wide-universe trend scanner iff
+    `auto_trade.trend_scanner_enabled` is True in settings.
+
+    Returns the fire count (0 if disabled / failed). Returns None on
+    settings-read failure — that's the signal to the caller that we
+    skipped without even reaching the enable check. Failures are
+    always non-fatal: the daily report must still publish on a
+    scanner crash.
+    """
+    try:
+        from monitoring import auto_trader
+        _at_settings = auto_trader._config()
+    except Exception as outer:  # noqa: BLE001
+        from config.utils import log
+        log(f"trend_scanner enable-check failed (non-fatal): {outer}",
+            "WARNING")
+        return None
+    if not _at_settings.get("trend_scanner_enabled", False):
+        return 0
+    try:
+        from monitoring import trend_scanner
+        scan_fires = trend_scanner.scan_trend_universe()
+        from config.utils import log
+        log(f"trend_scanner: {len(scan_fires)} fires recorded for "
+            f"wide universe", "INFO")
+        return len(scan_fires)
+    except Exception as scan_exc:  # noqa: BLE001
+        from config.utils import log
+        log(f"trend_scanner failed (non-fatal): {scan_exc}", "WARNING")
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("date", nargs="?", default=date.today().isoformat())
@@ -447,6 +480,14 @@ def main():
         finalize_report(report)  # rescore now that news is loaded
     markdown = render_markdown(report)
     persist_report(report, markdown=markdown)
+
+    # 5.5.5.1 — Wide-universe trend scanner. Conditional on the master
+    # flag `auto_trade.trend_scanner_enabled` (default false). Runs BEFORE
+    # auto_trader so the freshly-recorded scanner signals get picked up in
+    # the same pipeline pass. Failures are isolated — a scanner crash
+    # must not poison the daily report.
+    if not args.no_trade:
+        maybe_run_trend_scanner()
 
     if not args.no_trade:
         try:
