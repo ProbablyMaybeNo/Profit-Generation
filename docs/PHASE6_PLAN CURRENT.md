@@ -72,9 +72,10 @@ plus a min-sample-size guard is what professional shops actually use.
   - **Notes:** Default to ¼ Kelly. Ross can flip to ½ Kelly per-strategy after a strategy has 200+ closed outcomes — but never full Kelly. The acceptance test enforces a hard ceiling at 0.5 (½ Kelly) in code.
   - **Completed:** 2026-05-19 by milestone-builder · commit 0f30d1b
 
-- [ ] **6.2.3 Kelly dashboard card**
+- [x] **6.2.3 Kelly dashboard card**
   - **Deliverable:** `dashboard/index.html` + dashboard API extension
   - **Acceptance:** new card on dashboard shows current Kelly fraction per strategy alongside its closed-trade count and "guard status" (✓ qualifying / ✗ need N more trades). Refreshes hourly. Tests: API shape, UI render against fixture data.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 665e11c
 
 ---
 
