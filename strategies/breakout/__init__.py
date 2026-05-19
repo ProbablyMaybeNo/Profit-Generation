@@ -14,6 +14,9 @@ Strategies declare:
 See `donchian_retest.py` for the long-side implementation (6.3.1).
 """
 from strategies.breakout.donchian_retest import compute_donchian_retest
+from strategies.breakout.donchian_retest_short import (
+    compute_donchian_retest_short,
+)
 
 BREAKOUT_DECLARATIONS = [
     {
@@ -35,6 +38,34 @@ BREAKOUT_DECLARATIONS = [
         "initial_stop": {"method": "atr_initial", "multiplier": 1.0,
                          "atr_period": 14},
     },
+    {
+        # 6.3.2 — Mirror of 6.3.1 for the short side. Active only in
+        # trending_down (bear) and mixed regimes. Borrow costs +
+        # unlimited-loss exposure mean we cap position size at 50% of
+        # the long equivalent and never pyramid.
+        "id": "breakout-donchian-retest-short-20",
+        "compute": "compute_donchian_retest_short",
+        "module": "strategies.breakout.donchian_retest_short",
+        "strategy_class": "breakout",
+        # "bear / trend" intent — project vocab maps to trending_down
+        # (clear downtrend) plus mixed (no-signal). Excludes
+        # trending_up / choppy / low_vol.
+        "active_in_regimes": ["trending_down", "mixed"],
+        "pyramidable": False,
+        "grace_period": True,
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "side": "short",
+        "initial_stop": {"method": "atr_initial", "multiplier": 1.0,
+                         "atr_period": 14},
+        # Risk caveat: 50% of the long-side equivalent. Auto-trader's
+        # short routing path reads `max_position_usd_multiplier` if
+        # present and applies it after the regular sizing chain.
+        "max_position_usd_multiplier": 0.5,
+    },
 ]
 
-__all__ = ["compute_donchian_retest", "BREAKOUT_DECLARATIONS"]
+__all__ = [
+    "compute_donchian_retest",
+    "compute_donchian_retest_short",
+    "BREAKOUT_DECLARATIONS",
+]
