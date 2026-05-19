@@ -46,7 +46,9 @@
     "by_class": {
       "mean_reversion": {"atr_multiplier": 2.0}
     },
-    "per_strategy": {},
+    "per_strategy": {
+      "breakout-donchian-retest-20": {"atr_multiplier": 1.0}
+    },
     "regime_multipliers": {
       "choppy": 1.25,
       "trending_down": 1.10,

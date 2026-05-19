@@ -24,6 +24,7 @@ NOTION_PARENT_PAGE_ID      = "24ac5770777180bda375eb9ae8e53194"
 
 # Tracked strategies that have a non-FAIL verdict — these get fire-checked daily
 from strategies.trend import TREND_DECLARATIONS
+from strategies.breakout import BREAKOUT_DECLARATIONS
 
 # 5.3.1 — Promote mean_reversion_intraday (3-bar-low port) to TRACKED_STRATEGIES.
 # Fires on 15-min bars during market hours via monitoring.intraday_fires.
@@ -91,6 +92,7 @@ TRACKED_STRATEGIES = [
     *TREND_DECLARATIONS,
     *INTRADAY_MR_DECLARATIONS,
     *INTRADAY_ORB_DECLARATIONS,
+    *BREAKOUT_DECLARATIONS,
 ]
 
 # Schedule (Eastern Time). Cron-style trigger times.
