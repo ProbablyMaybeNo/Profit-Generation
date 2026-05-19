@@ -434,6 +434,15 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             regime=_market_regime_to_allocator_regime(market_regime),
         )
     min_position_usd = float(settings.get("min_position_usd", 0) or 0)
+    # 5.5.1 — Intraday sizing tier. EOD entries pass intraday_multiplier=None
+    # (no change). Intraday entries (bar_interval != "1d") get a multiplier
+    # from the strategy declaration override or settings default (0.5).
+    sig_bar_interval = sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
+    intraday_multiplier = sizing_mod.resolve_intraday_multiplier(
+        bar_interval=sig_bar_interval,
+        declaration=decl,
+        settings_auto_trade=settings,
+    )
     sizing = sizing_mod.compute_notional(
         conn, sid,
         sizing_method=settings.get("sizing_method"),
@@ -443,6 +452,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         regime_multiplier=regime_multiplier,
         strategy_class=strategy_class,
         min_position_usd=min_position_usd,
+        intraday_multiplier=intraday_multiplier,
     )
     if is_crypto:
         sizing["asset_class"] = "crypto"

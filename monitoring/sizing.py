@@ -204,6 +204,51 @@ def tiered_notional(
     }
 
 
+DEFAULT_INTRADAY_SIZE_MULTIPLIER = 0.5  # 5.5.1
+
+
+def resolve_intraday_multiplier(
+    *,
+    bar_interval: Optional[str],
+    declaration: Optional[Dict] = None,
+    settings_auto_trade: Optional[Dict] = None,
+    default: float = DEFAULT_INTRADAY_SIZE_MULTIPLIER,
+) -> Optional[float]:
+    """Return the intraday capital multiplier or None when not applicable.
+
+    Returns None for EOD (`bar_interval == "1d"` or missing) so callers
+    can detect non-applicability and skip the discount entirely.
+
+    Override precedence:
+      1. declaration["intraday_size_multiplier"] when set on the TRACKED
+         strategy entry — per-strategy override.
+      2. settings_auto_trade["intraday_size_multiplier"] — global default
+         from settings.json.
+      3. The function `default` argument.
+
+    Non-numeric / negative overrides fall through to the next source.
+    """
+    interval = (bar_interval or "1d")
+    if interval == "1d":
+        return None
+    candidates = []
+    if isinstance(declaration, dict):
+        candidates.append(declaration.get("intraday_size_multiplier"))
+    if isinstance(settings_auto_trade, dict):
+        candidates.append(settings_auto_trade.get("intraday_size_multiplier"))
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            v = float(c)
+        except (TypeError, ValueError):
+            continue
+        if v < 0:
+            continue
+        return v
+    return float(default)
+
+
 def compute_notional(
     conn: sqlite3.Connection,
     strategy_id: str,
@@ -216,11 +261,12 @@ def compute_notional(
     regime_multiplier: Optional[float] = None,
     strategy_class: Optional[str] = None,
     min_position_usd: float = 0.0,
+    intraday_multiplier: Optional[float] = None,
 ) -> Dict:
     """Single entry point for the auto-trader.
 
     Returns {notional, sizing_method, fraction?, stats?, tier?,
-              regime_multiplier?, base_notional?}.
+              regime_multiplier?, base_notional?, intraday_multiplier?}.
     For "fixed", notional is just max_position_usd (the existing
     behavior); for "kelly" it routes through kelly_notional; for
     "tiered" it routes through tiered_notional with max_position_usd
@@ -230,6 +276,11 @@ def compute_notional(
     notional from the chosen method is multiplied by it. The product
     is floored at `min_position_usd` to keep the position above the
     broker minimum even when the regime is unfriendly.
+
+    When `intraday_multiplier` is supplied (5.5.1), the notional is
+    further reduced — typically to 0.5 of the EOD-equivalent — to
+    compensate for higher turnover / slippage exposure. Applied AFTER
+    any regime multiplier, then re-floored to `min_position_usd`.
     """
     method = normalize_sizing_method(sizing_method)
     if method == SIZING_METHOD_KELLY:
@@ -261,6 +312,15 @@ def compute_notional(
         out["regime_multiplier"] = round(float(regime_multiplier), 4)
         if strategy_class is not None:
             out["strategy_class"] = strategy_class
+        out["notional"] = round(adjusted, 2)
+    if intraday_multiplier is not None:
+        pre = float(out["notional"])
+        if "base_notional" not in out:
+            out["base_notional"] = pre
+        adjusted = pre * float(intraday_multiplier)
+        if min_position_usd and 0 < adjusted < min_position_usd:
+            adjusted = float(min_position_usd)
+        out["intraday_multiplier"] = round(float(intraday_multiplier), 4)
         out["notional"] = round(adjusted, 2)
     return out
 
