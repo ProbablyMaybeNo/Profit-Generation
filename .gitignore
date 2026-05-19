@@ -3,6 +3,8 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/cache.db
+data/last_reconcile.json
+data/tunnel_url.txt
 logs/
 __pycache__/
 *.pyc
