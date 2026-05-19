@@ -40,6 +40,7 @@ SETTINGS_FILE = ROOT / "config" / "settings.json"
 # prevents path traversal AND keeps the panel's chooser well-defined.
 GUIDES = {
     "tradingview": "TRADINGVIEW_GUIDE.md",
+    "dashboard":   "DASHBOARD_GUIDE.md",
 }
 
 # Only these keys are mutable via the toggle endpoint. Everything else has to
@@ -130,9 +131,43 @@ def _state_strategy_edge(conn) -> list:
     return out
 
 
+def _state_tracked_pending(conn) -> list:
+    """Return strategies that are in TRACKED_STRATEGIES but have no closed
+    outcomes yet. Useful for surfacing newly-added strategies on the dashboard
+    so Ross knows they're being monitored even though they haven't generated
+    enough data for the main edge table."""
+    from monitoring.config import TRACKED_STRATEGIES
+    closed_sids = {
+        r["strategy_id"] for r in conn.execute(
+            "SELECT DISTINCT s.strategy_id "
+            "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+            " WHERE o.status = 'closed' AND s.bar_interval = '1d'"
+        ).fetchall()
+    }
+    pending = []
+    for meta in TRACKED_STRATEGIES:
+        sid = meta.get("id") if isinstance(meta, dict) else None
+        if not sid or sid in closed_sids:
+            continue
+        pending.append({
+            "strategy_id": sid,
+            "strategy_class": meta.get("strategy_class", "mean_reversion"),
+            "pyramidable": bool(meta.get("pyramidable", False)),
+            "active_on": meta.get("active_on", []),
+            "active_in_regimes": meta.get("active_in_regimes", []),
+            "trailing_method": (meta.get("trailing_stop") or {}).get("method"),
+            "signal_count": conn.execute(
+                "SELECT COUNT(*) FROM signals WHERE strategy_id = ?",
+                (sid,),
+            ).fetchone()[0],
+        })
+    pending.sort(key=lambda x: x["strategy_id"])
+    return pending
+
+
 def _state_open_positions(conn) -> list:
     rows = conn.execute(
-        "SELECT s.strategy_id, s.symbol, o.entry_ts, o.entry_price "
+        "SELECT s.id AS signal_id, s.strategy_id, s.symbol, o.entry_ts, o.entry_price "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status = 'open' "
         " ORDER BY o.entry_ts ASC"
@@ -141,6 +176,7 @@ def _state_open_positions(conn) -> list:
     out = []
     for r in rows:
         sym = r["symbol"]
+        sid = r["strategy_id"]
         latest_snap = conn.execute(
             "SELECT close, snapshot_date FROM snapshots "
             " WHERE symbol = ? "
@@ -158,8 +194,32 @@ def _state_open_positions(conn) -> list:
             days_open = (today - entry_d).days
         except Exception:
             days_open = None
+        entry_stop = conn.execute(
+            "SELECT stop_price FROM paper_trades "
+            " WHERE signal_id = ? AND side = 'buy' "
+            "   AND stop_price IS NOT NULL "
+            " ORDER BY submitted_at ASC LIMIT 1",
+            (r["signal_id"],),
+        ).fetchone()
+        trail = conn.execute(
+            "SELECT stop_price, method, updated_at FROM trailing_stops "
+            " WHERE strategy_id = ? AND symbol = ? AND side = 'long'",
+            (sid, sym),
+        ).fetchone()
+        entry_stop_price = entry_stop["stop_price"] if entry_stop else None
+        trailing_stop_price = trail["stop_price"] if trail else None
+        active_stop = None
+        if trailing_stop_price is not None and entry_stop_price is not None:
+            active_stop = max(trailing_stop_price, entry_stop_price)
+        elif trailing_stop_price is not None:
+            active_stop = trailing_stop_price
+        elif entry_stop_price is not None:
+            active_stop = entry_stop_price
+        stop_distance_pct = None
+        if active_stop is not None and current_price not in (None, 0):
+            stop_distance_pct = round((current_price - active_stop) / current_price * 100, 2)
         out.append({
-            "strategy_id": r["strategy_id"],
+            "strategy_id": sid,
             "symbol": sym,
             "entry_ts": r["entry_ts"],
             "entry_price": r["entry_price"],
@@ -167,6 +227,11 @@ def _state_open_positions(conn) -> list:
             "current_as_of": latest_snap["snapshot_date"] if latest_snap else None,
             "unrealised_pct": unrealised_pct,
             "days_open": days_open,
+            "entry_stop_price": entry_stop_price,
+            "trailing_stop_price": trailing_stop_price,
+            "trailing_method": trail["method"] if trail else None,
+            "active_stop_price": active_stop,
+            "stop_distance_pct": stop_distance_pct,
         })
     return out
 
@@ -397,6 +462,43 @@ def _state_kill_switch() -> dict:
     return kill_switch.load_state()
 
 
+def _state_pdt(conn) -> dict:
+    """5.4.2 — Pattern Day Trader day-trade counter rollup.
+
+    Shows today's round trips, the rolling 5-day count, the threshold,
+    and a `paper_unlimited` hint (True iff account_value >= the PDT
+    equity floor — paper accounts always seed at $100k so this is True
+    in practice but the label is informational). Always returns a
+    well-formed dict; rendering layer handles loading state.
+    """
+    from monitoring import pdt_guard
+    today_d = date.today()
+    try:
+        today = pdt_guard.count_round_trips_for_day(conn, today_d)
+    except Exception:
+        today = 0
+    try:
+        five_day = pdt_guard.count_round_trips_last_5_days(conn, today_d)
+    except Exception:
+        five_day = 0
+    acct = _safe_account() or {}
+    pv = acct.get("portfolio_value")
+    try:
+        pv_f = float(pv) if pv is not None else None
+    except Exception:
+        pv_f = None
+    paper_unlimited = bool(pv_f is not None
+                            and pv_f >= pdt_guard.PDT_EQUITY_THRESHOLD)
+    return {
+        "today": today,
+        "five_day": five_day,
+        "threshold": pdt_guard.PDT_ROUND_TRIP_THRESHOLD,
+        "equity_threshold": pdt_guard.PDT_EQUITY_THRESHOLD,
+        "account_value": pv_f,
+        "paper_unlimited": paper_unlimited,
+    }
+
+
 def _state_tunnel_url() -> dict:
     """Read data/tunnel_url.txt if present. Empty dict otherwise."""
     path = DATA_DIR / "tunnel_url.txt"
@@ -436,6 +538,11 @@ def index():
     return send_from_directory(str(DASHBOARD_DIR), "index.html")
 
 
+@app.route("/research")
+def research():
+    return send_from_directory(str(DASHBOARD_DIR), "research.html")
+
+
 @app.route("/api/status")
 def status():
     """Legacy endpoint — kept for any old consumer."""
@@ -471,6 +578,7 @@ def state():
             "today_report": _state_today_report(conn),
             "action_queue": _state_action_queue(conn),
             "strategy_edge": _state_strategy_edge(conn),
+            "strategy_edge_pending": _state_tracked_pending(conn),
             "open_positions": _state_open_positions(conn),
             "today_signals": _state_today_signals(conn),
             "recent_news": _state_recent_news(conn),
@@ -480,6 +588,7 @@ def state():
             "macro": _state_macro_strip(),
             "tv_tunnel": _state_tunnel_url(),
             "kill_switch": _state_kill_switch(),
+            "pdt": _state_pdt(conn),
         })
     finally:
         conn.close()
@@ -751,21 +860,32 @@ def _spawn_trigger(trigger_id: str) -> dict:
     return meta
 
 
-def _state_equity_curve(conn, strategy_id: str) -> dict:
-    """Return per-strategy cumulative-return points and drawdown overlay.
+EQUITY_CURVE_PER_TRADE_SIZE_PCT = 10.0
 
-    Pulls closed outcomes for the strategy (bar_interval='1d' only,
-    matching the strategy_edge card), orders chronologically by exit_ts,
-    builds cumulative return as sum of per-trade return_pct, and
-    derives drawdown as (cum - running_max).
+
+def _state_equity_curve(conn, strategy_id: str) -> dict:
+    """Return per-strategy compound equity curve with realistic sizing.
+
+    Each trade is sized at EQUITY_CURVE_PER_TRADE_SIZE_PCT of running equity
+    (default 10%) — i.e. equity_{t+1} = equity_t × (1 + size/100 × return/100).
+    This compounds true return while keeping the curve realistic (no infinite
+    growth from naive 100%-per-trade compounding, no nonsense from straight
+    summation of percentages). Equity floors at 0 (a strategy can't go below
+    bankrupt). Drawdown is computed against running peak equity, bounded to
+    -100%.
+
     Result shape:
       {
         "strategy_id": "...",
-        "points": [{"date": "YYYY-MM-DD", "cum_pct": float,
+        "points": [{"date": "YYYY-MM-DD", "equity_pct": float,
                     "drawdown_pct": float, "trade_pct": float}, ...],
         "n_trades": int,
-        "final_pct": float,
+        "total_return_pct": float,
+        "cagr_pct": float | None,
         "max_drawdown_pct": float,
+        "per_trade_size_pct": float,
+        "period_days": int | None,
+        "sum_of_trades_pct": float,   # the OLD field, kept for reference
       }
     Empty for unknown strategies / zero outcomes.
     """
@@ -777,31 +897,51 @@ def _state_equity_curve(conn, strategy_id: str) -> dict:
         " ORDER BY o.exit_ts ASC, o.signal_id ASC",
         (strategy_id,),
     ).fetchall()
+    size_frac = EQUITY_CURVE_PER_TRADE_SIZE_PCT / 100.0
     points: list = []
-    cum = 0.0
-    running_max = 0.0
+    equity = 1.0
+    peak = 1.0
     max_dd = 0.0
+    sum_pct = 0.0
     for r in rows:
         ret = float(r["return_pct"])
-        cum += ret
-        if cum > running_max:
-            running_max = cum
-        dd = cum - running_max  # <= 0
+        sum_pct += ret
+        equity = max(0.0, equity * (1.0 + size_frac * ret / 100.0))
+        if equity > peak:
+            peak = equity
+        dd = (equity - peak) / peak * 100.0 if peak > 0 else 0.0
         if dd < max_dd:
             max_dd = dd
         exit_ts = r["exit_ts"] or ""
         points.append({
             "date": exit_ts[:10],
-            "cum_pct": round(cum, 4),
+            "equity_pct": round((equity - 1.0) * 100.0, 4),
             "drawdown_pct": round(dd, 4),
             "trade_pct": round(ret, 4),
         })
+    total_return_pct = round((equity - 1.0) * 100.0, 4) if points else 0.0
+    period_days = None
+    cagr_pct = None
+    if points and points[0]["date"] and points[-1]["date"]:
+        try:
+            d0 = date.fromisoformat(points[0]["date"])
+            d1 = date.fromisoformat(points[-1]["date"])
+            period_days = (d1 - d0).days
+            years = period_days / 365.25 if period_days else 0
+            if years > 0 and equity > 0:
+                cagr_pct = round((equity ** (1.0 / years) - 1.0) * 100.0, 4)
+        except Exception:
+            pass
     return {
         "strategy_id": strategy_id,
         "points": points,
         "n_trades": len(points),
-        "final_pct": round(cum, 4) if points else 0.0,
+        "total_return_pct": total_return_pct,
+        "cagr_pct": cagr_pct,
         "max_drawdown_pct": round(max_dd, 4) if points else 0.0,
+        "per_trade_size_pct": EQUITY_CURVE_PER_TRADE_SIZE_PCT,
+        "period_days": period_days,
+        "sum_of_trades_pct": round(sum_pct, 4) if points else 0.0,
     }
 
 

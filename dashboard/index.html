@@ -17,6 +17,7 @@
     --red:       #ff4455;
     --red-dim:   #8a3340;
     --blue:      #4488ff;
+    --blue-dim:  #2c4a8a;
     --dim:       #6b7280;
     --dimmer:    #4a5158;
     --text:      #d1d5db;
@@ -65,10 +66,36 @@
   }
   header h1 {
     font-size: 18px;
-    color: var(--green);
+    color: var(--blue);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: lowercase;
+    text-shadow: 0 0 10px rgba(68, 136, 255, 0.6), 0 0 22px rgba(68, 136, 255, 0.22);
+  }
+  /* Page nav (monitor/research tabs) */
+  .page-nav {
+    display: flex;
+    gap: 4px;
+    margin: -4px 0 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-nav a {
+    color: var(--dim);
+    text-decoration: none;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 120ms, border-color 120ms;
+  }
+  .page-nav a:hover { color: var(--text); }
+  .page-nav a.active {
+    color: var(--blue);
+    border-bottom-color: var(--blue);
+    text-shadow: 0 0 8px rgba(68, 136, 255, 0.5);
   }
   header .meta {
     font-size: 12px;
@@ -176,18 +203,34 @@
   /* Card */
   .card {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(68, 136, 255, 0.42);
+    box-shadow:
+      0 0 0 1px rgba(68, 136, 255, 0.08),
+      0 0 16px rgba(68, 136, 255, 0.10),
+      inset 0 0 28px rgba(0, 0, 0, 0.4);
     padding: 14px 16px;
     overflow: hidden;
+    transition: border-color 160ms, box-shadow 160ms;
+  }
+  .card:hover {
+    border-color: rgba(68, 136, 255, 0.65);
+    box-shadow:
+      0 0 0 1px rgba(68, 136, 255, 0.18),
+      0 0 22px rgba(68, 136, 255, 0.20),
+      inset 0 0 28px rgba(0, 0, 0, 0.4);
   }
   .card h2 {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.18em;
-    color: var(--dim);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.20em;
+    color: var(--blue);
+    text-shadow:
+      0 0 6px rgba(68, 136, 255, 0.75),
+      0 0 14px rgba(68, 136, 255, 0.35),
+      0 0 26px rgba(68, 136, 255, 0.14);
     text-transform: uppercase;
     margin-bottom: 10px;
-    border-bottom: 1px dashed var(--border);
+    border-bottom: 1px solid rgba(68, 136, 255, 0.32);
     padding-bottom: 6px;
     display: flex;
     justify-content: space-between;
@@ -606,8 +649,15 @@
   .loading { color: var(--dim); font-style: italic; }
   .stale { color: var(--amber); }
 
-  /* Action queue */
-  .action-card { border-color: var(--green-dim); }
+  /* Action queue — amber border signals "items here need a decision" */
+  .action-card {
+    border-color: rgba(255, 183, 0, 0.55);
+    box-shadow:
+      0 0 0 1px rgba(255, 183, 0, 0.12),
+      0 0 18px rgba(255, 183, 0, 0.12),
+      inset 0 0 28px rgba(0, 0, 0, 0.4);
+  }
+  .action-card:hover { border-color: rgba(255, 183, 0, 0.8); }
   .aq-list { display: flex; flex-direction: column; gap: 8px; }
   .aq-item {
     display: grid;
@@ -785,9 +835,11 @@
   .guide-body hr { border: none; border-top: 1px dashed var(--border); margin: 16px 0; }
 
   /* Auto-trader control card */
-  #control-card.live { border-color: var(--red); box-shadow: inset 0 0 0 1px rgba(255,68,85,0.2); }
-  #control-card.dry  { border-color: var(--amber); }
-  #control-card.disabled { border-color: var(--border); }
+  /* Auto-trader control card outline mirrors the mode badge color:
+     green when ACTIVE (firing real paper orders), amber when DRY-RUN, dim when DISABLED. */
+  #control-card.live { border-color: var(--green); box-shadow: 0 0 0 1px rgba(0,255,136,0.15), 0 0 22px rgba(0,255,136,0.18), inset 0 0 28px rgba(0,0,0,0.4); }
+  #control-card.dry  { border-color: var(--amber); box-shadow: 0 0 0 1px rgba(255,183,0,0.15), 0 0 22px rgba(255,183,0,0.18), inset 0 0 28px rgba(0,0,0,0.4); }
+  #control-card.disabled { border-color: var(--border); box-shadow: inset 0 0 28px rgba(0,0,0,0.4); }
   .ctrl-row {
     display: grid;
     grid-template-columns: 110px 1fr auto;
@@ -882,15 +934,21 @@
   <header>
     <h1>profit generation</h1>
     <div class="meta">
+      <button class="guide-btn" onclick="openGuide('dashboard')" title="What every section means + how to use it">📖 Dashboard Guide</button>
       <button class="guide-btn" onclick="openGuide('tradingview')" title="Open TradingView guide">📖 TV Guide</button>
       <span id="market-status"><span class="dot warn"></span><span class="loading">checking...</span></span>
       <span class="now" id="now">—</span>
     </div>
   </header>
 
+  <nav class="page-nav">
+    <a href="/" class="active">Monitor</a>
+    <a href="/research">Research</a>
+  </nav>
+
   <!-- KILL SWITCH banner — only visible when live_trading_halted=true -->
   <div class="kill-banner" id="kill-banner" role="alert">
-    <span class="kb-title">⛔ LIVE TRADING HALTED — auto-trader refusing all new entries</span>
+    <span class="kb-title">⛔ AUTO-TRADER HALTED — refusing all new entries (paper + live)</span>
     <div class="kb-meta">
       <span>reason: <code id="kb-reason">—</code></span>
       <span>set at: <code id="kb-set-at">—</code></span>
@@ -949,64 +1007,12 @@
     </div>
   </div>
 
-  <!-- Strategy edge -->
-  <div class="card">
-    <h2>strategy edge — closed outcomes (1d) <span class="count" id="edge-count"></span></h2>
-    <div id="strategy-edge" class="loading">loading...</div>
-  </div>
+  <!-- Research cards live on /research — see Research tab above. -->
 
-  <!-- Equity curves -->
-  <div class="card">
-    <h2>equity curves — cumulative return per strategy <span class="count" id="curves-count"></span></h2>
-    <div id="equity-curves" class="loading">loading...</div>
-  </div>
-
-  <!-- Equity-curve modal -->
-  <div id="curve-modal" class="curve-modal" hidden>
-    <div class="curve-modal-backdrop" data-close-modal></div>
-    <div class="curve-modal-card">
-      <div class="curve-modal-head">
-        <strong id="curve-modal-title">equity curve</strong>
-        <button class="curve-modal-close" data-close-modal aria-label="close">×</button>
-      </div>
-      <div id="curve-modal-body" class="curve-modal-body">loading...</div>
-    </div>
-  </div>
-
-  <!-- Edge slices -->
-  <div class="card">
-    <h2>edge slices — strategy × condition <span class="count" id="slices-count"></span></h2>
-    <div id="edge-slices" class="loading">loading...</div>
-  </div>
-
-  <!-- Strategy correlation -->
-  <div class="card">
-    <h2>strategy correlation — daily P&amp;L <span class="count" id="corr-count"></span></h2>
-    <div id="strategy-correlation" class="loading">loading...</div>
-  </div>
-
-  <!-- Slippage / fill-quality burn (3.6.1) -->
-  <div class="card">
-    <h2>slippage burn — backtest edge vs paper fills <span class="count" id="slippage-burn-count"></span></h2>
-    <div id="slippage-burn" class="loading">loading...</div>
-  </div>
-
-  <!-- Fill latency (3.6.3) -->
-  <div class="card">
-    <h2>fill latency — submitted_at &rarr; filled_at per strategy <span class="count" id="fill-latency-count"></span></h2>
-    <div id="fill-latency" class="loading">loading...</div>
-  </div>
-
-  <!-- Realized vs theoretical edge -->
-  <div class="card">
-    <h2>edge diff — backtest vs paper fills <span class="count" id="edge-diff-count"></span></h2>
-    <div id="edge-diff" class="loading">loading...</div>
-  </div>
-
-  <!-- News-sentiment overlay -->
-  <div class="card">
-    <h2>news sentiment overlay — outcome by entry-day mood <span class="count" id="sent-overlay-count"></span></h2>
-    <div id="news-sentiment-overlay" class="loading">loading...</div>
+  <!-- PDT day-trade counter (5.4.2) -->
+  <div class="card" id="pdt-card">
+    <h2>pdt · day trades <span class="count" id="pdt-mode"></span></h2>
+    <div id="pdt-counter" class="loading">loading...</div>
   </div>
 
   <!-- Open positions -->
@@ -1309,10 +1315,10 @@ function renderControl(s) {
   else if (enabled && dryRun) mode = 'dry';
   card.classList.add(mode);
   const modeLabel = enabled
-    ? (dryRun ? 'DRY-RUN (no real orders)' : 'LIVE (placing real Alpaca paper orders)')
+    ? (dryRun ? 'DRY-RUN (no real orders)' : 'ACTIVE (placing real Alpaca paper orders)')
     : 'DISABLED';
   const modeBadge = enabled
-    ? (dryRun ? '<span class="badge warn">DRY-RUN</span>' : '<span class="badge danger">LIVE</span>')
+    ? (dryRun ? '<span class="badge warn">DRY-RUN</span>' : '<span class="badge on">ACTIVE</span>')
     : '<span class="badge off">DISABLED</span>';
   document.getElementById('control-mode-pill').innerHTML = modeBadge;
 
@@ -1333,18 +1339,18 @@ function renderControl(s) {
       <div class="ctrl-label">dry_run</div>
       <div class="ctrl-state">
         ${dryRun ? '<span class="badge warn">DRY-RUN</span>logs would-be orders, no real submissions'
-                 : '<span class="badge danger">LIVE</span>real Alpaca paper orders will fire'}
+                 : '<span class="badge on">ACTIVE</span>real Alpaca paper orders will fire'}
       </div>
       <button class="ctrl-btn ${!dryRun ? '' : 'danger'}"
               onclick="toggleAutoTrade('dry_run', ${!dryRun})">
-        ${dryRun ? 'go LIVE' : 'go DRY-RUN'}
+        ${dryRun ? 'go ACTIVE' : 'go DRY-RUN'}
       </button>
     </div>`;
 
   let warning = '';
   if (enabled && !dryRun) {
     warning = `<div class="ctrl-warning">
-      <strong>LIVE MODE.</strong> The next time the EOD daily_report runs (or
+      <strong>ACTIVE MODE.</strong> The next time the EOD daily_report runs (or
       <code>monitoring.auto_trader</code> is invoked), real Alpaca paper market
       orders will be submitted on every eligible long_entry / long_exit signal.
       Strategy must pass thresholds (n ≥ ${ats.min_outcomes ?? 30}, mean ≥
@@ -1586,6 +1592,34 @@ function renderAccount(s) {
     hbEl.innerHTML = `<span class="${stale ? 'stale' : ''}">heartbeat ${hb.minutes_ago}m ago</span>`;
   } else {
     hbEl.innerHTML = '<span class="dim">no heartbeat yet</span>';
+  }
+}
+
+function renderPDT(s) {
+  // 5.4.2 — Pattern Day Trader counter card.
+  const el = document.getElementById('pdt-counter');
+  if (!el) return;
+  const p = s.pdt || {};
+  const today = (p.today === undefined || p.today === null) ? '—' : p.today;
+  const fiveDay = (p.five_day === undefined || p.five_day === null) ? '—' : p.five_day;
+  const threshold = p.threshold ?? 3;
+  const eqThresh = p.equity_threshold ?? 25000;
+  const paperUnlimited = !!p.paper_unlimited;
+  const fiveDayCls = (typeof fiveDay === 'number' && fiveDay >= threshold) ? 'warn' : '';
+  const subtitle = paperUnlimited
+    ? `paper unlimited (account ≥ $${eqThresh.toLocaleString()})`
+    : `live restriction · ${threshold} round-trips per 5 days`;
+  el.innerHTML = `
+    <div class="account-line">
+      <div class="pair"><span class="lbl">today</span><span class="val">${today}/${threshold}</span></div>
+      <div class="pair"><span class="lbl">5-day rolling</span><span class="val ${fiveDayCls}">${fiveDay}/${threshold}</span></div>
+    </div>
+    <div class="account-line" style="margin-top:6px;">
+      <span class="dim">${subtitle}</span>
+    </div>`;
+  const pillEl = document.getElementById('pdt-mode');
+  if (pillEl) {
+    pillEl.textContent = paperUnlimited ? 'paper unlimited' : 'live restricted';
   }
 }
 
@@ -2181,9 +2215,25 @@ function renderOpenPositions(s) {
   let h = '<table><thead><tr>' +
     '<th>strategy</th><th>symbol</th><th>entry date</th>' +
     '<th class="num">entry</th><th class="num">current</th><th class="num">unreal</th>' +
+    '<th class="num">stop</th><th class="num">to stop</th>' +
     '<th class="num">days</th>' +
     '</tr></thead><tbody>';
   for (const r of rows) {
+    const stopVal = r.active_stop_price;
+    const stopLabel = stopVal == null ? '<span class="dim">—</span>' : fmt$(stopVal);
+    let stopTitle = '';
+    if (r.trailing_stop_price != null && r.entry_stop_price != null) {
+      stopTitle = `entry stop ${fmt$(r.entry_stop_price)} · trailing (${r.trailing_method || 'trail'}) ${fmt$(r.trailing_stop_price)}`;
+    } else if (r.trailing_stop_price != null) {
+      stopTitle = `trailing (${r.trailing_method || 'trail'}) ${fmt$(r.trailing_stop_price)}`;
+    } else if (r.entry_stop_price != null) {
+      stopTitle = `entry stop ${fmt$(r.entry_stop_price)}`;
+    } else {
+      stopTitle = 'no stop recorded for this strategy';
+    }
+    const dist = r.stop_distance_pct;
+    const distCls = dist == null ? 'dim' : (dist < 2 ? 'neg' : dist < 5 ? 'warn' : 'pos');
+    const distLabel = dist == null ? '<span class="dim">—</span>' : fmtPct(dist, false);
     h += `<tr>
       <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
       <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
@@ -2191,6 +2241,8 @@ function renderOpenPositions(s) {
       <td class="num">${fmt$(r.entry_price)}</td>
       <td class="num">${fmt$(r.current_price)}</td>
       <td class="num ${pctClass(r.unrealised_pct)}">${fmtPct(r.unrealised_pct)}</td>
+      <td class="num" title="${escapeHtml(stopTitle)}">${stopLabel}</td>
+      <td class="num ${distCls}" title="distance from current price to stop">${distLabel}</td>
       <td class="num dim">${r.days_open ?? '—'}d</td>
     </tr>`;
   }
@@ -2287,32 +2339,38 @@ async function refresh() {
     const r = await fetch('/api/state', { cache: 'no-store' });
     if (!r.ok) throw new Error('http ' + r.status);
     const s = await r.json();
-    renderHeader(s);
-    renderKillSwitch(s);
-    renderMacro(s);
-    renderTunnel(s);
-    renderActionQueue(s);
-    renderControl(s);
-    renderTriggers();
-    renderReport(s);
-    renderAccount(s);
-    renderEdge(s);
-    renderEquityCurves(s);
-    renderEdgeSlices();
-    renderStrategyCorrelation();
-    renderSlippageBurn();
-    renderFillLatency();
-    renderEdgeDiff();
-    renderNewsSentimentOverlay();
-    renderOpenPositions(s);
-    renderPaperTrades(s);
-    renderSignals(s);
-    renderNews(s);
-    document.getElementById('last-refresh').textContent =
-      'last refresh ' + new Date().toLocaleTimeString();
+    const renderers = [
+      () => renderHeader(s),
+      () => renderKillSwitch(s),
+      () => renderMacro(s),
+      () => renderTunnel(s),
+      () => renderActionQueue(s),
+      () => renderControl(s),
+      () => renderTriggers(),
+      () => renderReport(s),
+      () => renderAccount(s),
+      () => renderPDT(s),
+      () => renderEdge(s),
+      () => renderEquityCurves(s),
+      () => renderEdgeSlices(),
+      () => renderStrategyCorrelation(),
+      () => renderSlippageBurn(),
+      () => renderFillLatency(),
+      () => renderEdgeDiff(),
+      () => renderNewsSentimentOverlay(),
+      () => renderOpenPositions(s),
+      () => renderPaperTrades(s),
+      () => renderSignals(s),
+      () => renderNews(s),
+    ];
+    for (const fn of renderers) {
+      try { fn(); } catch (_) { /* card absent on this page — fine */ }
+    }
+    const lr = document.getElementById('last-refresh');
+    if (lr) lr.textContent = 'last refresh ' + new Date().toLocaleTimeString();
   } catch (e) {
-    document.getElementById('last-refresh').textContent =
-      'refresh failed: ' + e.message + ' (retrying in 30s)';
+    const lr = document.getElementById('last-refresh');
+    if (lr) lr.textContent = 'refresh failed: ' + e.message + ' (retrying in 30s)';
   }
 }
 
