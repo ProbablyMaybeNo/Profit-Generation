@@ -517,6 +517,54 @@
   .latency-mid { color: var(--amber); }
   .latency-lo  { color: var(--green); }
 
+  /* Scanner activity card (5.5.6.1) */
+  table.scanner-activity { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.scanner-activity th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: normal;
+    border-bottom: 1px solid var(--border);
+    padding: 4px 6px;
+    letter-spacing: 0.04em;
+  }
+  table.scanner-activity td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.scanner-activity td.r { text-align: right; }
+  .scanner-action {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 2px;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .scanner-action.submitted    { background: rgba(0, 255, 136, 0.12); color: var(--green); }
+  .scanner-action.skip-capacity { background: rgba(255, 183, 0, 0.12); color: var(--amber); }
+  .scanner-action.skip-ineligible { background: rgba(255, 68, 85, 0.12); color: var(--red); }
+  .scanner-action.skip-liquidity  { background: rgba(255, 68, 85, 0.12); color: var(--red); }
+  .scanner-action.pending      { background: rgba(68, 136, 255, 0.12); color: var(--blue); }
+  .scanner-score {
+    font-weight: 600;
+    color: var(--text-hi);
+  }
+  .scanner-bd {
+    color: var(--dim);
+    font-size: 10.5px;
+  }
+  .scanner-summary {
+    color: var(--dim);
+    font-size: 11px;
+    margin-bottom: 6px;
+    letter-spacing: 0.03em;
+  }
+  .scanner-summary .pill {
+    display: inline-block;
+    margin-right: 10px;
+  }
+
   /* Slippage burn card (3.6.1) */
   .burn-row {
     display: flex;
@@ -1112,6 +1160,12 @@
   <div class="card">
     <h2>news sentiment overlay — outcome by entry-day mood <span class="count" id="sent-overlay-count"></span></h2>
     <div id="news-sentiment-overlay" class="loading">loading...</div>
+  </div>
+
+  <!-- Scanner activity (5.5.6.1) — wide-universe trend-scanner fires today -->
+  <div class="card" id="scanner-activity-card">
+    <h2>scanner activity — wide trend scan today <span class="count" id="scanner-count"></span></h2>
+    <div id="scanner-activity" class="loading">loading...</div>
   </div>
 
 
@@ -2489,6 +2543,51 @@ function renderNews(s) {
   el.innerHTML = h;
 }
 
+function renderScannerActivity(s) {
+  const el = document.getElementById('scanner-activity');
+  const count = document.getElementById('scanner-count');
+  const data = s.scanner_activity || {};
+  const rows = data.rows || [];
+  const summary = data.summary || {};
+  const n = rows.length;
+  if (!n) {
+    count.textContent = 'none today';
+    el.innerHTML = '<div class="empty">no wide-universe trend-scanner fires today. enable via auto_trade.trend_scanner_enabled and the EOD pipeline will populate this card.</div>';
+    return;
+  }
+  const byAction = summary.by_action || {};
+  const tally = Object.keys(byAction).sort().map(k =>
+    `<span class="pill">${escapeHtml(k.toLowerCase().replace(/_/g, ' '))}: ${byAction[k]}</span>`
+  ).join('');
+  const regime = summary.regime ? `regime: ${escapeHtml(summary.regime)} · ` : '';
+  const cap = summary.max_new_entries_per_day
+    ? `cap: ${summary.max_new_entries_per_day}/day · `
+    : '';
+  count.textContent = `${n} fire${n === 1 ? '' : 's'}`;
+  let html = `<div class="scanner-summary">${regime}${cap}${tally}</div>`;
+  html += '<table class="scanner-activity"><thead><tr>'
+    + '<th>strategy</th><th>symbol</th>'
+    + '<th class="r">close</th><th class="r">score</th>'
+    + '<th>action</th>'
+    + '</tr></thead><tbody>';
+  for (const r of rows) {
+    const actCls = 'scanner-action ' + (r.action || '').toLowerCase().replace(/_/g, '-');
+    const actLabel = (r.action || '').replace(/_/g, ' ').toLowerCase();
+    const bd = r.score_breakdown || {};
+    const bdTitle = `regime ×${bd.regime ?? '—'} · vol ×${bd.volume ?? '—'} · edge ×${bd.edge ?? '—'} · liq ×${bd.liquidity ?? '—'}`;
+    const score = r.score != null ? Number(r.score).toFixed(2) : '—';
+    html += `<tr>`
+      + `<td>${escapeHtml(shortStrat(r.strategy_id))}</td>`
+      + `<td class="sym">${escapeHtml(r.symbol)} ${typeof tvLink === 'function' ? tvLink(r.symbol) : ''}</td>`
+      + `<td class="r">${fmt$(r.close)}</td>`
+      + `<td class="r"><span class="scanner-score" title="${escapeHtml(bdTitle)}">${escapeHtml(score)}</span></td>`
+      + `<td><span class="${actCls}">${escapeHtml(actLabel)}</span></td>`
+      + `</tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/state', { cache: 'no-store' });
@@ -2516,6 +2615,7 @@ async function refresh() {
       () => renderPaperTrades(s),
       () => renderSignals(s),
       () => renderNews(s),
+      () => renderScannerActivity(s),
     ];
     for (const fn of renderers) {
       try { fn(); } catch (_) { /* card absent on this page — fine */ }

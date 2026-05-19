@@ -484,6 +484,182 @@ def _state_paper_trades_today(conn) -> list:
     return [dict(r) for r in rows]
 
 
+def _state_scanner_activity(conn) -> dict:
+    """5.5.6.1 — Wide-universe trend scanner fires today + their fate.
+
+    Pulls today's signals tagged `source: trend_scanner` (the wide scan
+    bypasses active_on and stamps that key into extra_json), ranks each
+    fire with the same `signal_ranker` the auto_trader uses, then
+    derives an action label from current db state:
+
+      - SUBMITTED         — a non-rejected/canceled paper_trade exists
+                            for this signal_id
+      - SKIP_INELIGIBLE   — strategy currently fails the auto_trader
+                            edge thresholds (replayed at query time)
+      - SKIP_CAPACITY     — eligible but no paper_trade, AND the day's
+                            new-entry budget appears exhausted
+      - PENDING           — eligible, not submitted, capacity not yet
+                            exhausted (auto_trader hasn't run, or this
+                            signal is queued)
+
+    SKIP_LIQUIDITY happens BEFORE a signal is ever recorded (the
+    liquidity filter runs against the universe loader, not the signals
+    table) so it can't appear as a row here — surfaced only as a
+    summary count if available.
+
+    Returns:
+      {
+        "rows": [{strategy_id, symbol, score, score_breakdown, action,
+                  signal_id, bar_ts, close, ts}],
+        "summary": {n_fires, by_action: {...}, regime, max_new_entries_per_day}
+      }
+    """
+    today = _today_iso()
+    sig_rows = conn.execute(
+        "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, "
+        "       signal_type, close, extra_json "
+        "  FROM signals "
+        " WHERE substr(bar_ts, 1, 10) = ? "
+        "   AND signal_type = 'long_entry' "
+        "   AND extra_json IS NOT NULL "
+        "   AND extra_json LIKE '%\"source\": \"trend_scanner\"%' "
+        " ORDER BY ts DESC, id DESC",
+        (today,),
+    ).fetchall()
+
+    rows = [dict(r) for r in sig_rows]
+    out = {
+        "rows": [],
+        "summary": {
+            "n_fires": 0,
+            "by_action": {},
+            "regime": None,
+            "max_new_entries_per_day": None,
+        },
+    }
+    if not rows:
+        return out
+
+    # Score each fire — same scorer the auto_trader uses to reorder.
+    from monitoring import signal_ranker as _sr
+    from monitoring import regime_router
+    from monitoring.config import TRACKED_STRATEGIES
+    try:
+        regime = regime_router.latest_regime(conn)
+    except Exception:
+        regime = "mixed"
+    sharpe = _sr.sharpe_lookup_from_db(
+        {r["strategy_id"] for r in rows}, conn=conn,
+    )
+    dvol = _sr.dollar_volume_lookup_from_db(
+        {r["symbol"] for r in rows}, conn=conn,
+    )
+    fire_dicts = [
+        {"strategy_id": r["strategy_id"], "symbol": r["symbol"],
+         "_id": r["id"]}
+        for r in rows
+    ]
+    ranked = _sr.rank_signals(
+        fire_dicts, regime=regime,
+        strategy_decls=TRACKED_STRATEGIES,
+        sharpe_by_strategy=sharpe,
+        dollar_volume_by_symbol=dvol,
+    )
+    rank_by_id = {r["_id"]: r for r in ranked}
+
+    # Capacity cap from settings (same key the auto_trader reads).
+    auto_settings = _read_auto_trade_settings()
+    try:
+        max_new_entries_per_day = int(
+            auto_settings.get("max_new_entries_per_day") or 0
+        )
+    except (TypeError, ValueError):
+        max_new_entries_per_day = 0
+    out["summary"]["max_new_entries_per_day"] = max_new_entries_per_day
+    out["summary"]["regime"] = regime
+
+    # Count today's submitted entries (across all strategies) — this is
+    # the capacity counter the auto_trader uses. Any side='buy' paper
+    # trade submitted today against a long_entry signal counts.
+    submitted_today_total = conn.execute(
+        "SELECT COUNT(*) AS n FROM paper_trades pt "
+        "  JOIN signals s ON s.id = pt.signal_id "
+        " WHERE pt.side='buy' AND s.signal_type='long_entry' "
+        "   AND pt.status NOT IN ('rejected','canceled') "
+        "   AND DATE(pt.submitted_at) = DATE(?)",
+        (today,),
+    ).fetchone()
+    capacity_exhausted = bool(
+        max_new_entries_per_day > 0
+        and submitted_today_total
+        and int(submitted_today_total["n"]) >= max_new_entries_per_day
+    )
+
+    # Per-strategy eligibility replay. Cache so we don't re-query
+    # outcomes per row when many fires share a strategy.
+    from monitoring import auto_trader as _at
+    elig_cache: dict = {}
+
+    def _is_eligible_cached(sid: str) -> bool:
+        if sid in elig_cache:
+            return elig_cache[sid]
+        try:
+            ok, _stats = _at._is_eligible(conn, sid, auto_settings)
+        except Exception:
+            ok = False
+        elig_cache[sid] = bool(ok)
+        return bool(ok)
+
+    by_action: dict = {}
+    final_rows: list = []
+    for r in rows:
+        sid = r["strategy_id"]
+        sym = r["symbol"]
+        sig_id = r["id"]
+        # SUBMITTED — any non-rejected/canceled paper_trade row.
+        submitted = conn.execute(
+            "SELECT 1 FROM paper_trades "
+            " WHERE signal_id = ? AND side = 'buy' "
+            "   AND status NOT IN ('rejected','canceled') LIMIT 1",
+            (sig_id,),
+        ).fetchone()
+        if submitted is not None:
+            action = "SUBMITTED"
+        elif not _is_eligible_cached(sid):
+            action = "SKIP_INELIGIBLE"
+        elif capacity_exhausted:
+            action = "SKIP_CAPACITY"
+        else:
+            action = "PENDING"
+
+        ranked_info = rank_by_id.get(sig_id) or {}
+        score = ranked_info.get("score", 1.0)
+        breakdown = ranked_info.get("score_breakdown") or {}
+        by_action[action] = by_action.get(action, 0) + 1
+        final_rows.append({
+            "signal_id": sig_id,
+            "ts": r["ts"],
+            "bar_ts": r["bar_ts"],
+            "strategy_id": sid,
+            "symbol": sym,
+            "close": r["close"],
+            "score": score,
+            "score_breakdown": breakdown,
+            "action": action,
+        })
+
+    # Highest score first, ties broken by symbol (matches signal_ranker).
+    final_rows.sort(
+        key=lambda x: (-float(x.get("score") or 0.0),
+                       str(x.get("symbol") or ""),
+                       str(x.get("strategy_id") or ""))
+    )
+    out["rows"] = final_rows
+    out["summary"]["n_fires"] = len(final_rows)
+    out["summary"]["by_action"] = by_action
+    return out
+
+
 def _state_kill_switch() -> dict:
     """Read config/kill_switch.json. Always returns a well-formed dict,
     even when the file is absent / malformed."""
@@ -613,6 +789,7 @@ def state():
             "intraday_signals_today": _state_intraday_signals_today(conn),
             "recent_news": _state_recent_news(conn),
             "paper_trades_today": _state_paper_trades_today(conn),
+            "scanner_activity": _state_scanner_activity(conn),
             "auto_trade_settings": _read_auto_trade_settings(),
             "intraday_alerts_tail": _state_intraday_tail(),
             "macro": _state_macro_strip(),
