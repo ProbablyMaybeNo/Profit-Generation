@@ -98,10 +98,11 @@ regime_router.
   - **Notes:** Expected hit rate ~40-50% with R:R near 3:1 — the inverse profile of mean-reversion. Don't compare its win-rate directly to RSI2; compare expectancy.
   - **Completed:** 2026-05-19 by milestone-builder · commit 52c10d7 (5-year backtest gate to live is Ross-runs-it via conda trading env)
 
-- [ ] **6.3.2 Resistance-level breakout-retest (short side)**
+- [x] **6.3.2 Resistance-level breakout-retest (short side)**
   - **Deliverable:** `strategies/breakout/donchian_retest_short.py`
   - **Acceptance:** mirror of 5.3.1 for shorts: `level = lowest_low_20`, breakdown fires on close < level, pending retest valid 5 bars, entry on retest of level from below with stop at `level + 0.5 × ATR_14`. `active_in_regimes=["bear", "trend"]`. Validator gate same as 5.3.1. Tests: mirror of 5.3.1 short side.
   - **Notes:** Shorts have asymmetric borrow costs and unlimited-loss exposure. Default `pyramidable=false` and a max-position-size override that's 50% of the long equivalent.
+  - **Completed:** 2026-05-19 by milestone-builder · commit c2017a7
 
 ---
 
