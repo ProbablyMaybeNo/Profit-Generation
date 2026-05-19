@@ -106,7 +106,7 @@ mean-reversion on its tightly-validated subset.
 
 When the scanner fires 30+ signals on a trending day, we can only hold ~10 concurrent positions. Need to pick the best.
 
-- [ ] **5.5.4.1 Signal ranker**
+- [x] **5.5.4.1 Signal ranker**
   - **Deliverable:** `monitoring/signal_ranker.py`
   - **Acceptance:** scores each fired signal by composite metric:
     - **Regime alignment** (×1.5 if current regime matches strategy's `active_in_regimes`)
@@ -114,6 +114,7 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
     - **Recent strategy edge** (×1.0–1.5 based on strategy's all-time sharpe-ish)
     - **Symbol liquidity** (×1.0–1.2 by dollar volume tier)
     Higher score wins when capacity is tight. Tests: scoring math, tie-breaking (lexical by symbol).
+  - **Completed:** 2026-05-19 by milestone-builder · commit 2010738
 
 - [ ] **5.5.4.2 Capacity-aware order submission**
   - **Deliverable:** `monitoring/auto_trader.py` extended with `max_new_entries_per_day` and per-strategy caps
