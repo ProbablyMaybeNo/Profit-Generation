@@ -170,11 +170,21 @@ def check_intraday_fires(
 if __name__ == "__main__":
     import argparse
     import json
+    import sys
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--asof", type=str, default=None,
                         help="ISO datetime override (default: now)")
+    parser.add_argument("--no-market-check", action="store_true",
+                        help="Skip market_is_open check (testing / off-hours)")
     args = parser.parse_args()
+
+    if not args.no_market_check:
+        from config.utils import market_is_open
+        if not market_is_open():
+            print(json.dumps({"market_open": False, "scanned": False}))
+            sys.exit(0)
+
     asof = datetime.fromisoformat(args.asof) if args.asof else None
     result = check_intraday_fires(asof=asof)
     summary = {
