@@ -3,12 +3,12 @@ data.py — Load historical bars for backtesting.
 yfinance for daily, Alpaca for intraday (free IEX feed has more history than yfinance).
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 
-from config.cache import cached
+from config.cache import cache_get, cache_set, cached
 from config.utils import load_credentials
 
 
@@ -119,3 +119,110 @@ def resample_bars(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     }
     out = df.resample(rule, label="right", closed="right").agg(agg)
     return out.dropna(subset=["open"])
+
+
+_INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1h", "4h"}
+
+_INTERVAL_MINUTES = {
+    "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240,
+}
+
+
+def _last_closed_bar_ts(now: datetime, interval: str) -> datetime:
+    """Floor `now` to the most recent completed bar boundary for `interval`.
+
+    Used as the cache key so repeated calls within the same bar window
+    return the cached result instead of re-fetching. Naive datetimes are
+    treated as local clock; tz-aware datetimes preserve their tz.
+    """
+    minutes = _INTERVAL_MINUTES[interval]
+    floor = now.replace(second=0, microsecond=0)
+    bucket = (floor.hour * 60 + floor.minute) // minutes * minutes
+    floor = floor.replace(hour=bucket // 60, minute=bucket % 60)
+    return floor
+
+
+def load_intraday_bars(
+    symbols: List[str],
+    interval: str,
+    lookback_bars: int,
+    *,
+    now: Optional[datetime] = None,
+    fetcher: Optional[Callable[[str, str, str, str], pd.DataFrame]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Load the N most recent intraday bars at `interval` per symbol.
+
+    Cached per (symbol, interval, last_closed_bar_ts) so repeat calls
+    within the same bar window (e.g. the every-15-min schtask firing
+    twice on jitter) return the cached frame instead of re-hitting the
+    Alpaca bars API. Cache TTL is one bar duration — the next bar's
+    close invalidates automatically.
+
+    Parameters
+    ----------
+    symbols : list of str
+        Equity tickers (crypto goes through crypto_adapter instead).
+    interval : str
+        One of: 1m, 5m, 15m, 30m, 1h, 4h.
+    lookback_bars : int
+        How many recent bars to return per symbol. Used to size the
+        Alpaca request window with enough buffer for weekends / halts.
+    now : datetime, optional
+        Override "now" for tests. Defaults to datetime.now().
+    fetcher : callable, optional
+        Injected (symbol, start, end, interval) -> DataFrame for tests.
+        Defaults to the alpaca-py path used by load_bars.
+
+    Returns
+    -------
+    {symbol: DataFrame} — index=bar timestamp (America/New_York, naive),
+    columns=open/high/low/close/volume, sorted ascending, length<=lookback_bars.
+    Empty symbols are dropped.
+    """
+    if interval not in _INTRADAY_INTERVALS:
+        raise ValueError(
+            f"unsupported intraday interval {interval!r}; "
+            f"choose from {sorted(_INTRADAY_INTERVALS)}"
+        )
+    if lookback_bars <= 0:
+        raise ValueError(f"lookback_bars must be positive, got {lookback_bars}")
+
+    now = now or datetime.now()
+    bar_close_ts = _last_closed_bar_ts(now, interval)
+    bar_minutes = _INTERVAL_MINUTES[interval]
+    cache_ttl = bar_minutes * 60.0
+
+    # Window covers ~3x the requested span to absorb weekends, market
+    # holidays, and overnight gaps for intraday data. Alpaca will only
+    # return real bars regardless.
+    span_minutes = lookback_bars * bar_minutes * 3 + 60 * 24
+    start_dt = bar_close_ts - timedelta(minutes=span_minutes)
+    end_dt = bar_close_ts + timedelta(minutes=bar_minutes)
+    start = start_dt.isoformat(timespec="seconds")
+    end = end_dt.isoformat(timespec="seconds")
+
+    fetch = fetcher or _download_one_alpaca
+
+    out: Dict[str, pd.DataFrame] = {}
+    for symbol in symbols:
+        cache_key = (
+            f"bars.intraday:{symbol}:{interval}:"
+            f"{bar_close_ts.isoformat(timespec='minutes')}"
+        )
+        cached_df = cache_get(cache_key)
+        if cached_df is not None:
+            if not cached_df.empty:
+                out[symbol] = cached_df.tail(lookback_bars).copy()
+            continue
+        try:
+            df = fetch(symbol, start, end, interval)
+        except Exception:
+            df = pd.DataFrame()
+        if df is None or df.empty:
+            cache_set(cache_key, pd.DataFrame(), cache_ttl)
+            continue
+        df = df.sort_index().tail(lookback_bars)
+        cache_set(cache_key, df, cache_ttl)
+        out[symbol] = df.copy()
+    return out
