@@ -1314,18 +1314,24 @@ function renderControl(s) {
   const ats = s.auto_trade_settings || {};
   const enabled = !!ats.enabled;
   const dryRun  = ats.dry_run !== false; // treat undefined as dry-run for safety
+  // 5.6.3 — Intraday-enabled badge state.
+  const intradayEnabled = !!ats.intraday_enabled;
   const card = document.getElementById('control-card');
   card.className = 'card';
   let mode = 'disabled';
   if (enabled && !dryRun) mode = 'live';
   else if (enabled && dryRun) mode = 'dry';
   card.classList.add(mode);
+  if (intradayEnabled && enabled) card.classList.add('intraday');
   const modeLabel = enabled
     ? (dryRun ? 'DRY-RUN (no real orders)' : 'ACTIVE (placing real Alpaca paper orders)')
     : 'DISABLED';
-  const modeBadge = enabled
+  const intradayBadge = intradayEnabled && enabled
+    ? '<span class="badge on" title="intraday paper trading is firing on 5m/15m bars">+ INTRADAY</span>'
+    : '';
+  const modeBadge = (enabled
     ? (dryRun ? '<span class="badge warn">DRY-RUN</span>' : '<span class="badge on">ACTIVE</span>')
-    : '<span class="badge off">DISABLED</span>';
+    : '<span class="badge off">DISABLED</span>') + intradayBadge;
   document.getElementById('control-mode-pill').innerHTML = modeBadge;
 
   const enableRow = `
