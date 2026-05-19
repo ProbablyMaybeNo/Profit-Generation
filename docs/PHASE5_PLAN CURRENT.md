@@ -162,13 +162,15 @@ Critical safety: live capital accounts under $25k can only execute 3 round-trip 
 
 ## 5.7 End-to-end smoke test + first live-paper day
 
-- [ ] **5.7.1 Intraday lifecycle smoke test**
+- [x] **5.7.1 Intraday lifecycle smoke test**
   - **Deliverable:** `scripts/smoke_intraday_lifecycle.py`
   - **Acceptance:** runs a single intraday strategy (mean_reversion_intraday) against a synthetic intraday bar series, exercising: fire-check → signal record → auto_trader entry → MOC close-out at 16:00. Outputs trade-by-trade log + final stats. NOT a unit test — proves the wiring end-to-end. Tests: harness self-tests.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 5746884
 
-- [ ] **5.7.2 First-day live-paper monitor checklist**
+- [x] **5.7.2 First-day live-paper monitor checklist**
   - **Deliverable:** `docs/INTRADAY_FIRST_DAY.md`
   - **Acceptance:** documents the procedure for flipping `intraday_enabled=true` for the first time — pre-flight checks, what to watch in the first hour, abort criteria, rollback. ≤ 10 procedures, each ≤ 5 steps.
+  - **Completed:** 2026-05-19 by milestone-builder · commit df8770e
 
 ---
 
