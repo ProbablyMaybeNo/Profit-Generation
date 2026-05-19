@@ -136,10 +136,11 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
 
 ## 5.5.6 Dashboard surface
 
-- [ ] **5.5.6.1 Scanner activity card**
+- [x] **5.5.6.1 Scanner activity card**
   - **Deliverable:** new card on `/research` page + `/api/state` extension
   - **Acceptance:** "Scanner activity" card showing today's wide-universe fires per trend strategy. Each row: strategy, symbol, score, action taken (SUBMITTED / SKIP_CAPACITY / SKIP_INELIGIBLE / SKIP_LIQUIDITY). Auto-refresh 30s. Tests: API shape, render against fixture.
   - **Notes:** On Research not Monitor because it's strategy-level analytics. Monitor still shows the actual paper orders (which include the submitted scanner fires).
+  - **Completed:** 2026-05-19 by milestone-builder · commit b605607 · derives action labels at query time (SUBMITTED / SKIP_INELIGIBLE / SKIP_CAPACITY / PENDING); SKIP_LIQUIDITY excluded from rows because filter runs before signals are recorded.
 
 - [ ] **5.5.6.2 Scanner-fire indicator on paper orders**
   - **Deliverable:** Monitor `paper_trades_today` card extended with "scanner" tag
