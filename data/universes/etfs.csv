@@ -1,0 +1,37 @@
+symbol,name,category
+SPY,SPDR S&P 500 ETF Trust,Broad Market
+QQQ,Invesco QQQ Trust,Broad Market
+IWM,iShares Russell 2000 ETF,Broad Market
+DIA,SPDR Dow Jones Industrial Average ETF,Broad Market
+VTI,Vanguard Total Stock Market ETF,Broad Market
+VOO,Vanguard S&P 500 ETF,Broad Market
+EFA,iShares MSCI EAFE ETF,International
+EEM,iShares MSCI Emerging Markets ETF,International
+VEA,Vanguard FTSE Developed Markets ETF,International
+VWO,Vanguard FTSE Emerging Markets ETF,International
+XLK,Technology Select Sector SPDR,Sector
+XLF,Financial Select Sector SPDR,Sector
+XLE,Energy Select Sector SPDR,Sector
+XLV,Health Care Select Sector SPDR,Sector
+XLI,Industrial Select Sector SPDR,Sector
+XLY,Consumer Discretionary Select Sector SPDR,Sector
+XLP,Consumer Staples Select Sector SPDR,Sector
+XLU,Utilities Select Sector SPDR,Sector
+XLB,Materials Select Sector SPDR,Sector
+XLRE,Real Estate Select Sector SPDR,Sector
+XLC,Communication Services Select Sector SPDR,Sector
+XBI,SPDR S&P Biotech ETF,Industry
+XHB,SPDR S&P Homebuilders ETF,Industry
+KRE,SPDR S&P Regional Banking ETF,Industry
+XME,SPDR S&P Metals & Mining ETF,Industry
+XOP,SPDR S&P Oil & Gas Exploration & Production ETF,Industry
+SMH,VanEck Semiconductor ETF,Industry
+GDX,VanEck Gold Miners ETF,Commodity
+GLD,SPDR Gold Shares,Commodity
+SLV,iShares Silver Trust,Commodity
+USO,United States Oil Fund,Commodity
+TLT,iShares 20+ Year Treasury Bond ETF,Fixed Income
+IEF,iShares 7-10 Year Treasury Bond ETF,Fixed Income
+HYG,iShares iBoxx High Yield Corporate Bond ETF,Fixed Income
+LQD,iShares iBoxx Investment Grade Corporate Bond ETF,Fixed Income
+ARKK,ARK Innovation ETF,Thematic
