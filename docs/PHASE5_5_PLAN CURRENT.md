@@ -83,7 +83,7 @@ mean-reversion on its tightly-validated subset.
 
 ## 5.5.3 Trend scanner module
 
-- [ ] **5.5.3.1 Wide-universe trend scanner**
+- [x] **5.5.3.1 Wide-universe trend scanner**
   - **Deliverable:** `monitoring/trend_scanner.py` + `tests/test_trend_scanner.py`
   - **Acceptance:** for each strategy in TRACKED_STRATEGIES where `strategy_class == "trend"`:
     - Load the trend universe via 5.5.1
@@ -93,6 +93,7 @@ mean-reversion on its tightly-validated subset.
     - Record fires into `signals` table with `bar_interval='1d'`
     Idempotent on (strategy_id, symbol, bar_ts, bar_interval). Tests: full pipeline against fixture data, idempotency, liquidity filter integration.
   - **Notes:** Crucially: this BYPASSES the `active_on` field. Trend strategies in `TRACKED_STRATEGIES` keep their narrow active_on for the regular EOD fire-check (which still runs as backup). The wide scan is a separate path.
+  - **Completed:** 2026-05-19 by milestone-builder · commit d273a47
 
 - [ ] **5.5.3.2 Bar-fetch batching + caching**
   - **Deliverable:** `monitoring/intraday_bars.py` extended (or new `monitoring/wide_bars.py`)
