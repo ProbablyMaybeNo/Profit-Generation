@@ -290,6 +290,6 @@ def test_endpoint_returns_rows(client, isolated_db):
 
 
 def test_index_html_includes_fill_latency_card(client):
-    text = client.get("/").get_data(as_text=True)
+    text = client.get("/research").get_data(as_text=True)
     assert 'id="fill-latency"' in text
     assert "fill latency" in text.lower()

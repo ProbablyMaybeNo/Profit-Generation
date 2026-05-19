@@ -246,6 +246,6 @@ def test_endpoint_returns_ranked_rows(client, isolated_db):
 
 
 def test_index_html_includes_slippage_burn_card(client):
-    text = client.get("/").get_data(as_text=True)
+    text = client.get("/research").get_data(as_text=True)
     assert 'id="slippage-burn"' in text
     assert "slippage burn" in text.lower()

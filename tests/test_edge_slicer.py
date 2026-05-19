@@ -335,7 +335,7 @@ def test_edge_slices_endpoint_populated(client, isolated_db):
 
 
 def test_index_html_includes_slices_card(client):
-    rv = client.get("/")
+    rv = client.get("/research")
     text = rv.get_data(as_text=True)
     assert 'id="edge-slices"' in text
     assert "edge slices" in text.lower()

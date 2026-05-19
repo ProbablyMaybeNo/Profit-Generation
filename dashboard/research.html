@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>profit generation</title>
+<title>profit generation — research</title>
 <style>
   :root {
     --bg:        #0d0f11;
@@ -389,7 +389,7 @@
   .curve-modal-body svg.curve-full line.axis { stroke: var(--dimmer); stroke-width: 0.5; }
   .curve-modal-body svg.curve-full text.axis-label { fill: var(--dim); font-size: 10px; font-family: var(--font); }
 
-  /* Chart modal — inline TradingView iframe for any open-position symbol */
+  /* Chart modal — inline TradingView iframe for any symbol */
   .chart-modal {
     position: fixed; inset: 0; z-index: 2100;
     display: flex; align-items: center; justify-content: center;
@@ -554,6 +554,22 @@
     letter-spacing: 0.03em;
   }
 
+  /* Pending strategies subsection — tracked but no closed outcomes yet */
+  .edge-pending {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(68, 136, 255, 0.25);
+  }
+  .edge-pending-head {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .edge-pending-table { font-size: 11.5px; opacity: 0.85; }
+  .edge-pending-table th { font-size: 10px; color: var(--dim); }
   /* Strategy forecast pill (embedded in strategy-edge table) */
   .forecast {
     display: block;
@@ -997,8 +1013,8 @@
   </header>
 
   <nav class="page-nav">
-    <a href="/" class="active">Monitor</a>
-    <a href="/research">Research</a>
+    <a href="/">Monitor</a>
+    <a href="/research" class="active">Research</a>
   </nav>
 
   <!-- KILL SWITCH banner — only visible when live_trading_halted=true -->
@@ -1026,79 +1042,68 @@
     <div class="guide-body" id="guide-body">loading…</div>
   </aside>
 
-  <!-- ACTION QUEUE — what to do RIGHT NOW -->
-  <div class="card action-card">
-    <h2>action queue — what to do today <span class="count" id="aq-count"></span></h2>
-    <div id="action-queue" class="loading">loading...</div>
-  </div>
+  <!-- Live monitoring cards live on / — see Monitor tab above. -->
 
-  <!-- AUTO-TRADER control -->
-  <div class="card" id="control-card">
-    <h2>auto-trader · control <span class="count" id="control-mode-pill"></span></h2>
-    <div id="control" class="loading">loading...</div>
-  </div>
-
-  <!-- MANUAL TRIGGERS -->
+  <!-- Strategy edge -->
   <div class="card">
-    <h2>manual triggers <span class="count">spawns subprocess · feedback via Telegram + Notion + DB</span></h2>
-    <div id="triggers"></div>
+    <h2>strategy edge — closed outcomes (1d) <span class="count" id="edge-count"></span></h2>
+    <div id="strategy-edge" class="loading">loading...</div>
   </div>
 
-  <!-- TV WEBHOOK tunnel -->
+  <!-- Equity curves -->
   <div class="card">
-    <h2>tv webhook · cloudflare tunnel <span class="count" id="tunnel-updated"></span></h2>
-    <div id="tv-tunnel" class="loading">loading...</div>
+    <h2>equity curves — cumulative return per strategy <span class="count" id="curves-count"></span></h2>
+    <div id="equity-curves" class="loading">loading...</div>
   </div>
 
-  <!-- Top row: report + account -->
-  <div class="row split">
-    <div class="card">
-      <h2>today's report <span class="count" id="report-date"></span></h2>
-      <div id="today-report" class="loading">loading...</div>
-    </div>
-    <div class="card">
-      <h2>account (alpaca paper) <span class="count" id="hb-info"></span></h2>
-      <div id="account" class="loading">loading...</div>
+  <!-- Equity-curve modal -->
+  <div id="curve-modal" class="curve-modal" hidden>
+    <div class="curve-modal-backdrop" data-close-modal></div>
+    <div class="curve-modal-card">
+      <div class="curve-modal-head">
+        <strong id="curve-modal-title">equity curve</strong>
+        <button class="curve-modal-close" data-close-modal aria-label="close">×</button>
+      </div>
+      <div id="curve-modal-body" class="curve-modal-body">loading...</div>
     </div>
   </div>
 
-  <!-- Research cards live on /research — see Research tab above. -->
-
-  <!-- PDT day-trade counter (5.4.2) -->
-  <div class="card" id="pdt-card">
-    <h2>pdt · day trades <span class="count" id="pdt-mode"></span></h2>
-    <div id="pdt-counter" class="loading">loading...</div>
-  </div>
-
-  <!-- Open positions -->
+  <!-- Edge slices -->
   <div class="card">
-    <h2>open positions <span class="count" id="open-count"></span></h2>
-    <div id="open-positions" class="loading">loading...</div>
+    <h2>edge slices — strategy × condition <span class="count" id="slices-count"></span></h2>
+    <div id="edge-slices" class="loading">loading...</div>
   </div>
 
-  <!-- Paper trades today -->
+  <!-- Strategy correlation -->
   <div class="card">
-    <h2>auto-trader · paper orders today <span class="count" id="paper-count"></span></h2>
-    <div id="paper-trades" class="loading">loading...</div>
+    <h2>strategy correlation — daily P&amp;L <span class="count" id="corr-count"></span></h2>
+    <div id="strategy-correlation" class="loading">loading...</div>
   </div>
 
-  <!-- Intraday signals today (5.6.1) -->
-  <div class="card" id="intraday-signals-card">
-    <h2>intraday signals today <span class="count" id="intra-sig-count"></span></h2>
-    <div id="intraday-signals" class="loading">loading...</div>
+  <!-- Slippage / fill-quality burn (3.6.1) -->
+  <div class="card">
+    <h2>slippage burn — backtest edge vs paper fills <span class="count" id="slippage-burn-count"></span></h2>
+    <div id="slippage-burn" class="loading">loading...</div>
   </div>
 
-  <!-- Bottom row: signals + news -->
-  <div class="row two">
-    <div class="card">
-      <h2>today's signals <span class="count" id="sig-count"></span></h2>
-      <div id="today-signals" class="loading">loading...</div>
-    </div>
-    <div class="card">
-      <h2>recent news <span class="count" id="news-count"></span></h2>
-      <div id="recent-news" class="loading">loading...</div>
-    </div>
+  <!-- Fill latency (3.6.3) -->
+  <div class="card">
+    <h2>fill latency — submitted_at &rarr; filled_at per strategy <span class="count" id="fill-latency-count"></span></h2>
+    <div id="fill-latency" class="loading">loading...</div>
   </div>
+
+  <!-- Realized vs theoretical edge -->
+  <div class="card">
+    <h2>edge diff — backtest vs paper fills <span class="count" id="edge-diff-count"></span></h2>
+    <div id="edge-diff" class="loading">loading...</div>
+  </div>
+
+  <!-- News-sentiment overlay -->
+  <div class="card">
+    <h2>news sentiment overlay — outcome by entry-day mood <span class="count" id="sent-overlay-count"></span></h2>
+    <div id="news-sentiment-overlay" class="loading">loading...</div>
+  </div>
+
 
   <footer>
     <span id="last-refresh">—</span> · auto-refresh 30s · data via trading.db
@@ -1298,15 +1303,11 @@ document.addEventListener('keydown', (e) => {
 });
 
 function tvLink(symbol, label='↗ TV') {
-  // Default click = open inline chart modal. Middle-click / Ctrl+click / right-click
-  // still uses the href to open TradingView in a new tab via normal browser behavior.
   const safe = String(symbol).replace(/'/g, '');
   return `<a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}" target="_blank" class="tv-link" onclick="openChart('${safe}'); return false;" title="Open inline chart (Esc to close)">${label}</a>`;
 }
 
 function _resolveTvSymbol(symbol) {
-  // Map our internal ticker form to TradingView's preferred form.
-  // Crypto: BTC-USD → COINBASE:BTCUSD. Stocks/ETFs: pass through.
   if (/^[A-Z]+-USD$/.test(symbol)) {
     return 'COINBASE:' + symbol.replace('-', '');
   }
@@ -1322,7 +1323,6 @@ function openChart(symbol) {
   const tvSym = _resolveTvSymbol(symbol);
   titleEl.textContent = `chart — ${symbol}`;
   tvLink.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}`;
-  // TradingView widget embed. Free, no auth, supports dark theme + symbol change.
   const params = new URLSearchParams({
     symbol: tvSym,
     interval: 'D',
@@ -1343,7 +1343,7 @@ function closeChart() {
   const modal = document.getElementById('chart-modal');
   const iframe = document.getElementById('chart-iframe');
   if (modal) modal.hidden = true;
-  if (iframe) iframe.src = 'about:blank';  // stop the TV widget loading audio/state
+  if (iframe) iframe.src = 'about:blank';
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1435,24 +1435,18 @@ function renderControl(s) {
   const ats = s.auto_trade_settings || {};
   const enabled = !!ats.enabled;
   const dryRun  = ats.dry_run !== false; // treat undefined as dry-run for safety
-  // 5.6.3 — Intraday-enabled badge state.
-  const intradayEnabled = !!ats.intraday_enabled;
   const card = document.getElementById('control-card');
   card.className = 'card';
   let mode = 'disabled';
   if (enabled && !dryRun) mode = 'live';
   else if (enabled && dryRun) mode = 'dry';
   card.classList.add(mode);
-  if (intradayEnabled && enabled) card.classList.add('intraday');
   const modeLabel = enabled
     ? (dryRun ? 'DRY-RUN (no real orders)' : 'ACTIVE (placing real Alpaca paper orders)')
     : 'DISABLED';
-  const intradayBadge = intradayEnabled && enabled
-    ? '<span class="badge on" title="intraday paper trading is firing on 5m/15m bars">+ INTRADAY</span>'
-    : '';
-  const modeBadge = (enabled
+  const modeBadge = enabled
     ? (dryRun ? '<span class="badge warn">DRY-RUN</span>' : '<span class="badge on">ACTIVE</span>')
-    : '<span class="badge off">DISABLED</span>') + intradayBadge;
+    : '<span class="badge off">DISABLED</span>';
   document.getElementById('control-mode-pill').innerHTML = modeBadge;
 
   const enableRow = `
@@ -1728,70 +1722,74 @@ function renderAccount(s) {
   }
 }
 
-function renderPDT(s) {
-  // 5.4.2 — Pattern Day Trader counter card.
-  const el = document.getElementById('pdt-counter');
-  if (!el) return;
-  const p = s.pdt || {};
-  const today = (p.today === undefined || p.today === null) ? '—' : p.today;
-  const fiveDay = (p.five_day === undefined || p.five_day === null) ? '—' : p.five_day;
-  const threshold = p.threshold ?? 3;
-  const eqThresh = p.equity_threshold ?? 25000;
-  const paperUnlimited = !!p.paper_unlimited;
-  const fiveDayCls = (typeof fiveDay === 'number' && fiveDay >= threshold) ? 'warn' : '';
-  const subtitle = paperUnlimited
-    ? `paper unlimited (account ≥ $${eqThresh.toLocaleString()})`
-    : `live restriction · ${threshold} round-trips per 5 days`;
-  el.innerHTML = `
-    <div class="account-line">
-      <div class="pair"><span class="lbl">today</span><span class="val">${today}/${threshold}</span></div>
-      <div class="pair"><span class="lbl">5-day rolling</span><span class="val ${fiveDayCls}">${fiveDay}/${threshold}</span></div>
-    </div>
-    <div class="account-line" style="margin-top:6px;">
-      <span class="dim">${subtitle}</span>
-    </div>`;
-  const pillEl = document.getElementById('pdt-mode');
-  if (pillEl) {
-    pillEl.textContent = paperUnlimited ? 'paper unlimited' : 'live restricted';
-  }
-}
-
 function renderEdge(s) {
   const el = document.getElementById('strategy-edge');
   const rows = s.strategy_edge || [];
-  document.getElementById('edge-count').textContent = `${rows.length} active`;
-  if (!rows.length) { el.innerHTML = '<div class="empty">no closed outcomes — run scripts/backfill_outcomes.py.</div>'; return; }
-  let h = '<table><thead><tr>' +
-    '<th>strategy</th><th class="num">n</th><th class="num">mean</th>' +
-    '<th class="num">win rate</th><th class="num">sharpe-ish</th>' +
-    '<th class="num">max loss</th><th class="num">max win</th>' +
-    '</tr></thead><tbody>';
-  for (const r of rows) {
-    const fc = r.forecast || {};
-    const fcSummary = fc.summary || '';
-    const conf = fc.confidence || '';
-    const confCls = conf === 'high' ? 'fc-conf-hi'
-                    : conf === 'medium' ? 'fc-conf-mid'
-                    : 'fc-conf-lo';
-    const health = r.health || {};
-    const degradedBadge = health.degraded
-      ? `<span class="health-warn" title="${escapeHtml(health.reason || 'recent edge has decayed')}">⚠</span>`
-      : '';
-    h += `<tr${health.degraded ? ' class="row-degraded"' : ''}>
-      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}${degradedBadge}` +
-      (fcSummary
-        ? `<span class="forecast ${confCls}" title="confidence: ${escapeHtml(conf)} · ${fc.n_signals_observed || 0} signals over ${fc.observation_days || 0}d">${escapeHtml(fcSummary)}</span>`
-        : '') +
-      `</td>
-      <td class="num">${r.n}</td>
-      <td class="num ${pctClass(r.mean_ret)}">${fmtPct(r.mean_ret)}</td>
-      <td class="num">${(r.win_rate * 100).toFixed(1)}%</td>
-      <td class="num ${pctClass(r.sharpe_ish)}">${r.sharpe_ish.toFixed(3)}</td>
-      <td class="num neg">${fmtPct(r.max_loss)}</td>
-      <td class="num pos">${fmtPct(r.max_win)}</td>
-    </tr>`;
+  const pending = s.strategy_edge_pending || [];
+  const countText = pending.length
+    ? `${rows.length} active · ${pending.length} pending`
+    : `${rows.length} active`;
+  document.getElementById('edge-count').textContent = countText;
+  if (!rows.length && !pending.length) { el.innerHTML = '<div class="empty">no closed outcomes — run scripts/backfill_outcomes.py.</div>'; return; }
+  let h = '';
+  if (rows.length) {
+    h += '<table><thead><tr>' +
+      '<th>strategy</th><th class="num">n</th><th class="num">mean</th>' +
+      '<th class="num">win rate</th><th class="num">sharpe-ish</th>' +
+      '<th class="num">max loss</th><th class="num">max win</th>' +
+      '</tr></thead><tbody>';
+    for (const r of rows) {
+      const fc = r.forecast || {};
+      const fcSummary = fc.summary || '';
+      const conf = fc.confidence || '';
+      const confCls = conf === 'high' ? 'fc-conf-hi'
+                      : conf === 'medium' ? 'fc-conf-mid'
+                      : 'fc-conf-lo';
+      const health = r.health || {};
+      const degradedBadge = health.degraded
+        ? `<span class="health-warn" title="${escapeHtml(health.reason || 'recent edge has decayed')}">⚠</span>`
+        : '';
+      h += `<tr${health.degraded ? ' class="row-degraded"' : ''}>
+        <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}${degradedBadge}` +
+        (fcSummary
+          ? `<span class="forecast ${confCls}" title="confidence: ${escapeHtml(conf)} · ${fc.n_signals_observed || 0} signals over ${fc.observation_days || 0}d">${escapeHtml(fcSummary)}</span>`
+          : '') +
+        `</td>
+        <td class="num">${r.n}</td>
+        <td class="num ${pctClass(r.mean_ret)}">${fmtPct(r.mean_ret)}</td>
+        <td class="num">${(r.win_rate * 100).toFixed(1)}%</td>
+        <td class="num ${pctClass(r.sharpe_ish)}">${r.sharpe_ish.toFixed(3)}</td>
+        <td class="num neg">${fmtPct(r.max_loss)}</td>
+        <td class="num pos">${fmtPct(r.max_win)}</td>
+      </tr>`;
+    }
+    h += '</tbody></table>';
   }
-  h += '</tbody></table>';
+  if (pending.length) {
+    h += '<div class="edge-pending">';
+    h += `<div class="edge-pending-head">also tracked · awaiting first closed outcome</div>`;
+    h += '<table class="edge-pending-table"><thead><tr>' +
+      '<th>strategy</th><th>class</th><th>regimes</th><th>active on</th>' +
+      '<th>trailing</th><th>pyramid</th><th class="num">signals</th>' +
+      '</tr></thead><tbody>';
+    for (const p of pending) {
+      const cls = p.strategy_class || '—';
+      const regimes = (p.active_in_regimes || []).join(', ') || '—';
+      const activeOn = (p.active_on || []).join(', ') || '—';
+      const trail = p.trailing_method || '—';
+      const pyramid = p.pyramidable ? '<span class="badge on">YES</span>' : '<span class="dim">no</span>';
+      h += `<tr>
+        <td class="strat">${escapeHtml(shortStrat(p.strategy_id))}</td>
+        <td class="dim">${escapeHtml(cls)}</td>
+        <td class="dim">${escapeHtml(regimes)}</td>
+        <td class="dim">${escapeHtml(activeOn)}</td>
+        <td class="dim">${escapeHtml(trail)}</td>
+        <td>${pyramid}</td>
+        <td class="num dim">${p.signal_count}</td>
+      </tr>`;
+    }
+    h += '</tbody></table></div>';
+  }
   el.innerHTML = h;
 }
 
@@ -1799,14 +1797,14 @@ function buildSparkline(points) {
   if (!points.length) return '';
   const W = 180, H = 28;
   const xs = points.map((_, i) => points.length === 1 ? W / 2 : (i / (points.length - 1)) * W);
-  const ys = points.map(p => p.cum_pct);
+  const ys = points.map(p => p.equity_pct);
   const yMin = Math.min(0, ...ys);
   const yMax = Math.max(0, ...ys);
   const yRange = (yMax - yMin) || 1;
   const proj = (y) => H - ((y - yMin) / yRange) * H;
   const zeroY = proj(0);
   const linePath = points.map((p, i) =>
-    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.cum_pct).toFixed(2)}`
+    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.equity_pct).toFixed(2)}`
   ).join(' ');
   const fillPath = linePath
     + ` L${xs[xs.length - 1].toFixed(2)},${zeroY.toFixed(2)}`
@@ -1828,7 +1826,7 @@ function buildFullCurve(curve) {
   const xs = points.map((_, i) =>
     PAD_L + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW)
   );
-  const cums = points.map(p => p.cum_pct);
+  const cums = points.map(p => p.equity_pct);
   const dds  = points.map(p => p.drawdown_pct);
   const yMin = Math.min(0, ...cums, ...dds);
   const yMax = Math.max(0, ...cums);
@@ -1837,7 +1835,7 @@ function buildFullCurve(curve) {
   const zeroY = proj(0);
 
   const linePath = points.map((p, i) =>
-    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.cum_pct).toFixed(2)}`
+    `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.equity_pct).toFixed(2)}`
   ).join(' ');
   const ddPath = points.map((p, i) =>
     `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(2)},${proj(p.drawdown_pct).toFixed(2)}`
@@ -1863,10 +1861,15 @@ function buildFullCurve(curve) {
     `<text class="axis-label" x="${xs[i].toFixed(2)}" y="${(H - 8).toFixed(2)}" text-anchor="middle">${escapeHtml(points[i].date || '')}</text>`
   ).join('');
 
-  const stats = `<div class="curve-stats">
+  const sizingNote = `compounded at ${curve.per_trade_size_pct ?? 10}% per trade · pre-cost backtest`;
+  const cagrLabel = curve.cagr_pct == null ? '—' : fmtPct(curve.cagr_pct);
+  const cagrCls = (curve.cagr_pct ?? 0) >= 0 ? 'pos' : 'neg';
+  const stats = `<div class="curve-stats" title="${escapeHtml(sizingNote)}">
     <div class="pair"><span class="lbl">trades</span><span class="val">${curve.n_trades}</span></div>
-    <div class="pair"><span class="lbl">final</span><span class="val ${finalPct >= 0 ? 'pos' : 'neg'}">${fmtPct(finalPct)}</span></div>
-    <div class="pair"><span class="lbl">max drawdown</span><span class="val neg">${fmtPct(curve.max_drawdown_pct)}</span></div>
+    <div class="pair"><span class="lbl">total</span><span class="val ${finalPct >= 0 ? 'pos' : 'neg'}">${fmtPct(curve.total_return_pct)}</span></div>
+    <div class="pair"><span class="lbl">CAGR</span><span class="val ${cagrCls}">${cagrLabel}</span></div>
+    <div class="pair"><span class="lbl">max DD</span><span class="val neg">${fmtPct(curve.max_drawdown_pct)}</span></div>
+    <div class="pair dim"><span class="lbl">sizing</span><span class="val">${curve.per_trade_size_pct ?? 10}%/trade</span></div>
   </div>`;
 
   return `<svg class="curve-full" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
@@ -1921,17 +1924,23 @@ function renderEquityCurves(s) {
         if (sparkCell) sparkCell.innerHTML = buildSparkline(curve.points || []);
         const cumCell = row.querySelector('.cum-cell');
         if (cumCell) {
-          cumCell.textContent = fmtPct(curve.final_pct);
-          cumCell.className = `num ${pctClass(curve.final_pct)} cum-cell`;
+          const headline = curve.cagr_pct != null ? curve.cagr_pct : curve.total_return_pct;
+          const headlineLabel = curve.cagr_pct != null ? 'CAGR' : 'total';
+          cumCell.textContent = fmtPct(headline);
+          cumCell.title = `${headlineLabel} · compounded at ${curve.per_trade_size_pct ?? 10}% per trade · pre-cost backtest`;
+          cumCell.className = `num ${pctClass(headline)} cum-cell`;
         }
         const ddCell = row.querySelector('.dd-cell');
         if (ddCell) {
           ddCell.textContent = fmtPct(curve.max_drawdown_pct);
+          ddCell.title = 'max drawdown on compound equity curve (capped at -100%)';
           ddCell.className = 'num neg dd-cell';
         }
         const nCell = row.querySelector('.n-cell');
         if (nCell) {
-          nCell.textContent = `${curve.n_trades} trades`;
+          const days = curve.period_days;
+          const periodLabel = days == null ? '' : (days > 365 ? ` · ${(days / 365.25).toFixed(1)}y` : ` · ${days}d`);
+          nCell.textContent = `${curve.n_trades} trades${periodLabel}`;
           nCell.className = 'num dim n-cell';
         }
       })
@@ -2393,7 +2402,7 @@ function renderPaperTrades(s) {
     return;
   }
   let h = '<table><thead><tr>' +
-    '<th>time</th><th>order type</th><th>side</th><th>strategy</th><th>symbol</th>' +
+    '<th>time</th><th>side</th><th>strategy</th><th>symbol</th>' +
     '<th class="num">qty</th><th class="num">fill price</th>' +
     '<th>status</th><th>order id</th>' +
     '</tr></thead><tbody>';
@@ -2405,14 +2414,8 @@ function renderPaperTrades(s) {
     const statusCls = (r.status === 'filled' || r.status === 'accepted') ? 'pos'
                     : (r.status === 'rejected' || r.status === 'canceled') ? 'neg'
                     : 'neutral';
-    // 5.6.2 — INTRADAY (interval) vs EOD (1d) tag, sortable by source.
-    const interval = r.bar_interval || '1d';
-    const isIntraday = interval !== '1d';
-    const orderType = isIntraday ? `INTRADAY (${escapeHtml(interval)})` : 'EOD (1d)';
-    const orderTypeCls = isIntraday ? 'interval-tag intraday' : 'interval-tag';
-    h += `<tr data-bar-interval="${escapeHtml(interval)}">
+    h += `<tr>
       <td class="dim">${escapeHtml(t)}</td>
-      <td><span class="${orderTypeCls}">${orderType}</span></td>
       <td class="${sideCls}"><strong>${sideUp}</strong></td>
       <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
       <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
@@ -2420,40 +2423,6 @@ function renderPaperTrades(s) {
       <td class="num">${fmt$(r.fill_price)}</td>
       <td class="${statusCls}">${escapeHtml(r.status || '?')}</td>
       <td class="dim" title="${escapeHtml(r.alpaca_order_id || '')}">${escapeHtml(oid)}</td>
-    </tr>`;
-  }
-  h += '</tbody></table>';
-  el.innerHTML = h;
-}
-
-function renderIntradaySignals(s) {
-  // 5.6.1 — Intraday signals fired today (5m / 15m / 1h).
-  const el = document.getElementById('intraday-signals');
-  if (!el) return;
-  const rows = s.intraday_signals_today || [];
-  const cnt = document.getElementById('intra-sig-count');
-  if (cnt) cnt.textContent = `${rows.length} today`;
-  if (!rows.length) {
-    el.innerHTML = '<div class="empty">no intraday signals today.</div>';
-    return;
-  }
-  let h = '<table><thead><tr>' +
-    '<th>time</th><th>interval</th><th>strategy</th>' +
-    '<th>symbol</th><th>type</th><th class="num">close</th>' +
-    '</tr></thead><tbody>';
-  for (const r of rows) {
-    const tcls = r.signal_type === 'long_entry' ? 'entry' : 'exit';
-    const tlabel = r.signal_type === 'long_entry' ? 'ENTRY' : 'EXIT';
-    // bar_ts on intraday is full ISO; show HH:MM.
-    const bt = (r.bar_ts || '');
-    const t = bt.length > 16 ? bt.slice(11, 16) : ((r.ts || '').slice(11, 19) || '—');
-    h += `<tr>
-      <td class="dim">${escapeHtml(t)}</td>
-      <td><span class="interval-tag intraday">${escapeHtml(r.bar_interval)}</span></td>
-      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
-      <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
-      <td class="${tcls}">${tlabel}</td>
-      <td class="num">${fmt$(r.close)}</td>
     </tr>`;
   }
   h += '</tbody></table>';
@@ -2522,7 +2491,6 @@ async function refresh() {
       () => renderTriggers(),
       () => renderReport(s),
       () => renderAccount(s),
-      () => renderPDT(s),
       () => renderEdge(s),
       () => renderEquityCurves(s),
       () => renderEdgeSlices(),
@@ -2533,7 +2501,6 @@ async function refresh() {
       () => renderNewsSentimentOverlay(),
       () => renderOpenPositions(s),
       () => renderPaperTrades(s),
-      () => renderIntradaySignals(s),
       () => renderSignals(s),
       () => renderNews(s),
     ];

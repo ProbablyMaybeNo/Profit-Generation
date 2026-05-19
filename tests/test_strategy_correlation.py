@@ -263,6 +263,6 @@ def test_endpoint_two_correlated_strategies(client, isolated_db):
 
 
 def test_index_html_includes_correlation_card(client):
-    text = client.get("/").get_data(as_text=True)
+    text = client.get("/research").get_data(as_text=True)
     assert 'id="strategy-correlation"' in text
     assert "strategy correlation" in text.lower()

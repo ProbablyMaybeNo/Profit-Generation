@@ -405,6 +405,6 @@ def test_endpoint_returns_rows(client, isolated_db):
 
 
 def test_index_html_includes_sentiment_card(client):
-    text = client.get("/").get_data(as_text=True)
+    text = client.get("/research").get_data(as_text=True)
     assert 'id="news-sentiment-overlay"' in text
     assert "news sentiment overlay" in text.lower()

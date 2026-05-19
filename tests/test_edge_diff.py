@@ -473,6 +473,6 @@ def test_endpoint_returns_rows(client, isolated_db):
 
 
 def test_index_html_includes_edge_diff_card(client):
-    text = client.get("/").get_data(as_text=True)
+    text = client.get("/research").get_data(as_text=True)
     assert 'id="edge-diff"' in text
     assert "edge diff" in text.lower()
