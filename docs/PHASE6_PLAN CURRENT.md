@@ -61,9 +61,10 @@ mathematical function of the strategy's own win-rate history. Full Kelly
 is famously brutal on noisy estimates — fractional Kelly (1/4 of full)
 plus a min-sample-size guard is what professional shops actually use.
 
-- [ ] **6.2.1 Per-strategy Kelly calculator**
+- [x] **6.2.1 Per-strategy Kelly calculator**
   - **Deliverable:** `monitoring/kelly.py` + `tests/test_kelly.py`
   - **Acceptance:** `calc_kelly_fraction(strategy_name)` queries `paper_trades` for that strategy's closed outcomes, computes `p = wins / total`, `b = mean_winner / abs(mean_loser)`, returns `f* = (p*(b+1) - 1) / b`. Returns `None` if fewer than 50 closed outcomes (sample-size guard). Returns `0` if `f*` is negative (negative-edge strategy — should not be sized at all). Caps raw `f*` at `0.25` (no single strategy claims more than a quarter of portfolio even if math says it should). Tests: math correctness, sample guard, negative-edge handling, cap enforcement.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 190c661
 
 - [ ] **6.2.2 Fractional Kelly sizing tier**
   - **Deliverable:** `monitoring/sizing.py` new sizing tier `kelly_quarter`
