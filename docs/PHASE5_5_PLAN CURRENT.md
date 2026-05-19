@@ -57,10 +57,11 @@ mean-reversion on its tightly-validated subset.
   - **Notes:** S&P 500 and Nasdaq-100 constituents change quarterly. Initial CSVs are snapshots — add manual quarterly refresh to RUNBOOK rather than auto-fetching (avoids dependency on external API).
   - **Completed:** 2026-05-19 by milestone-builder · commit b0749b2 · 553 deduped symbols (501 S&P + 101 NDX + 36 ETFs; 85 overlaps removed)
 
-- [ ] **5.5.1.2 Universe-refresh helper script**
+- [x] **5.5.1.2 Universe-refresh helper script**
   - **Deliverable:** `scripts/refresh_universe.py`
   - **Acceptance:** scrapes current S&P 500 + Nasdaq-100 constituents (Wikipedia is the canonical free source) and writes the CSV files. Idempotent. Telegram alerts on adds/removes since last run. Tests: parsing logic, diff detection.
   - **Notes:** Run quarterly via manual invocation (or Phase 6+ schtask). Not auto-scheduled at first — let Ross see the diff before applying.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 8e71075
 
 ---
 
