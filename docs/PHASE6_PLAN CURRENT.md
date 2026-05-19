@@ -40,10 +40,11 @@ strategy benefits — including mean-reversion, which currently uses fixed
   - **Acceptance:** at entry time, stop is set at `entry_price − (k × ATR_14)` for longs (mirror for shorts). `k` configurable per strategy via new `stops.atr_multiplier` setting (default 2.5). Falls back to the existing fixed-% stop if ATR can't be computed (e.g. <14 bars of history). New `entry_stops` column on `paper_trades` records which method was used. Tests: ATR math, fallback path, per-strategy multiplier override, short-direction handling.
   - **Completed:** 2026-05-19 by milestone-builder · commit 1cffdff
 
-- [ ] **6.1.2 ATR stops as default for mean-reversion strategies**
+- [x] **6.1.2 ATR stops as default for mean-reversion strategies**
   - **Deliverable:** strategy declarations updated + tests
   - **Acceptance:** every mean-reversion strategy in `TRACKED_STRATEGIES` (RSI2 oversold, consec-bearish bounces, etc.) flips its stop method from `fixed_percent` to `atr_initial` (6.1.1) with `k=2.0` (tighter than trend's 2.5 because MR exits are quicker). Existing live/paper segregation (3.1.5) preserved — only paper-active strategies flip first; live strategies stay on existing stops until separately validated. Tests: declaration updates, no regression in existing strategy test suite.
   - **Notes:** This is the milestone where ATR stops actually start *making money* for us — trend strategies (4.6) already had ATR from the start, but the bulk of the roster is mean-reversion.
+  - **Completed:** 2026-05-19 by milestone-builder · commit c45c5f0
 
 - [ ] **6.1.3 Regime-aware ATR multiplier**
   - **Deliverable:** `monitoring/regime_router.py` extended + sizing integration
