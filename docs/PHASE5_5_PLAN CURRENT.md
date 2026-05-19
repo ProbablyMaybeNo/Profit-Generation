@@ -95,9 +95,10 @@ mean-reversion on its tightly-validated subset.
   - **Notes:** Crucially: this BYPASSES the `active_on` field. Trend strategies in `TRACKED_STRATEGIES` keep their narrow active_on for the regular EOD fire-check (which still runs as backup). The wide scan is a separate path.
   - **Completed:** 2026-05-19 by milestone-builder · commit d273a47
 
-- [ ] **5.5.3.2 Bar-fetch batching + caching**
+- [x] **5.5.3.2 Bar-fetch batching + caching**
   - **Deliverable:** `monitoring/intraday_bars.py` extended (or new `monitoring/wide_bars.py`)
   - **Acceptance:** fetching 600 symbols × 100 bars must complete in < 5 min on a normal EOD run. Batched Alpaca calls (10-20 symbols per request), per-symbol cache scoped to today's bar close. Tests: batch sizing, cache hit when called twice in a 30-min window.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 789d0ee · 50 symbols per Alpaca request, 36h TTL keyed to bar-close date
 
 ---
 
