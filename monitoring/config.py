@@ -42,6 +42,24 @@ INTRADAY_MR_DECLARATIONS = [
     },
 ]
 
+# 5.3.2 — Opening-Range Breakout (ORBO). Fires on 5-min bars during the
+# opening hour only — first breakout above the 09:30-09:50 ET range
+# triggers a single long entry; EOD or stop closes it. Grace period
+# enabled (no prior intraday outcomes). Not pyramidable — single-shot per day.
+INTRADAY_ORB_DECLARATIONS = [
+    {
+        "id": "intraday-orbo-5m",
+        "compute": "compute_orbo_intraday",
+        "module": "strategies.orb.orbo_intraday",
+        "strategy_class": "breakout",
+        "bar_interval": "5m",
+        "active_on": ["SPY", "QQQ", "IWM", "NVDA", "TSLA"],
+        "active_in_window": ["09:35-10:30 ET"],
+        "grace_period": True,
+        "pyramidable": False,
+    },
+]
+
 TRACKED_STRATEGIES = [
     {"id": "botnet101-3-bar-low",            "compute": "compute_3bar_low",                  "active_on": ["QQQ", "IWM", "XLE", "KRE", "XHB"]},
     {"id": "botnet101-buy-5day-low",         "compute": "compute_5day_low",                   "active_on": ["XBI", "KRE", "XHB", "GDX"]},
@@ -52,6 +70,7 @@ TRACKED_STRATEGIES = [
     {"id": "botnet101-turn-of-month",        "compute": "compute_turn_of_month",              "active_on": ["XME", "GDX"]},
     *TREND_DECLARATIONS,
     *INTRADAY_MR_DECLARATIONS,
+    *INTRADAY_ORB_DECLARATIONS,
 ]
 
 # Schedule (Eastern Time). Cron-style trigger times.

@@ -29,15 +29,27 @@ from monitoring.strategy_fires import _resolve_compute_fn
 DEFAULT_LOOKBACK_BARS = 200
 
 
-def _in_window(now: datetime, window: Optional[str]) -> bool:
+def _in_window(now: datetime, window) -> bool:
     """Check `now` (ET clock) against an `active_in_window` declaration.
 
-    Format: "HH:MM-HH:MM" (inclusive on both ends). None => always active.
+    Formats accepted (5.3.2):
+      - None / empty       → always active
+      - "HH:MM-HH:MM"      → single window
+      - "HH:MM-HH:MM ET"   → trailing zone tag stripped
+      - ["HH:MM-HH:MM", …] → list of windows, active if `now` is inside any
     """
     if not window:
         return True
+    if isinstance(window, (list, tuple)):
+        return any(_in_window(now, w) for w in window)
+    # Strip trailing zone tags like " ET" so the plan's literal format works.
+    spec = str(window).strip()
+    for tag in (" ET", " EST", " EDT", " UTC"):
+        if spec.upper().endswith(tag):
+            spec = spec[: -len(tag)].strip()
+            break
     try:
-        start_s, end_s = window.split("-", 1)
+        start_s, end_s = spec.split("-", 1)
         start_t = dt_time.fromisoformat(start_s.strip())
         end_t = dt_time.fromisoformat(end_s.strip())
     except (ValueError, AttributeError):

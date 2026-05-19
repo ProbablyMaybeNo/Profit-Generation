@@ -27,6 +27,7 @@ _COMPUTE_FN_MODULES = [
     "strategies.trend.ma_cross_20_50",
     "strategies.trend.new_high_volume",
     "strategies.intraday.mean_reversion_intraday",
+    "strategies.orb.orbo_intraday",
 ]
 
 
