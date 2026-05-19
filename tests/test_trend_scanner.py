@@ -356,6 +356,45 @@ def test_scan_empty_universe_after_filter_returns_no_fires(isolated_db):
         conn.close()
 
 
+def test_scan_persists_bar_ts_as_date_only_string(isolated_db):
+    """Regression: trend_scanner was persisting bar_ts as a full
+    ISO timestamp (YYYY-MM-DDTHH:MM:SS) but auto_trader.process_signals
+    matches 1d signals against `bar_ts = asof.isoformat()` which yields
+    YYYY-MM-DD. The mismatch silently dropped every scanner fire on the
+    floor. This test pins the date-only format so it can't regress."""
+    _seed_strategies(["trend-donchian-breakout-20"])
+    conn = db.init_db()
+    try:
+        bars = {"BREAKOUT": _flat_then_breakout_bars()}
+        def loader(symbols, lookback): return bars
+        decls = [{
+            "id": "trend-donchian-breakout-20",
+            "compute": "compute_donchian_breakout_20",
+            "strategy_class": "trend",
+            "active_on": ["SPY"],
+        }]
+        result = trend_scanner.scan_trend_universe(
+            declarations=decls,
+            universe_override=["BREAKOUT"],
+            bar_loader=loader,
+            conn=conn,
+        )
+        assert len(result) >= 1
+        # Every fire's bar_ts must be exactly 10 chars (YYYY-MM-DD), no 'T'
+        for r in result:
+            assert "T" not in r["bar_ts"], f"bar_ts has time component: {r['bar_ts']!r}"
+            assert len(r["bar_ts"]) == 10, f"bar_ts not date-only: {r['bar_ts']!r}"
+        # Same for the persisted DB row
+        rows = conn.execute(
+            "SELECT bar_ts FROM signals WHERE strategy_id='trend-donchian-breakout-20'"
+        ).fetchall()
+        for row in rows:
+            assert "T" not in row["bar_ts"]
+            assert len(row["bar_ts"]) == 10
+    finally:
+        conn.close()
+
+
 def test_scan_records_long_exit_when_signal_fires(isolated_db):
     """Sanity check: build bars that produce both an entry and a later exit."""
     _seed_strategies(["trend-donchian-breakout-20"])

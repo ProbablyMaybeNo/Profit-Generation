@@ -7,7 +7,9 @@ Three classical Turtle-style strategies:
 
 All three declare:
   - pyramidable: True
-  - active_in_regimes: ["bull", "trend"]
+  - active_in_regimes: ["trending_up", "low_vol", "mixed"]
+    (matches regime_router's KNOWN_REGIMES vocabulary — strategies skip
+     when current regime is "trending_down" or "choppy")
   - strategy_class: "trend"
 
 They use the same df → df contract as the existing mean-reversion
@@ -29,7 +31,7 @@ TREND_DECLARATIONS = [
         "compute": "compute_donchian_breakout_20",
         "module": "strategies.trend.donchian_breakout_20",
         "strategy_class": "trend",
-        "active_in_regimes": ["bull", "trend"],
+        "active_in_regimes": ["trending_up", "low_vol", "mixed"],
         "pyramidable": True,
         "grace_period": True,
         "active_on": ["SPY", "QQQ", "IWM"],
@@ -40,7 +42,7 @@ TREND_DECLARATIONS = [
         "compute": "compute_ma_cross_20_50",
         "module": "strategies.trend.ma_cross_20_50",
         "strategy_class": "trend",
-        "active_in_regimes": ["bull", "trend"],
+        "active_in_regimes": ["trending_up", "low_vol", "mixed"],
         "pyramidable": True,
         "grace_period": True,
         "active_on": ["SPY", "QQQ", "IWM"],
@@ -51,7 +53,7 @@ TREND_DECLARATIONS = [
         "compute": "compute_new_high_volume",
         "module": "strategies.trend.new_high_volume",
         "strategy_class": "trend",
-        "active_in_regimes": ["bull", "trend"],
+        "active_in_regimes": ["trending_up", "low_vol", "mixed"],
         "pyramidable": True,
         "grace_period": True,
         "active_on": ["SPY", "QQQ", "IWM"],

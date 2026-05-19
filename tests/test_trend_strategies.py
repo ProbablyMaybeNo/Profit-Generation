@@ -94,9 +94,13 @@ def test_all_marked_pyramidable():
 
 
 def test_all_have_trend_regime():
+    # Trend strategies must include "trending_up" (the regime_router's
+    # canonical name for a bullish trend). They must NOT include
+    # "trending_down" (we're long-only) or "choppy" (mean-reversion turf).
     for d in TREND_DECLARATIONS:
-        assert "bull" in d["active_in_regimes"]
-        assert "trend" in d["active_in_regimes"]
+        assert "trending_up" in d["active_in_regimes"]
+        assert "trending_down" not in d["active_in_regimes"]
+        assert "choppy" not in d["active_in_regimes"]
 
 
 def test_all_have_trend_strategy_class():

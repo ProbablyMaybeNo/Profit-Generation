@@ -144,8 +144,17 @@ def scan_trend_universe(
                     continue
                 last = signals.iloc[-1]
                 bar_ts = signals.index[-1]
-                bar_ts_iso = (bar_ts.isoformat()
-                              if hasattr(bar_ts, "isoformat") else str(bar_ts))
+                # CRITICAL: auto_trader.process_signals matches 1d signals by
+                # date-only string (`asof.isoformat()` → "YYYY-MM-DD"). Live
+                # Alpaca bars come back as pd.Timestamp("YYYY-MM-DDTHH:MM:SS")
+                # which would never match. Normalize to date-only here so
+                # scanner fires actually get picked up by the auto-trader.
+                if hasattr(bar_ts, "date"):
+                    bar_ts_iso = bar_ts.date().isoformat()
+                elif hasattr(bar_ts, "isoformat"):
+                    bar_ts_iso = bar_ts.isoformat()[:10]
+                else:
+                    bar_ts_iso = str(bar_ts)[:10]
                 try:
                     close = float(last.get("close", df["close"].iloc[-1]))
                 except Exception:  # noqa: BLE001

@@ -16,6 +16,11 @@ echo === run_daily start %DATE% %TIME% === >> "%LOGFILE%"
 REM Use the conda env Python directly to skip "conda run" temp-file races.
 set PY=D:\AI-Hub\environments\conda-envs\trading\python.exe
 
+REM 5.5.2 — Refresh liquidity_snapshots before the daily report runs so the
+REM trend scanner has fresh ADV data. Best-effort; failure isolated from the
+REM main daily report.
+"%PY%" scripts\bootstrap_liquidity.py >> "%LOGFILE%" 2>&1
+
 "%PY%" -m monitoring.daily_report >> "%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 
