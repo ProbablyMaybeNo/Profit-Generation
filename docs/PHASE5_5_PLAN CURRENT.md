@@ -73,10 +73,11 @@ mean-reversion on its tightly-validated subset.
   - **Notes:** $50M/day is a reasonable default — keeps liquid mid-caps and above, knocks out micro-caps where fills slip badly. Configurable per-strategy via `liquidity_floor_usd` on the declaration. **Implementation note:** new `liquidity_snapshots` table (purpose-built, instead of extending generic `snapshots` which has no volume column).
   - **Completed:** 2026-05-19 by milestone-builder · commit 74900b3
 
-- [ ] **5.5.2.2 Spread estimate filter (optional second guard)**
+- [x] **5.5.2.2 Spread estimate filter (optional second guard)**
   - **Deliverable:** extension to liquidity.py
   - **Acceptance:** for symbols with no recent paper trades, fetch a live bid/ask via Alpaca and skip symbols where (ask-bid)/midpoint > 0.5%. Cached for 1 hour to avoid hammering the API. Tests: spread math, cache hit.
   - **Notes:** Belt-and-suspenders. Dollar-volume already correlates with tight spreads, but a few low-volume names slip through.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 1ffae12
 
 ---
 
