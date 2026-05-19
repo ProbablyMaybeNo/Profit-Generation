@@ -365,6 +365,64 @@ def upsert_strategy(conn: sqlite3.Connection, record: Dict[str, Any]) -> None:
         conn.execute(sql, tuple(cols.values()))
 
 
+def ensure_strategies_seeded(
+    conn: sqlite3.Connection,
+    tracked_strategies,
+    *,
+    title_map: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Make sure every TRACKED_STRATEGIES entry has a row in the strategies
+    table. Prevents the FK constraint failure that has bitten us each time
+    a new strategy was added without a manual upsert.
+
+    Returns: list of strategy_ids that were newly inserted (existing rows
+    are not touched). Safe to call at the start of any pipeline run.
+    """
+    if not tracked_strategies:
+        return []
+    existing = {r[0] for r in conn.execute("SELECT strategy_id FROM strategies")}
+    today = _utc_now_iso()[:10]
+    title_map = title_map or {}
+    newly_inserted: List[str] = []
+    for entry in tracked_strategies:
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("id")
+        if not sid or sid in existing:
+            continue
+        cls = entry.get("strategy_class", "uncategorized")
+        bar_interval = entry.get("bar_interval", "1d")
+        family = f"Auto-seeded · {cls} · {bar_interval}"
+        title = title_map.get(sid, sid)
+        record = {
+            "extra": {
+                "strategy_id": sid,
+                "title": title,
+                "methodology_family": family,
+                "current_verdict": "UNTESTED",
+                "verdict_summary":
+                    f"Auto-seeded {today} by ensure_strategies_seeded; "
+                    f"awaiting first closed outcome.",
+                "active_on": entry.get("active_on", []),
+                "timeframes": {"execution": bar_interval},
+                "instruments": entry.get("active_on", []),
+                "compute": entry.get("compute", ""),
+                "code_paths": {"primitives": entry.get("module", "") + ".py"
+                              if entry.get("module") else ""},
+                "tags": [cls, bar_interval, "auto-seeded"],
+                "first_logged_iso": today,
+                "last_updated_iso": today,
+            },
+        }
+        try:
+            upsert_strategy(conn, record)
+            newly_inserted.append(sid)
+        except Exception:
+            # Don't kill the pipeline on a bad row — log and skip.
+            continue
+    return newly_inserted
+
+
 def set_strategy_active_on(
     conn: sqlite3.Connection, strategy_id: str, symbols: List[str], compute_fn: Optional[str] = None
 ) -> None:

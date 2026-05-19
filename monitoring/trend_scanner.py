@@ -120,6 +120,15 @@ def scan_trend_universe(
     if own_conn:
         conn = db.init_db()
 
+    # Auto-seed any tracked strategies that aren't yet in the strategies
+    # table. Prevents FK failure when scanner records signals for newly-
+    # added trend declarations.
+    try:
+        db.ensure_strategies_seeded(conn, decls)
+    except Exception as exc:  # noqa: BLE001
+        log(f"trend_scanner: ensure_strategies_seeded skipped: {exc}",
+            level="WARNING")
+
     fires: List[Dict] = []
     try:
         for entry in targets:

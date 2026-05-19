@@ -89,7 +89,13 @@ def check_fires(as_of: date) -> List[Dict]:
     start = (as_of - timedelta(days=120)).isoformat()
     fires: List[Dict] = []
 
-    needed_symbols = sorted({s for entry in TRACKED_STRATEGIES for s in entry["active_on"]})
+    # Filter out intraday-class strategies — their compute_fns are designed for
+    # 5m/15m bars; calling them on 1d bars produces spurious signals (e.g.,
+    # intraday-mr-3bar-low-15m fired on 1d bars 2026-05-19). Intraday strategies
+    # have their own scanner via monitoring.intraday_fires.
+    eod_strategies = [e for e in TRACKED_STRATEGIES
+                      if isinstance(e, dict) and e.get("bar_interval", "1d") == "1d"]
+    needed_symbols = sorted({s for entry in eod_strategies for s in entry["active_on"]})
 
     cache: Dict[str, pd.DataFrame] = {}
     for sym in needed_symbols:
@@ -106,7 +112,7 @@ def check_fires(as_of: date) -> List[Dict]:
         if sym in data and not data[sym].empty:
             cache[sym] = data[sym]
 
-    for entry in TRACKED_STRATEGIES:
+    for entry in eod_strategies:
         sid = entry["id"]
         compute_fn = _resolve_compute_fn(entry["compute"])
         for symbol in entry["active_on"]:

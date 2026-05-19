@@ -474,6 +474,21 @@ def main():
     args = parser.parse_args()
 
     as_of = date.fromisoformat(args.date)
+    # Auto-seed any TRACKED_STRATEGIES entries that aren't yet in the
+    # strategies table. Prevents the FK constraint failure that has bitten
+    # us on each new strategy addition (trend 2026-05-18, intraday 2026-05-19).
+    try:
+        from monitoring.config import TRACKED_STRATEGIES as _TS
+        _conn = db.init_db()
+        try:
+            new_ids = db.ensure_strategies_seeded(_conn, _TS)
+            if new_ids:
+                log(f"auto-seeded {len(new_ids)} new strategy rows: {new_ids}",
+                    level="INFO")
+        finally:
+            _conn.close()
+    except Exception as exc:  # noqa: BLE001 — never fail the report on this
+        log(f"ensure_strategies_seeded skipped: {exc}", level="WARNING")
     report = build_report(as_of)
     if not args.no_news:
         gather_news(report, limit=args.news_limit)

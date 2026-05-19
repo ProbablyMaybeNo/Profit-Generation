@@ -103,6 +103,34 @@ def test_all_have_trend_regime():
         assert "choppy" not in d["active_in_regimes"]
 
 
+def test_eod_fire_check_skips_intraday_strategies(monkeypatch):
+    """Regression: strategy_fires.check_fires was iterating ALL of
+    TRACKED_STRATEGIES on 1d bars — including 15m/5m intraday strategies
+    whose compute_fns would produce spurious signals. Confirmed 2026-05-19
+    when intraday-mr-3bar-low-15m fired a long_entry on a daily bar.
+    Verify check_fires now filters by bar_interval == '1d'."""
+    from monitoring import strategy_fires
+    mock_tracked = [
+        {"id": "daily-ok", "compute": "compute_donchian_breakout_20",
+         "active_on": ["SPY"], "bar_interval": "1d", "strategy_class": "trend"},
+        {"id": "intraday-skipped", "compute": "compute_donchian_breakout_20",
+         "active_on": ["SPY"], "bar_interval": "15m", "strategy_class": "mean_reversion"},
+        {"id": "five-min-skipped", "compute": "compute_donchian_breakout_20",
+         "active_on": ["SPY"], "bar_interval": "5m", "strategy_class": "breakout"},
+    ]
+    monkeypatch.setattr(strategy_fires, "TRACKED_STRATEGIES", mock_tracked)
+    # Stub load_bars to return an empty dict so the loop runs but produces
+    # no fires — we just need to verify only 1d strategies enter the loop.
+    monkeypatch.setattr(strategy_fires, "load_bars", lambda *a, **kw: {})
+    from datetime import date
+    fires = strategy_fires.check_fires(date(2026, 5, 19))
+    fired_sids = {f["strategy_id"] for f in fires}
+    # Intraday strategy IDs must NOT appear (they don't show up as either
+    # successful fires OR load_error rows since the loop skipped them)
+    assert "intraday-skipped" not in fired_sids
+    assert "five-min-skipped" not in fired_sids
+
+
 def test_all_have_trend_strategy_class():
     for d in TREND_DECLARATIONS:
         assert d["strategy_class"] == "trend"
