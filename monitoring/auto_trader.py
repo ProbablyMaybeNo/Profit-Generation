@@ -512,6 +512,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             qty=qty, client_order_id=client_order_id,
             bars_fetcher=bars_fetcher, dry_run=True,
             strategy_class=strategy_class,
+            market_regime=market_regime,
         )
         stop_note = (
             f" stop @ ${stop_info['stop_price']:.4f}"
@@ -586,6 +587,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         client_order_id=client_order_id,
         bars_fetcher=bars_fetcher,
         strategy_class=strategy_class,
+        market_regime=market_regime,
     )
 
     # 6.1.1 — record the stop method on the entry row so audit queries
@@ -1653,6 +1655,8 @@ def _maybe_attach_stop(
     bars_fetcher: Optional[Callable],
     dry_run: bool = False,
     strategy_class: Optional[str] = None,
+    market_regime: Optional[str] = None,
+    regime_confidence: Optional[float] = None,
 ) -> Optional[dict]:
     """Compute + (if not dry-run) submit an initial stop. Routes through
     sizing.resolve_initial_stop so the same path serves trend (4.6),
@@ -1699,12 +1703,23 @@ def _maybe_attach_stop(
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
         strategy_class=strategy_class,
     )
+    # 6.1.3 — Regime-aware multiplier is opt-in via settings.stops.regime_aware.
+    # Default off so existing 6.1.1/6.1.2 tests / behaviors stay stable; flip
+    # to true in settings.json to enable.
+    regime_aware = False
+    if isinstance(settings_stops, dict):
+        regime_aware = bool(settings_stops.get("regime_aware", False))
+    effective_regime = market_regime if regime_aware else None
     info: dict = {
         "requested_multiple": multiplier,
         "atr": None,
         "stop_price": None,
         "stop_method": None,
         "fallback_percent": None,
+        "base_multiplier": multiplier,
+        "regime_multiplier": 1.0,
+        "regime": market_regime,
+        "regime_aware": regime_aware,
         "status": "disabled",
         "order_id": None,
         "stop_order_client_id": None,
@@ -1747,7 +1762,12 @@ def _maybe_attach_stop(
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
         side=side,
         strategy_class=strategy_class,
+        regime=effective_regime,
+        regime_confidence=regime_confidence,
     )
+    info["base_multiplier"] = resolved.get("base_multiplier", multiplier)
+    info["regime_multiplier"] = resolved.get("regime_multiplier", 1.0)
+    info["requested_multiple"] = resolved.get("multiplier", multiplier)
     info["stop_price"] = resolved["stop_price"]
     info["stop_method"] = resolved["method"]
     info["fallback_percent"] = resolved["fallback_percent"]

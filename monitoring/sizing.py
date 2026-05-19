@@ -534,6 +534,8 @@ def resolve_initial_stop(
     legacy_multiple: Optional[float] = None,
     side: str = "long",
     strategy_class: Optional[str] = None,
+    regime: Optional[str] = None,
+    regime_confidence: Optional[float] = None,
     default_multiplier: float = DEFAULT_ATR_INITIAL_MULTIPLIER,
 ) -> Dict:
     """One-shot resolver used by the auto-trader.
@@ -545,24 +547,48 @@ def resolve_initial_stop(
 
         {"stop_price": float | None,
          "method":    "atr_initial" | "fixed_percent" | None,
-         "multiplier": float | None,
+         "multiplier": float | None,             # k_effective
+         "base_multiplier": float | None,        # k_base
+         "regime_multiplier": float | None,
+         "regime": str | None,
          "fallback_percent": float | None}
 
     `method is None` only when both ATR and the fixed-percent fallback
     failed to produce a valid stop — caller should treat that as "no
     stop attached" and downgrade the entry accordingly.
+
+    6.1.3 — When `regime` is supplied, k_effective = k_base × regime_mult
+    where the multiplier comes from
+    `regime_router.stop_regime_multiplier`. The result is clamped to
+    [0.7, 1.5] inside that helper so a misconfigured override can't
+    explode the stop band.
     """
-    multiplier = resolve_atr_multiplier(
+    base_multiplier = resolve_atr_multiplier(
         strategy_id=strategy_id,
         settings_stops=settings_stops,
         legacy_multiple=legacy_multiple,
         strategy_class=strategy_class,
         default=default_multiplier,
     )
+    regime_mult = 1.0
+    if regime is not None:
+        from monitoring.regime_router import stop_regime_multiplier
+        overrides = None
+        if isinstance(settings_stops, dict):
+            overrides = settings_stops.get("regime_multipliers")
+        regime_mult = stop_regime_multiplier(
+            regime,
+            confidence=regime_confidence,
+            overrides=overrides,
+        )
+    multiplier = round(base_multiplier * regime_mult, 4)
     out: Dict = {
         "stop_price": None,
         "method": None,
         "multiplier": multiplier,
+        "base_multiplier": base_multiplier,
+        "regime_multiplier": round(regime_mult, 4),
+        "regime": regime,
         "fallback_percent": None,
     }
     stop = atr_initial_stop(

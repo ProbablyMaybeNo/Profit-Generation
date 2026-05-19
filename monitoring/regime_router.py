@@ -211,3 +211,87 @@ def regime_to_allocation_class(regime: str) -> str:
     if regime in ("low_vol", "choppy"):
         return "mean_reversion_favored"
     return "balanced"
+
+
+# ---------------------------------------------------------------------------
+# 6.1.3 — Regime-aware ATR multiplier
+# ---------------------------------------------------------------------------
+#
+# k_effective = k_base × regime_multiplier
+#
+# Stops widen in chop / volatile regimes (so noise doesn't take us out
+# prematurely) and tighten in quiet regimes (so we lock in moves before
+# they fade). The multiplier itself is hard-capped to [0.7, 1.5] so a
+# misconfigured table can't blow up the stop band.
+#
+# Default mapping:
+#   choppy        → 1.25  (high realized vol → widen stops)
+#   trending_down → 1.10  (volatile bear → slightly wider)
+#   low_vol       → 0.85  (quiet market → tighter stops)
+#   trending_up   → 1.00  (calm uptrend → neutral)
+#   mixed         → 1.00  (no signal → neutral)
+#
+# Override via `settings.stops.regime_multipliers.{regime}`.
+
+DEFAULT_STOP_REGIME_MULTIPLIERS = {
+    "choppy":        1.25,
+    "trending_down": 1.10,
+    "low_vol":       0.85,
+    "trending_up":   1.00,
+    "mixed":         1.00,
+}
+
+STOP_REGIME_MULTIPLIER_CAP_MIN = 0.70
+STOP_REGIME_MULTIPLIER_CAP_MAX = 1.50
+STOP_REGIME_DEFAULT_CONFIDENCE_FLOOR = 0.60
+
+
+def stop_regime_multiplier(
+    regime: str,
+    *,
+    confidence: Optional[float] = None,
+    confidence_floor: float = STOP_REGIME_DEFAULT_CONFIDENCE_FLOOR,
+    overrides: Optional[dict] = None,
+) -> float:
+    """Return the regime-aware multiplier for an ATR-based stop's k.
+
+    `confidence` is the regime classifier's confidence in the current
+    label, on [0, 1]. When confidence < `confidence_floor`, we don't
+    trust the label and fall back to 1.0 (no adjustment).
+
+    `overrides` is `settings.stops.regime_multipliers` if present.
+    Unknown regimes / overrides that aren't positive floats fall through
+    to the next source. The final result is clamped to
+    [STOP_REGIME_MULTIPLIER_CAP_MIN, STOP_REGIME_MULTIPLIER_CAP_MAX].
+    """
+    if confidence is not None:
+        try:
+            c = float(confidence)
+            if c < float(confidence_floor):
+                return 1.0
+        except (TypeError, ValueError):
+            return 1.0
+    table = dict(DEFAULT_STOP_REGIME_MULTIPLIERS)
+    if isinstance(overrides, dict):
+        for k, v in overrides.items():
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f <= 0:
+                continue
+            table[str(k).lower()] = f
+    raw = table.get(str(regime or "").lower())
+    if raw is None:
+        return 1.0
+    return _clamp(float(raw),
+                  STOP_REGIME_MULTIPLIER_CAP_MIN,
+                  STOP_REGIME_MULTIPLIER_CAP_MAX)
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value

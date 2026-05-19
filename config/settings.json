@@ -42,11 +42,19 @@
     "atr_period": 14,
     "atr_multiplier": 2.5,
     "fixed_percent_fallback": 0.05,
+    "regime_aware": false,
     "by_class": {
       "mean_reversion": {"atr_multiplier": 2.0}
     },
     "per_strategy": {},
-    "_notes": "6.1.1 / 6.1.2 — Initial-stop policy. Stops at entry are computed as entry_price - (atr_multiplier × ATR_n) for longs (mirrored for shorts). Default ATR period is 14, default multiplier is 2.5. by_class.{strategy_class}.atr_multiplier lets a whole class override the default (6.1.2 sets mean_reversion → 2.0 — tighter exits for MR strategies). per_strategy.{strategy_id}.atr_multiplier overrides everything else for a single strategy. fixed_percent_fallback (a fraction, e.g. 0.05 = 5%) supplies a fallback stop when ATR can't be computed (<14 bars of history). Setting any value to 0 / null at a level lets the next-level default win."
+    "regime_multipliers": {
+      "choppy": 1.25,
+      "trending_down": 1.10,
+      "low_vol": 0.85,
+      "trending_up": 1.00,
+      "mixed": 1.00
+    },
+    "_notes": "6.1.1 / 6.1.2 / 6.1.3 — Initial-stop policy. Stops at entry are computed as entry_price - (atr_multiplier × ATR_n) for longs (mirrored for shorts). Default ATR period is 14, default multiplier is 2.5. by_class.{strategy_class}.atr_multiplier lets a whole class override the default (6.1.2 sets mean_reversion → 2.0). per_strategy.{strategy_id}.atr_multiplier overrides everything else for a single strategy. fixed_percent_fallback (e.g. 0.05 = 5%) supplies a fallback stop when ATR can't be computed (<14 bars of history). 6.1.3 — set regime_aware=true to scale k by the current market regime: k_effective = k_base × regime_multipliers[current_regime]. Multiplier clamped to [0.7, 1.5] so a misconfigured table can't blow up the stop band. Setting any value to 0 / null at a level lets the next-level default win."
   },
   "notes": "These are non-secret settings. Edit freely."
 }
