@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 DB_FILE = Path(__file__).resolve().parent / "trading.db"
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 
 def _utc_now_iso() -> str:
@@ -294,6 +294,10 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     ).fetchall()}
     if "pyramid_tier" not in cols:
         conn.execute("ALTER TABLE paper_trades ADD COLUMN pyramid_tier INTEGER")
+    # 6.1.1 — record which initial-stop method protected this entry
+    # (atr_initial, fixed_percent, or NULL when no stop was attached).
+    if "entry_stops" not in cols:
+        conn.execute("ALTER TABLE paper_trades ADD COLUMN entry_stops TEXT")
 
 
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -694,8 +698,8 @@ def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optio
             INSERT INTO paper_trades
                 (alpaca_order_id, signal_id, strategy_id, symbol, side, qty,
                  order_type, limit_price, stop_price, submitted_at,
-                 filled_at, fill_price, status, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 filled_at, fill_price, status, notes, entry_stops)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(alpaca_order_id) DO UPDATE SET
                 signal_id=COALESCE(excluded.signal_id, paper_trades.signal_id),
                 strategy_id=COALESCE(excluded.strategy_id, paper_trades.strategy_id),
@@ -709,7 +713,8 @@ def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optio
                 filled_at=COALESCE(excluded.filled_at, paper_trades.filled_at),
                 fill_price=COALESCE(excluded.fill_price, paper_trades.fill_price),
                 status=excluded.status,
-                notes=COALESCE(excluded.notes, paper_trades.notes)
+                notes=COALESCE(excluded.notes, paper_trades.notes),
+                entry_stops=COALESCE(excluded.entry_stops, paper_trades.entry_stops)
             """,
             (
                 trade.get("alpaca_order_id"),
@@ -726,6 +731,7 @@ def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optio
                 trade.get("fill_price"),
                 trade.get("status"),
                 trade.get("notes"),
+                trade.get("entry_stops"),
             ),
         )
         return cur.lastrowid if cur.rowcount else None

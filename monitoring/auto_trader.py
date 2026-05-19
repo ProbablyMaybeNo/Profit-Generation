@@ -586,6 +586,20 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         bars_fetcher=bars_fetcher,
     )
 
+    # 6.1.1 — record the stop method on the entry row so audit queries
+    # like "show me every entry protected by ATR" don't need to join.
+    if stop_info and stop_info.get("stop_method"):
+        db.record_paper_trade(conn, {
+            "alpaca_order_id": str(getattr(order, "id", "")),
+            "signal_id": sig["id"],
+            "strategy_id": sid, "symbol": sym, "side": "buy", "qty": qty,
+            "order_type": effective_order_type,
+            "limit_price": limit_price,
+            "fill_price": entry_fill,
+            "status": str(getattr(order, "status", "submitted")),
+            "entry_stops": stop_info["stop_method"],
+        })
+
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
             "order_id": str(order.id), "signal_id": sig["id"],
             "client_order_id": client_order_id,
@@ -1637,14 +1651,21 @@ def _maybe_attach_stop(
     bars_fetcher: Optional[Callable],
     dry_run: bool = False,
 ) -> Optional[dict]:
-    """Compute + (if not dry-run) submit an ATR-based stop. Returns
-    a dict describing the stop, or None when stops are disabled / not
-    actionable.
+    """Compute + (if not dry-run) submit an initial stop. Routes through
+    sizing.resolve_initial_stop so the same path serves trend (4.6),
+    mean-reversion, and breakout (6.3) strategies, with per-strategy
+    `stops.atr_multiplier` overrides and a fixed-percent fallback when
+    ATR can't be computed (e.g. <14 bars of history).
+
+    Returns a dict describing the stop, or None when stops are disabled
+    /not actionable.
 
     The returned dict shape:
       {"requested_multiple": N,
        "atr": float | None,
        "stop_price": float | None,
+       "stop_method": "atr_initial" | "fixed_percent" | None,
+       "fallback_percent": float | None,
        "status": "disabled" | "no_bars" | "no_stop" | "submitted"
                   | "submit_failed" | "dry_run",
        "order_id": str | None,
@@ -1652,13 +1673,34 @@ def _maybe_attach_stop(
        "error": str | None}
     """
     from monitoring import stops as stops_mod
-    multiple = stops_mod._coerce_multiple(settings.get("stop_loss_atr_multiple"))
-    if multiple <= 0:
+    from monitoring import sizing as sizing_mod
+    settings_stops = settings.get("stops") if isinstance(settings, dict) else None
+    legacy_multiple = stops_mod._coerce_multiple(
+        settings.get("stop_loss_atr_multiple"),
+    )
+    # Stops are disabled when neither legacy nor the new `stops` section
+    # asks for them. legacy_multiple > 0 keeps Phase 4.6 behavior; an
+    # `stops` block with a positive atr_multiplier enables 6.1.1 behavior.
+    new_block_enabled = (
+        isinstance(settings_stops, dict)
+        and any(
+            settings_stops.get(k) not in (None, 0, "0")
+            for k in ("atr_multiplier", "per_strategy", "fixed_percent_fallback")
+        )
+    )
+    if legacy_multiple <= 0 and not new_block_enabled:
         return None
+    multiplier = sizing_mod.resolve_atr_multiplier(
+        strategy_id=sig["strategy_id"],
+        settings_stops=settings_stops,
+        legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
+    )
     info: dict = {
-        "requested_multiple": multiple,
+        "requested_multiple": multiplier,
         "atr": None,
         "stop_price": None,
+        "stop_method": None,
+        "fallback_percent": None,
         "status": "disabled",
         "order_id": None,
         "stop_order_client_id": None,
@@ -1673,13 +1715,41 @@ def _maybe_attach_stop(
         info["status"] = "no_bars"
         info["error"] = str(e)[:200]
         return info
-    atr = stops_mod.compute_atr(bars)
+    # Period precedence: explicit `stops.atr_period` setting >
+    # legacy 20-bar window (when only `stop_loss_atr_multiple` was set) >
+    # the new 14-bar default. Preserving 20 for the legacy path keeps
+    # Phase 4.6 trend strategies on the exact window they were tuned for.
+    if isinstance(settings_stops, dict) and settings_stops.get("atr_period"):
+        try:
+            p = int(settings_stops["atr_period"])
+            atr_period = p if p > 0 else sizing_mod.DEFAULT_ATR_INITIAL_PERIOD
+        except (TypeError, ValueError):
+            atr_period = sizing_mod.DEFAULT_ATR_INITIAL_PERIOD
+    elif legacy_multiple > 0 and not new_block_enabled:
+        atr_period = stops_mod.DEFAULT_ATR_PERIOD
+    else:
+        atr_period = sizing_mod.DEFAULT_ATR_INITIAL_PERIOD
+    atr = stops_mod.compute_atr(bars, period=atr_period)
     info["atr"] = atr
-    stop_price = stops_mod.stop_price_for(entry_fill, atr, multiple)
-    info["stop_price"] = stop_price
-    if stop_price is None:
+    try:
+        sig_type = str(sig["signal_type"] or "")
+    except (KeyError, IndexError, TypeError):
+        sig_type = ""
+    side = "short" if sig_type.startswith("short") else "long"
+    resolved = sizing_mod.resolve_initial_stop(
+        entry_price=entry_fill, atr=atr,
+        strategy_id=sig["strategy_id"],
+        settings_stops=settings_stops,
+        legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
+        side=side,
+    )
+    info["stop_price"] = resolved["stop_price"]
+    info["stop_method"] = resolved["method"]
+    info["fallback_percent"] = resolved["fallback_percent"]
+    if resolved["stop_price"] is None:
         info["status"] = "no_stop"
         return info
+    stop_price = resolved["stop_price"]
     stop_cid = (client_order_id + "-stop")[:MAX_CLIENT_ORDER_ID_LEN] \
         if client_order_id else None
     info["stop_order_client_id"] = stop_cid
@@ -1699,22 +1769,32 @@ def _maybe_attach_stop(
         return info
     info["order_id"] = str(getattr(stop_order, "id", ""))
     info["status"] = "submitted"
+    method_label = resolved["method"] or "unknown"
+    if resolved["method"] == sizing_mod.STOP_METHOD_ATR_INITIAL:
+        note = (f"ATR({atr_period})={atr} × {multiplier} "
+                f"= stop @ ${stop_price}; "
+                f"linked to entry signal_id={sig['id']}")
+    else:
+        note = (f"fixed_percent fallback={resolved['fallback_percent']} "
+                f"= stop @ ${stop_price}; "
+                f"linked to entry signal_id={sig['id']}")
     db.record_paper_trade(conn, {
         "alpaca_order_id": info["order_id"],
         "signal_id": sig["id"],
         "strategy_id": sig["strategy_id"], "symbol": sig["symbol"],
-        "side": "sell", "qty": qty,
+        "side": "buy" if side == "short" else "sell",
+        "qty": qty,
         "order_type": "stop",
         "stop_price": stop_price,
+        "entry_stops": method_label,
         "submitted_at": str(getattr(stop_order, "submitted_at", _utc_now())),
         "status": str(getattr(stop_order, "status", "submitted")),
-        "notes": f"ATR({stops_mod.DEFAULT_ATR_PERIOD})={atr} × {multiple} "
-                 f"= stop @ ${stop_price}; "
-                 f"linked to entry signal_id={sig['id']}",
+        "notes": note,
     })
+    cover_side = "BUY" if side == "short" else "SELL"
     log(
-        f"STOP SELL {qty} {sig['symbol']} @ ${stop_price} "
-        f"(ATR={atr} × {multiple})",
+        f"STOP {cover_side} {qty} {sig['symbol']} @ ${stop_price} "
+        f"(method={method_label}; ATR={atr} × {multiplier})",
         "SUCCESS",
     )
     return info

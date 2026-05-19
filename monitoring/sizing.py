@@ -347,3 +347,231 @@ def resolve_regime_multiplier(
         confidence_floor=confidence_floor,
     )
     return size_multiplier(strategy_class or "", allocation=alloc)
+
+
+# ---------------------------------------------------------------------------
+# 6.1.1 — ATR-based initial stops (generalized across all strategies)
+# ---------------------------------------------------------------------------
+#
+# Phase 4.6.1 wired ATR into trend strategies via stops.compute_atr +
+# `auto_trade.stop_loss_atr_multiple`. Phase 6.1.1 generalizes that so
+# every strategy can opt in via per-strategy multiplier overrides, and
+# adds a fixed-percent fallback for the case where ATR can't be computed
+# (e.g. <14 bars of history on a fresh symbol).
+#
+# Settings shape (config/settings.json):
+#
+#   "stops": {
+#     "atr_period": 14,
+#     "atr_multiplier": 2.5,
+#     "fixed_percent_fallback": 0.05,
+#     "per_strategy": {
+#       "intraday-orbo-5m": {"atr_multiplier": 1.5},
+#       "botnet101-3-bar-low": {"atr_multiplier": 2.0}
+#     }
+#   }
+#
+# The legacy `auto_trade.stop_loss_atr_multiple` is still honored — if
+# it's set and non-zero, it overrides `stops.atr_multiplier` (so we
+# don't break Phase 4.6 trend strategies that already shipped with it).
+
+DEFAULT_ATR_INITIAL_PERIOD = 14
+DEFAULT_ATR_INITIAL_MULTIPLIER = 2.5
+STOP_METHOD_ATR_INITIAL = "atr_initial"
+STOP_METHOD_FIXED_PERCENT = "fixed_percent"
+
+
+def _coerce_positive(raw, default: float) -> float:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if v <= 0:
+        return float(default)
+    return v
+
+
+def resolve_atr_multiplier(
+    *,
+    strategy_id: Optional[str],
+    settings_stops: Optional[Dict] = None,
+    legacy_multiple: Optional[float] = None,
+    default: float = DEFAULT_ATR_INITIAL_MULTIPLIER,
+) -> float:
+    """Return the ATR multiplier to use for this strategy.
+
+    Precedence (highest wins):
+      1. `legacy_multiple` (the existing `auto_trade.stop_loss_atr_multiple`
+         setting), when truthy — preserves Phase 4.6 behavior.
+      2. `settings_stops["per_strategy"][strategy_id]["atr_multiplier"]`
+      3. `settings_stops["atr_multiplier"]`
+      4. `default` (2.5).
+
+    Non-numeric / non-positive values at any level fall through to the
+    next source so a typo never silently zeros out the stop.
+    """
+    if legacy_multiple is not None:
+        try:
+            lm = float(legacy_multiple)
+        except (TypeError, ValueError):
+            lm = 0.0
+        if lm > 0:
+            return lm
+    if isinstance(settings_stops, dict):
+        per = settings_stops.get("per_strategy")
+        if isinstance(per, dict) and strategy_id:
+            entry = per.get(strategy_id)
+            if isinstance(entry, dict):
+                v = entry.get("atr_multiplier")
+                if v is not None:
+                    try:
+                        f = float(v)
+                        if f > 0:
+                            return f
+                    except (TypeError, ValueError):
+                        pass
+        v = settings_stops.get("atr_multiplier")
+        if v is not None:
+            try:
+                f = float(v)
+                if f > 0:
+                    return f
+            except (TypeError, ValueError):
+                pass
+    return float(default)
+
+
+def atr_initial_stop(
+    *,
+    entry_price: float,
+    atr: Optional[float],
+    multiplier: float,
+    side: str = "long",
+) -> Optional[float]:
+    """Compute the initial stop level from entry + ATR + multiplier.
+
+    For longs:  stop = entry_price - (multiplier × ATR).
+    For shorts: stop = entry_price + (multiplier × ATR) — mirror.
+
+    Returns None when inputs are degenerate (missing ATR, non-positive
+    multiplier, or the resulting stop wouldn't sit on the correct side
+    of entry).
+    """
+    if entry_price is None or atr is None or atr <= 0 or multiplier <= 0:
+        return None
+    if entry_price <= 0:
+        return None
+    side_lc = (side or "long").lower()
+    if side_lc not in ("long", "short"):
+        return None
+    delta = float(multiplier) * float(atr)
+    if side_lc == "long":
+        stop = float(entry_price) - delta
+        if stop >= entry_price or stop <= 0:
+            return None
+    else:
+        stop = float(entry_price) + delta
+        if stop <= entry_price:
+            return None
+    return round(stop, 4)
+
+
+def fixed_percent_stop(
+    *,
+    entry_price: float,
+    percent: float,
+    side: str = "long",
+) -> Optional[float]:
+    """Fallback stop at entry_price × (1 ∓ percent).
+
+    `percent` is a fraction (0.05 = 5%). Negative or zero percent
+    disables the fallback (returns None).
+    """
+    if entry_price is None or entry_price <= 0:
+        return None
+    try:
+        pct = float(percent)
+    except (TypeError, ValueError):
+        return None
+    if pct <= 0:
+        return None
+    side_lc = (side or "long").lower()
+    if side_lc not in ("long", "short"):
+        return None
+    if side_lc == "long":
+        stop = float(entry_price) * (1.0 - pct)
+        if stop <= 0 or stop >= entry_price:
+            return None
+    else:
+        stop = float(entry_price) * (1.0 + pct)
+        if stop <= entry_price:
+            return None
+    return round(stop, 4)
+
+
+def resolve_initial_stop(
+    *,
+    entry_price: float,
+    atr: Optional[float],
+    strategy_id: Optional[str],
+    settings_stops: Optional[Dict] = None,
+    legacy_multiple: Optional[float] = None,
+    side: str = "long",
+    default_multiplier: float = DEFAULT_ATR_INITIAL_MULTIPLIER,
+) -> Dict:
+    """One-shot resolver used by the auto-trader.
+
+    Tries the ATR initial stop first. If that returns None (no ATR
+    available, or the math doesn't yield a valid level), falls back to
+    a fixed-percent stop using `settings_stops["fixed_percent_fallback"]`
+    when present. Returns:
+
+        {"stop_price": float | None,
+         "method":    "atr_initial" | "fixed_percent" | None,
+         "multiplier": float | None,
+         "fallback_percent": float | None}
+
+    `method is None` only when both ATR and the fixed-percent fallback
+    failed to produce a valid stop — caller should treat that as "no
+    stop attached" and downgrade the entry accordingly.
+    """
+    multiplier = resolve_atr_multiplier(
+        strategy_id=strategy_id,
+        settings_stops=settings_stops,
+        legacy_multiple=legacy_multiple,
+        default=default_multiplier,
+    )
+    out: Dict = {
+        "stop_price": None,
+        "method": None,
+        "multiplier": multiplier,
+        "fallback_percent": None,
+    }
+    stop = atr_initial_stop(
+        entry_price=entry_price, atr=atr,
+        multiplier=multiplier, side=side,
+    )
+    if stop is not None:
+        out["stop_price"] = stop
+        out["method"] = STOP_METHOD_ATR_INITIAL
+        return out
+    fallback_pct = None
+    if isinstance(settings_stops, dict):
+        fallback_pct = settings_stops.get("fixed_percent_fallback")
+    if fallback_pct is None:
+        return out
+    try:
+        pct = float(fallback_pct)
+    except (TypeError, ValueError):
+        return out
+    if pct <= 0:
+        return out
+    fallback_stop = fixed_percent_stop(
+        entry_price=entry_price, percent=pct, side=side,
+    )
+    if fallback_stop is None:
+        return out
+    out["stop_price"] = fallback_stop
+    out["method"] = STOP_METHOD_FIXED_PERCENT
+    out["fallback_percent"] = round(pct, 4)
+    return out
