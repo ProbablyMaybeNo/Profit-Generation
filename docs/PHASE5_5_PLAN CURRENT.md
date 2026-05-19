@@ -51,10 +51,11 @@ mean-reversion on its tightly-validated subset.
 
 ## 5.5.1 Universe loader + refresh
 
-- [ ] **5.5.1.1 Static symbol universe**
+- [x] **5.5.1.1 Static symbol universe**
   - **Deliverable:** `data/universes/sp500.csv`, `data/universes/nasdaq100.csv`, `data/universes/etfs.csv` (manually curated, ~30 high-volume ETFs); `monitoring/universe.py` loader function
   - **Acceptance:** `load_trend_universe()` returns deduped list of ~600 symbols. Source files are in-repo (no API dependency for the universe itself). Tests: dedup correctness, loader handles missing file gracefully (logs warning, continues with what's available).
   - **Notes:** S&P 500 and Nasdaq-100 constituents change quarterly. Initial CSVs are snapshots — add manual quarterly refresh to RUNBOOK rather than auto-fetching (avoids dependency on external API).
+  - **Completed:** 2026-05-19 by milestone-builder · commit b0749b2 · 553 deduped symbols (501 S&P + 101 NDX + 36 ETFs; 85 overlaps removed)
 
 - [ ] **5.5.1.2 Universe-refresh helper script**
   - **Deliverable:** `scripts/refresh_universe.py`
