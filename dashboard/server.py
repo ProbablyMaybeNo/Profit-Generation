@@ -469,19 +469,42 @@ def _state_paper_trades_today(conn) -> list:
     `bar_interval` so the dashboard can tag each row as INTRADAY (15m/5m)
     vs EOD (1d). Defaults to '1d' for trades whose signal_id can't be
     resolved (e.g. manual or legacy rows).
+
+    5.5.6.2 — Also pulls `extra_json` from the source signal so the
+    renderer can tag paper trades originating from the wide-universe
+    trend scanner (source=trend_scanner stamped by trend_scanner.py)
+    with a 'scanner' badge.
     """
     rows = conn.execute(
         "SELECT pt.id, pt.alpaca_order_id, pt.signal_id, pt.strategy_id, "
         "       pt.symbol, pt.side, pt.qty, pt.order_type, pt.submitted_at, "
         "       pt.filled_at, pt.fill_price, pt.status, pt.notes, "
-        "       COALESCE(s.bar_interval, '1d') AS bar_interval "
+        "       COALESCE(s.bar_interval, '1d') AS bar_interval, "
+        "       s.extra_json AS signal_extra_json "
         "  FROM paper_trades pt "
         "  LEFT JOIN signals s ON s.id = pt.signal_id "
         " WHERE DATE(pt.submitted_at) = DATE(?) "
         " ORDER BY pt.submitted_at DESC, pt.id DESC",
         (_today_iso(),),
     ).fetchall()
-    return [dict(r) for r in rows]
+    out: list = []
+    for r in rows:
+        d = dict(r)
+        raw = d.pop("signal_extra_json", None)
+        is_scanner = False
+        if raw:
+            try:
+                extra = json.loads(raw)
+                is_scanner = bool(
+                    isinstance(extra, dict)
+                    and (extra.get("source") == "trend_scanner"
+                         or extra.get("wide_universe") is True)
+                )
+            except Exception:
+                is_scanner = False
+        d["is_scanner"] = is_scanner
+        out.append(d)
+    return out
 
 
 def _state_scanner_activity(conn) -> dict:

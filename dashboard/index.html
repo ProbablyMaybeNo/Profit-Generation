@@ -672,6 +672,18 @@
   }
   .interval-tag.intraday { color: var(--amber); border-color: var(--amber); }
   .interval-tag.tv       { color: var(--blue);  border-color: var(--blue); }
+  /* 5.5.6.2 — scanner badge on paper trades originating from the
+     wide-universe trend scanner (vs. the narrow active_on path). */
+  .scanner-badge {
+    color: var(--blue);
+    font-size: 10px;
+    border: 1px solid var(--blue-dim);
+    padding: 0 4px;
+    margin-left: 5px;
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
+  }
+  .scanner-badge::before { content: "\1F50D  "; }
 
   /* News */
   .news-item {
@@ -2423,11 +2435,16 @@ function renderPaperTrades(s) {
     const isIntraday = interval !== '1d';
     const orderType = isIntraday ? `INTRADAY (${escapeHtml(interval)})` : 'EOD (1d)';
     const orderTypeCls = isIntraday ? 'interval-tag intraday' : 'interval-tag';
-    h += `<tr data-bar-interval="${escapeHtml(interval)}">
+    // 5.5.6.2 — scanner badge for paper trades whose source signal was
+    // produced by the wide-universe trend scanner.
+    const scannerBadge = r.is_scanner
+      ? `<span class="scanner-badge" title="wide-universe trend scanner">scanner</span>`
+      : '';
+    h += `<tr data-bar-interval="${escapeHtml(interval)}" data-is-scanner="${r.is_scanner ? '1' : '0'}">
       <td class="dim">${escapeHtml(t)}</td>
       <td><span class="${orderTypeCls}">${orderType}</span></td>
       <td class="${sideCls}"><strong>${sideUp}</strong></td>
-      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}</td>
+      <td class="strat">${escapeHtml(shortStrat(r.strategy_id))}${scannerBadge}</td>
       <td class="sym">${escapeHtml(r.symbol)} ${tvLink(r.symbol)}</td>
       <td class="num">${r.qty ?? '—'}</td>
       <td class="num">${fmt$(r.fill_price)}</td>
