@@ -116,10 +116,11 @@ When the scanner fires 30+ signals on a trending day, we can only hold ~10 concu
     Higher score wins when capacity is tight. Tests: scoring math, tie-breaking (lexical by symbol).
   - **Completed:** 2026-05-19 by milestone-builder · commit 2010738
 
-- [ ] **5.5.4.2 Capacity-aware order submission**
+- [x] **5.5.4.2 Capacity-aware order submission**
   - **Deliverable:** `monitoring/auto_trader.py` extended with `max_new_entries_per_day` and per-strategy caps
   - **Acceptance:** when ranked signals > available capacity (10 - currently_open), only top-N by score get submitted. Lower-ranked signals get logged with `SKIP_CAPACITY` reason for transparency. Configurable via `auto_trade.max_new_entries_per_day` (default 5). Tests: capacity gate triggers correctly, top-N selection, skip-reason logged.
   - **Notes:** A scanner that fires 50 signals/day but submits all 50 will overwhelm the account. The capacity cap is what keeps the system disciplined.
+  - **Completed:** 2026-05-19 by milestone-builder · commit 75b7286 · signals reordered by ranker score before the loop; counter increments on BUY/DRY_BUY only.
 
 ---
 
