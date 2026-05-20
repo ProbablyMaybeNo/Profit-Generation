@@ -1740,12 +1740,23 @@ function renderAccount(s) {
     el.innerHTML = '<div class="account-line"><span class="err">alpaca unreachable — check credentials.json or network</span></div>';
   } else {
     const a = s.account;
+    const pnl = (usd, pct, lbl) => {
+      if (usd === undefined || usd === null) return '';
+      const cls = usd > 0 ? 'pos' : (usd < 0 ? 'neg' : '');
+      const sign = usd > 0 ? '+' : '';
+      const pctStr = (pct !== undefined && pct !== null)
+        ? ` <span class="dim">(${sign}${pct.toFixed(2)}%)</span>` : '';
+      return `<div class="pair"><span class="lbl">${lbl}</span>` +
+             `<span class="val ${cls}">${sign}${fmt$(usd)}${pctStr}</span></div>`;
+    };
     el.innerHTML = `
       <div class="account-line">
         <div class="pair"><span class="lbl">portfolio</span><span class="val">${fmt$(a.portfolio_value)}</span></div>
         <div class="pair"><span class="lbl">cash</span><span class="val">${fmt$(a.cash)}</span></div>
         <div class="pair"><span class="lbl">buying power</span><span class="val">${fmt$(a.buying_power)}</span></div>
         <div class="pair"><span class="lbl">equity</span><span class="val">${fmt$(a.equity)}</span></div>
+        ${pnl(a.day_pl_usd, a.day_pl_pct, 'today')}
+        ${pnl(a.total_pl_usd, a.total_pl_pct, 'all-time')}
         <div class="pair"><span class="lbl">day-trades</span><span class="val">${a.daytrade_count ?? '—'}</span></div>
       </div>`;
   }

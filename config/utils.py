@@ -109,6 +109,7 @@ def get_account_summary() -> dict:
         "cash": float(acct.cash),
         "buying_power": float(acct.buying_power),
         "equity": float(acct.equity),
+        "last_equity": float(getattr(acct, "last_equity", acct.equity)),
         "daytrade_count": int(acct.daytrade_count),
     }
 

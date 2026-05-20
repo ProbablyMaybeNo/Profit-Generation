@@ -75,6 +75,31 @@ def _safe_account():
         return None
 
 
+def _enrich_account_pnl(account: Optional[dict], settings: Optional[dict] = None) -> Optional[dict]:
+    """Layer day / all-time P&L onto an account dict for the UI.
+
+    - day_pl_usd / day_pl_pct: equity vs Alpaca's last_equity (prev close).
+    - total_pl_usd / total_pl_pct: equity vs settings.starting_equity baseline
+      (defaults to 100000 — the paper account's first funding).
+    """
+    if not account:
+        return account
+    eq = account.get("equity")
+    if eq is None:
+        return account
+    last_eq = account.get("last_equity")
+    if last_eq is not None and last_eq > 0:
+        account["day_pl_usd"] = eq - last_eq
+        account["day_pl_pct"] = (eq / last_eq - 1.0) * 100.0
+    settings = settings if settings is not None else (load_settings() or {})
+    baseline = settings.get("starting_equity", 100_000.0)
+    if baseline and baseline > 0:
+        account["starting_equity"] = baseline
+        account["total_pl_usd"] = eq - baseline
+        account["total_pl_pct"] = (eq / baseline - 1.0) * 100.0
+    return account
+
+
 def _today_iso() -> str:
     return date.today().isoformat()
 
@@ -853,7 +878,7 @@ def state():
     """One round-trip rollup powering the live panel."""
     conn = db.init_db()
     try:
-        account = _safe_account()
+        account = _enrich_account_pnl(_safe_account())
         last_seen, minutes_ago = _last_heartbeat()
         is_open = False
         try:
