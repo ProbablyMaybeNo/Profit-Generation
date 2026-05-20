@@ -29,6 +29,8 @@ _COMPUTE_FN_MODULES = [
     "strategies.intraday.mean_reversion_intraday",
     "strategies.orb.orbo_intraday",
     "strategies.orb.orb_pivots_intraday",
+    "strategies.breakout.donchian_retest",
+    "strategies.breakout.donchian_retest_short",
 ]
 
 
