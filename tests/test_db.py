@@ -293,3 +293,40 @@ def test_paper_trade_upsert(conn):
     assert row["fill_price"] == 500.05
     assert row["signal_id"] == sid
     assert row["submitted_at"] == "2026-05-13T13:31:00Z"
+
+
+class _FakeOrderStatus:
+    """Stand-in for alpaca-py's OrderStatus enum: str(x) == 'OrderStatus.ACCEPTED'
+    but x.value == 'accepted'."""
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return f"OrderStatus.{self.value.upper()}"
+
+
+def test_record_paper_trade_normalizes_enum_status(conn):
+    db.upsert_strategy(conn, {"extra": {"strategy_id": "s_norm"}})
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "ord-norm-1", "strategy_id": "s_norm",
+        "symbol": "SPY", "side": "buy", "qty": 1.0,
+        "submitted_at": "2026-05-20T13:00:00Z",
+        "status": _FakeOrderStatus("accepted"),
+    })
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "ord-norm-2", "strategy_id": "s_norm",
+        "symbol": "SPY", "side": "buy", "qty": 1.0,
+        "submitted_at": "2026-05-20T13:00:01Z",
+        "status": "OrderStatus.FILLED",
+    })
+    rows = {r["alpaca_order_id"]: r["status"] for r in
+            conn.execute("SELECT alpaca_order_id, status FROM paper_trades "
+                         "WHERE alpaca_order_id LIKE 'ord-norm-%'")}
+    assert rows == {"ord-norm-1": "accepted", "ord-norm-2": "filled"}
+
+
+def test_normalize_order_status_helper():
+    assert db._normalize_order_status(None) is None
+    assert db._normalize_order_status("accepted") == "accepted"
+    assert db._normalize_order_status("ACCEPTED") == "accepted"
+    assert db._normalize_order_status("OrderStatus.ACCEPTED") == "accepted"
+    assert db._normalize_order_status(_FakeOrderStatus("filled")) == "filled"

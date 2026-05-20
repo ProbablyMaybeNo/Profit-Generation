@@ -690,8 +690,29 @@ def close_outcome(
         )
 
 
+def _normalize_order_status(value: Any) -> Optional[str]:
+    """Coerce an alpaca-py OrderStatus enum (or str repr like
+    'OrderStatus.ACCEPTED') down to the bare lowercase token ('accepted')
+    that every paper_trades read path expects.
+
+    Why: auto_trader stores `str(order.status)` which yields the enum's
+    repr, not its .value. That broke reconcile and every open-position
+    query (they filter for lowercase strings).
+    """
+    if value is None:
+        return None
+    v = getattr(value, "value", value)
+    s = str(v).strip()
+    if "." in s:
+        head, _, tail = s.rpartition(".")
+        if head.endswith("Status"):
+            s = tail
+    return s.lower() or None
+
+
 def record_paper_trade(conn: sqlite3.Connection, trade: Dict[str, Any]) -> Optional[int]:
     """Upsert a paper trade keyed by alpaca_order_id."""
+    trade = {**trade, "status": _normalize_order_status(trade.get("status"))}
     with conn:
         cur = conn.execute(
             """
