@@ -1099,6 +1099,14 @@ def _check_trailing_exits_for_open_positions(
 
     This is what makes trailing stops fire on bars where the strategy
     itself didn't emit an exit signal.
+
+    6.4.2 — Also records a SAR shadow A/B row for any open position whose
+    strategy declares ``sar_overlay: "shadow"``. The shadow check runs
+    independently of the live exit decision — when SAR would have fired
+    on the latest bar but the trailing stop didn't, a parallel
+    ``paper_trades_sar_overlay`` row captures the hypothetical exit so
+    Ross can compare 30 days of "SAR overlay on" vs "off" without
+    disturbing live PnL.
     """
     if bars_fetcher is None:
         return []
@@ -1126,8 +1134,19 @@ def _check_trailing_exits_for_open_positions(
         last_close = float(bars[-1].get("close") or 0)
         if last_close <= 0:
             continue
+        last_bar = bars[-1]
+        bar_low = _safe_float(last_bar.get("low"))
+        bar_high = _safe_float(last_bar.get("high"))
         trip = _check_trailing_exit(
             conn, strategy_id=sid, symbol=sym, current_price=last_close,
+        )
+        # 6.4.2 — shadow A/B record runs even when the real exit doesn't.
+        _maybe_record_sar_shadow(
+            conn, strategy_id=sid, symbol=sym,
+            current_price=last_close,
+            bar_low=bar_low, bar_high=bar_high,
+            real_trip=trip,
+            tracked_strategies=tracked_strategies,
         )
         if trip is None:
             continue
@@ -1150,6 +1169,84 @@ def _check_trailing_exits_for_open_positions(
         action["synthetic_trailing_exit"] = True
         actions.append(action)
     return actions
+
+
+def _safe_float(v) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_record_sar_shadow(
+    conn, *, strategy_id: str, symbol: str,
+    current_price: float,
+    bar_low: Optional[float],
+    bar_high: Optional[float],
+    real_trip: Optional[dict],
+    tracked_strategies: Optional[List[dict]],
+) -> Optional[int]:
+    """6.4.2 — observational SAR shadow record.
+
+    For strategies declaring ``sar_overlay: "shadow"`` (or live), check
+    whether the current bar would have triggered a SAR flip and write a
+    parallel ``paper_trades_sar_overlay`` row when it would. Never
+    affects the live exit decision — the caller already settled that
+    via ``_check_trailing_exit``.
+    """
+    from monitoring import sar_overlay as sar_mod
+    decl = _resolve_strategy_declaration(strategy_id, tracked_strategies)
+    if not sar_mod.strategy_has_sar_shadow(decl):
+        return None
+    sar_row = sar_mod.get_sar_state(
+        conn, strategy_id=strategy_id, symbol=symbol,
+    )
+    if sar_row is None:
+        return None
+    lo = bar_low if bar_low is not None else current_price
+    hi = bar_high if bar_high is not None else current_price
+    if not sar_mod.is_sar_flip(
+        sar=float(sar_row["sar"]),
+        direction=sar_row["direction"],
+        bar_low=lo, bar_high=hi,
+    ):
+        return None
+    open_buy = _open_buy_for_pair(conn, strategy_id, symbol)
+    entry_price = None
+    qty = None
+    entry_order_id = None
+    if open_buy is not None:
+        entry_order_id = open_buy["alpaca_order_id"]
+        entry_price = (
+            float(open_buy["fill_price"]) if open_buy["fill_price"] is not None
+            else float(open_buy["limit_price"]) if open_buy["limit_price"]
+            else None
+        )
+        qty = float(open_buy["qty"]) if open_buy["qty"] is not None else None
+    # Real exit metadata: when the live trailing exit fired this bar,
+    # capture its price + reason for the A/B delta. Otherwise the
+    # position stays open and real_pnl is left None (the comparison
+    # helper will exclude it from delta math until the live exit lands).
+    real_exit_price = None
+    real_exit_reason = None
+    if real_trip is not None:
+        real_exit_price = current_price
+        real_exit_reason = real_trip.get("reason")
+    return sar_mod.record_shadow_exit(
+        conn,
+        strategy_id=strategy_id, symbol=symbol,
+        side=sar_row["direction"],
+        entry_order_id=entry_order_id,
+        entry_price=entry_price,
+        qty=qty,
+        shadow_exit_price=float(current_price),
+        shadow_sar=float(sar_row["sar"]),
+        shadow_reason="sar_flip",
+        real_exit_price=real_exit_price,
+        real_exit_reason=real_exit_reason,
+    )
 
 
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30

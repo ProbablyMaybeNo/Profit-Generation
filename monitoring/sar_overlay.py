@@ -48,6 +48,15 @@ DEFAULT_AF_MAX = 0.20
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 
+# 6.4.2 — opt-in modes for a strategy's `sar_overlay` declaration.
+#   "shadow" → observe only; do NOT affect the live exit decision.
+#              SAR flips are recorded to paper_trades_sar_overlay
+#              alongside the real exit, for 30-day A/B comparison.
+#   True / "live" → fold SAR flip into the exit decision (legacy 6.4.1).
+#   False / missing → no overlay at all.
+SAR_OVERLAY_MODE_SHADOW = "shadow"
+SAR_OVERLAY_MODE_LIVE = "live"
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -404,7 +413,220 @@ def should_exit_with_sar_overlay(
 
 
 def strategy_has_sar_overlay(strategy_meta: Optional[Dict]) -> bool:
-    """True iff the strategy declaration opts in to the SAR overlay."""
+    """True iff the strategy declaration opts in to the LIVE SAR overlay.
+
+    A value of ``"shadow"`` (6.4.2 — observational A/B record only) is
+    NOT live and returns False here. Use ``strategy_has_sar_shadow`` to
+    detect shadow-mode opt-in. All other truthy values (True, "live",
+    "yes", 1) are treated as live for backward compatibility.
+    """
     if not isinstance(strategy_meta, dict):
         return False
-    return bool(strategy_meta.get("sar_overlay", False))
+    value = strategy_meta.get("sar_overlay", False)
+    if isinstance(value, str) and value.lower() == SAR_OVERLAY_MODE_SHADOW:
+        return False
+    return bool(value)
+
+
+def strategy_has_sar_shadow(strategy_meta: Optional[Dict]) -> bool:
+    """True iff the strategy opts in to SAR shadow recording.
+
+    Returns True for ``sar_overlay: "shadow"`` (the 6.4.2 A/B observability
+    mode) and also for any live opt-in — because if SAR is live, the
+    shadow record is still useful as an audit of what actually fired.
+    """
+    if not isinstance(strategy_meta, dict):
+        return False
+    value = strategy_meta.get("sar_overlay", False)
+    if isinstance(value, str) and value.lower() == SAR_OVERLAY_MODE_SHADOW:
+        return True
+    return bool(value)
+
+
+# ---------------------------------------------------------------------------
+# 6.4.2 — shadow A/B record + analytics
+# ---------------------------------------------------------------------------
+
+def _ensure_shadow_table(conn: sqlite3.Connection) -> None:
+    """Idempotent — creates paper_trades_sar_overlay if absent.
+
+    Matches the canonical DDL in data/db.py (kept in sync). Present here
+    so tests / standalone callers don't have to import data.db just to
+    write a shadow row.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trades_sar_overlay (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at       TEXT NOT NULL,
+            strategy_id       TEXT NOT NULL,
+            symbol            TEXT NOT NULL,
+            side              TEXT NOT NULL DEFAULT 'long',
+            entry_order_id    TEXT,
+            entry_price       REAL,
+            qty               REAL,
+            shadow_exit_price REAL NOT NULL,
+            shadow_sar        REAL,
+            shadow_reason     TEXT NOT NULL,
+            real_exit_price   REAL,
+            real_exit_reason  TEXT,
+            shadow_pnl        REAL,
+            real_pnl          REAL,
+            notes             TEXT,
+            UNIQUE(strategy_id, symbol, entry_order_id, recorded_at)
+        )
+    """)
+
+
+def record_shadow_exit(
+    conn: sqlite3.Connection,
+    *,
+    strategy_id: str,
+    symbol: str,
+    side: str = DIRECTION_LONG,
+    entry_order_id: Optional[str] = None,
+    entry_price: Optional[float] = None,
+    qty: Optional[float] = None,
+    shadow_exit_price: float,
+    shadow_sar: Optional[float] = None,
+    shadow_reason: str = "sar_flip",
+    real_exit_price: Optional[float] = None,
+    real_exit_reason: Optional[str] = None,
+    notes: Optional[str] = None,
+    now_iso: Optional[str] = None,
+) -> Optional[int]:
+    """Persist a single shadow exit row to paper_trades_sar_overlay.
+
+    Computes shadow_pnl and real_pnl when entry_price + qty are supplied.
+    For longs: pnl = (exit_price - entry_price) × qty.
+    For shorts: pnl = (entry_price - exit_price) × qty.
+
+    Returns the inserted row id, or None when the UNIQUE clause caused a
+    no-op (duplicate shadow entry at the same recorded_at — caller can
+    safely ignore).
+    """
+    _ensure_shadow_table(conn)
+    side_norm = (side or DIRECTION_LONG).lower()
+    shadow_pnl = _calc_pnl(
+        entry_price=entry_price, exit_price=shadow_exit_price,
+        qty=qty, side=side_norm,
+    )
+    real_pnl = _calc_pnl(
+        entry_price=entry_price, exit_price=real_exit_price,
+        qty=qty, side=side_norm,
+    )
+    with conn:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO paper_trades_sar_overlay
+                (recorded_at, strategy_id, symbol, side,
+                 entry_order_id, entry_price, qty,
+                 shadow_exit_price, shadow_sar, shadow_reason,
+                 real_exit_price, real_exit_reason,
+                 shadow_pnl, real_pnl, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now_iso or _utc_now_iso(),
+                strategy_id, symbol, side_norm,
+                entry_order_id, entry_price, qty,
+                float(shadow_exit_price), shadow_sar, shadow_reason,
+                real_exit_price, real_exit_reason,
+                shadow_pnl, real_pnl, notes,
+            ),
+        )
+        return cur.lastrowid if cur.rowcount else None
+
+
+def _calc_pnl(
+    *, entry_price: Optional[float], exit_price: Optional[float],
+    qty: Optional[float], side: str,
+) -> Optional[float]:
+    if entry_price is None or exit_price is None or qty is None:
+        return None
+    try:
+        ep = float(entry_price)
+        xp = float(exit_price)
+        q = float(qty)
+    except (TypeError, ValueError):
+        return None
+    if side == DIRECTION_SHORT:
+        return round((ep - xp) * q, 6)
+    return round((xp - ep) * q, 6)
+
+
+def aggregate_ab(
+    conn: sqlite3.Connection,
+    *,
+    strategy_id: Optional[str] = None,
+) -> Dict:
+    """Return aggregate A/B comparison stats from paper_trades_sar_overlay.
+
+    When ``strategy_id`` is None, returns global aggregates + a
+    per-strategy breakdown. When set, returns just that strategy's row.
+
+    Aggregates per scope:
+      - count: number of shadow events recorded
+      - shadow_total_pnl / real_total_pnl: sum of pnl across rows where
+        both sides have a numeric pnl (rows missing either are skipped
+        — they can't contribute to the delta)
+      - pnl_delta: shadow_total_pnl - real_total_pnl. Positive → SAR
+        overlay would have made more.
+      - shadow_wins / real_wins: count of rows where pnl > 0.
+      - shadow_win_rate / real_win_rate: shadow_wins / count_with_both_pnl
+      - win_rate_delta: shadow_win_rate - real_win_rate
+    """
+    _ensure_shadow_table(conn)
+    if strategy_id is None:
+        rows = conn.execute(
+            "SELECT strategy_id, shadow_pnl, real_pnl "
+            "  FROM paper_trades_sar_overlay"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT strategy_id, shadow_pnl, real_pnl "
+            "  FROM paper_trades_sar_overlay WHERE strategy_id=?",
+            (strategy_id,),
+        ).fetchall()
+    rows_list = [dict(r) for r in rows]
+    overall = _aggregate_rows(rows_list)
+    if strategy_id is not None:
+        return overall
+    by_strategy: Dict[str, Dict] = {}
+    seen: Dict[str, List] = {}
+    for r in rows_list:
+        seen.setdefault(r["strategy_id"], []).append(r)
+    for sid, sub in seen.items():
+        by_strategy[sid] = _aggregate_rows(sub)
+    overall["by_strategy"] = by_strategy
+    return overall
+
+
+def _aggregate_rows(rows: List[Dict]) -> Dict:
+    count = len(rows)
+    paired = [
+        r for r in rows
+        if r.get("shadow_pnl") is not None and r.get("real_pnl") is not None
+    ]
+    shadow_total = sum(float(r["shadow_pnl"]) for r in paired)
+    real_total = sum(float(r["real_pnl"]) for r in paired)
+    shadow_wins = sum(1 for r in paired if float(r["shadow_pnl"]) > 0)
+    real_wins = sum(1 for r in paired if float(r["real_pnl"]) > 0)
+    n_paired = len(paired)
+    if n_paired > 0:
+        shadow_wr = shadow_wins / n_paired
+        real_wr = real_wins / n_paired
+        wr_delta = shadow_wr - real_wr
+    else:
+        shadow_wr = real_wr = wr_delta = 0.0
+    return {
+        "count": count,
+        "count_with_both_pnl": n_paired,
+        "shadow_total_pnl": round(shadow_total, 6),
+        "real_total_pnl": round(real_total, 6),
+        "pnl_delta": round(shadow_total - real_total, 6),
+        "shadow_wins": shadow_wins,
+        "real_wins": real_wins,
+        "shadow_win_rate": round(shadow_wr, 6),
+        "real_win_rate": round(real_wr, 6),
+        "win_rate_delta": round(wr_delta, 6),
+    }

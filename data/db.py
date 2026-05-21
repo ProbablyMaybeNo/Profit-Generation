@@ -282,6 +282,37 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_liquidity_snapshots_date "
     "ON liquidity_snapshots(as_of_date)",
+    # 6.4.2 — shadow A/B record. Captures what an exit would have looked
+    # like if SAR overlay had been firing on the strategy, WITHOUT changing
+    # the real paper_trades or live exit decision. One row per shadow exit
+    # event (a SAR flip on an open position). Compared against the real
+    # exit reason / price in paper_trades by (strategy_id, symbol,
+    # entry_order_id).
+    """
+    CREATE TABLE IF NOT EXISTS paper_trades_sar_overlay (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at       TEXT NOT NULL,
+        strategy_id       TEXT NOT NULL,
+        symbol            TEXT NOT NULL,
+        side              TEXT NOT NULL DEFAULT 'long',
+        entry_order_id    TEXT,
+        entry_price       REAL,
+        qty               REAL,
+        shadow_exit_price REAL NOT NULL,
+        shadow_sar        REAL,
+        shadow_reason     TEXT NOT NULL,
+        real_exit_price   REAL,
+        real_exit_reason  TEXT,
+        shadow_pnl        REAL,
+        real_pnl          REAL,
+        notes             TEXT,
+        UNIQUE(strategy_id, symbol, entry_order_id, recorded_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_sar_overlay_strategy "
+    "ON paper_trades_sar_overlay(strategy_id)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_sar_overlay_symbol "
+    "ON paper_trades_sar_overlay(symbol)",
 ]
 
 
