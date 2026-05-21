@@ -118,10 +118,11 @@ stalls before the trailing stop would have triggered. Opt-in per strategy.
   - **Acceptance:** standard Parabolic SAR computation (acceleration factor starting at 0.02, increments of 0.02, max 0.2 — Wilder's defaults). For any strategy with `sar_overlay: true` in its declaration, the exit check is `should_exit = trailing_stop_hit OR sar_flip`. SAR state persisted per open position. Tests: SAR math against known-good Wilder sequence, overlay precedence (whichever fires first wins), no-overlay-when-disabled.
   - **Completed:** 2026-05-19 by milestone-builder · commit 2e05833
 
-- [ ] **6.4.2 SAR overlay opt-in for trend strategies**
+- [x] **6.4.2 SAR overlay opt-in for trend strategies**
   - **Deliverable:** strategy declarations updated + 30-day A/B record
   - **Acceptance:** enables `sar_overlay: true` on the three Phase 4.6.3 trend strategies (donchian_breakout_20, ma_cross_20_50, new_high_volume) in paper mode only. Records a parallel `paper_trades_sar_overlay` table that captures hypothetical exit prices/PnL as if SAR had also been firing — so Ross can compare 30 days of "SAR overlay on" vs "off" without disturbing live PnL. Tests: parallel-record shape, no-impact-on-live-pnl invariant, A/B aggregation math.
-  - **Notes:** Decision to keep SAR overlay ON live is gated on the 30-day A/B result — separate milestone in Phase 6 once data is in.
+  - **Notes:** Decision to keep SAR overlay ON live is gated on the 30-day A/B result — separate milestone in Phase 6 once data is in. Implementation note: declarations use `sar_overlay: "shadow"` (the new observe-only mode) so the live exit decision is provably unchanged — `strategy_has_sar_overlay` returns False for shadow while `strategy_has_sar_shadow` returns True. Clock starts 2026-05-20.
+  - **Completed:** 2026-05-20 by milestone-builder · commit fc9a3e4
 
 ---
 
