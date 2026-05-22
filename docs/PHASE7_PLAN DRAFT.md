@@ -60,10 +60,16 @@ filter touches live PnL.
     `test_shadow_does_not_affect_paper_trades_when_sar_flips`),
     structured-output schema validation, prompt-context shape, network
     failure isolation (LLM unreachable → log warning, fire proceeds
-    unchanged).
-  - **Cost guardrails:** Sonnet 4.6 at ~5K-token context per call;
-    cap calls at 200/day via a daily counter, fail-open on cap exceeded.
-    Use the `claude-haiku-4-5` model as configurable fallback.
+    unchanged — **fail-open** is the chosen behavior, see Decisions log).
+  - **Cost guardrails:** `claude-sonnet-4-6` at ~5K-token context per
+    call (chosen for the shadow phase — see Decisions log); cap calls
+    at 200/day via a daily counter, **fail-open on cap exceeded**
+    (the strategy fires unchanged when we hit the cap). Use prompt
+    caching on the static prefix (system instructions + schema) —
+    90% cost reduction on cached portion.
+  - **Surfacing:** verdicts + rationales render on a new **dashboard
+    card only** during shadow phase. No Telegram alerts on `skip` —
+    actionability is zero while the filter doesn't consume verdicts.
   - **Notes:** Use prompt caching for the static parts of the prompt
     (system instructions, schema definition) — that's a 90% cost
     reduction on the cached prefix. See `/skill claude-api` for the
@@ -178,19 +184,22 @@ strategies), we need Alpaca's bar websocket subscription.
 
 ---
 
-## Open questions for Ross
+## Decisions log
 
-1. **LLM filter prompt — strict vs lenient default verdict?** If the
-   model is confused or returns malformed JSON, do we default to
-   "allow" (fail-open, more shots on goal, fewer skipped opportunities)
-   or "skip" (fail-closed, fewer mis-trades, fewer trades total)?
-   Recommend fail-open with logging — matches the existing system's
-   bias toward "try the strategy unless something explicit blocks it."
-2. **Model choice — Sonnet or Haiku for the filter call?** Haiku is
-   ~10× cheaper and ~3× faster but loses nuance on context-heavy
-   reads (Fed minutes day, halt news, cross-strategy correlation).
-   Recommend Sonnet for shadow phase; if A/B shows the call is mostly
-   formulaic, downgrade to Haiku for graduation.
-3. **Where do filter rationales surface?** Dashboard card? Telegram
-   alert on `verdict=skip`? Both? Recommend dashboard card initially
-   — Telegram noise during shadow phase isn't actionable.
+**2026-05-21** — Ross signed off on the §7.1.1 spec questions:
+
+1. **Fail mode** → **fail-open (allow)**. Malformed JSON, timeouts,
+   API errors, and daily cap exceedance all default to `verdict=allow`
+   so the strategy fires unchanged. The bias matches the system's
+   existing "try the strategy unless something explicitly blocks it"
+   philosophy. Costs us a few mis-trades when the LLM is broken;
+   never costs us missed opportunities.
+2. **Model** → **`claude-sonnet-4-6`** for the shadow phase. Haiku
+   was the cheaper alternative but would miss the context-heavy edge
+   cases that are exactly what makes the filter valuable. Re-evaluate
+   the Haiku downgrade post-A/B if the calls turn out to be mostly
+   formulaic.
+3. **Surfacing** → **dashboard card only**. No Telegram on `skip`
+   verdicts during shadow phase — actionability is zero while
+   auto_trader doesn't consume the verdicts. Telegram surfacing
+   becomes a question again at §7.1.3 graduation.
