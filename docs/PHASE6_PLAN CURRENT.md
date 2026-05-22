@@ -134,10 +134,11 @@ cost is real — chain data, IV surface, Greeks, expiry rolls, assignment
 handling. This Phase 5 milestone is **research-only** — the implementation
 gates on a positive go/no-go and waits for Phase 6.
 
-- [ ] **6.5.1 Options synthetic pyramiding feasibility**
+- [x] **6.5.1 Options synthetic pyramiding feasibility**
   - **Deliverable:** `docs/OPTIONS_PYRAMIDING_RESEARCH.md` (NOT code)
   - **Acceptance:** documents (a) which Alpaca options endpoints we'd need (chain, quote, exercise) and current API limits, (b) the data infrastructure delta vs current (IV surface storage, expiry calendar, contract-multiplier handling), (c) candidate structures — long calls vs bull call spreads vs ratio spreads — with expected payoff diagrams, (d) which 4.6 trend strategies would actually benefit (one with 5-10× R winners) vs which would be diluted by theta decay (anything <30-day hold), (e) tax & regulatory delta from share pyramiding, (f) recommended go/no-go criteria for Phase 6 implementation. No code.
   - **Notes:** Cross-reference `docs/OPTIONS_RESEARCH.md` from 3.4.2 — that research was on long-only screening, not pyramiding-as-amplifier. This milestone is the narrower question: "given 4.6 trend pyramiding already works on shares, what marginal benefit do options add?"
+  - **Completed:** 2026-05-21 · verdict **NO-GO for Phase 7, defer until 2026-08-21**. Trend strategies haven't closed any trades yet (deployed 3 days ago), so the asymmetric-payoff prerequisite can't be evaluated. Estimated 9 engineering days of infrastructure cost before any option trades — too speculative without evidence of 5-10× R tail wins.
 
 ---
 
