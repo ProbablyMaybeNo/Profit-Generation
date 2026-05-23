@@ -26,7 +26,7 @@ import sys
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -1249,6 +1249,55 @@ def _maybe_record_sar_shadow(
     )
 
 
+def _maybe_record_llm_filter_shadow(
+    conn, *, sig, market_context: Dict[str, Any],
+    asof: Optional[date],
+    settings: Dict,
+) -> Optional[int]:
+    """7.1.1 — observational LLM-filter shadow record.
+
+    For every fire auto_trader sees, ask the LLM filter for a verdict
+    and persist it to ``paper_trades_llm_filter``. **Never affects the
+    live exit/entry decision** — caller never reads the return value.
+    Always fail-open; helper itself swallows any unexpected error so a
+    busted filter cannot break trading.
+    """
+    try:
+        from monitoring import llm_filter as llmf
+        sid = sig["strategy_id"]
+        sym = sig["symbol"]
+        signal_dict = {
+            "strategy_id": sid,
+            "symbol": sym,
+            "bar_ts": sig["bar_ts"],
+            "signal_type": sig["signal_type"],
+            "side": "long",  # all current strategies are long-side
+            "close": sig["close"],
+        }
+        llm_settings = settings.get("llm_filter") or {}
+        model = llm_settings.get("model") or llmf.DEFAULT_MODEL
+        daily_cap = int(llm_settings.get("daily_cap", llmf.DAILY_CALL_CAP))
+        timeout = float(llm_settings.get(
+            "timeout_sec", llmf.DEFAULT_TIMEOUT_SEC))
+        recent_news = llmf.gather_recent_news(conn, sym)
+        earnings = llmf.gather_earnings(conn, sym, asof=asof)
+        prior = llmf.gather_prior_outcomes(conn, sid)
+        verdict = llmf.assess_signal(
+            signal_dict, conn,
+            market_context=market_context,
+            recent_news=recent_news,
+            earnings=earnings,
+            prior_outcomes=prior,
+            model=model, daily_cap=daily_cap,
+            timeout_sec=timeout,
+        )
+        return 1 if verdict else None
+    except Exception as e:
+        log(f"llm_filter shadow record failed (non-fatal): "
+            f"{type(e).__name__}", "WARNING")
+        return None
+
+
 DEFAULT_MAX_PCT_PER_SYMBOL = 0.30
 DEFAULT_MAX_OPEN_PER_STRATEGY = 3
 DEFAULT_MAX_NEW_ENTRIES_PER_DAY = 5  # 5.5.4.2
@@ -2182,7 +2231,33 @@ def process_signals(
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
     sentiment_cache: Dict[str, Optional[dict]] = {}
+    # 7.1.1 — strict shadow LLM filter. For every fire auto_trader sees
+    # (EOD + intraday), call the filter and record its verdict to
+    # paper_trades_llm_filter. The verdict is NOT consumed in the live
+    # decision path — this is a 30-day observability run before 7.1.3
+    # graduation. Default OFF; flip on via settings.llm_filter.enabled.
+    llm_filter_enabled = bool(
+        ((settings.get("llm_filter") or {}).get("enabled", False))
+    )
+    llm_filter_market_context: Dict[str, Any] = {}
+    llm_filter_market_context_loaded = False
     for sig in sigs:
+        if llm_filter_enabled:
+            if not llm_filter_market_context_loaded:
+                from monitoring import llm_filter as _llmf
+                try:
+                    llm_filter_market_context = _llmf.gather_market_context(
+                        conn, asof=asof,
+                    )
+                except Exception:
+                    llm_filter_market_context = {}
+                llm_filter_market_context_loaded = True
+            _maybe_record_llm_filter_shadow(
+                conn, sig=sig,
+                market_context=llm_filter_market_context,
+                asof=asof,
+                settings=settings,
+            )
         if sig["signal_type"] == "long_entry":
             if kill_switch_engaged:
                 if not kill_switch_logged:

@@ -1308,6 +1308,27 @@ def strategy_correlation():
         conn.close()
 
 
+@app.route("/api/llm_filter_verdicts", methods=["GET"])
+def llm_filter_verdicts():
+    """7.1.1 — most-recent LLM-filter shadow verdicts joined to signals.
+
+    Backs the dashboard card showing what the (shadow-mode) LLM filter
+    would have said about each fire. Query param `limit` caps the row
+    count (default 50, hard ceiling 500)."""
+    from monitoring import llm_filter
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 500))
+    conn = db.init_db()
+    try:
+        rows = llm_filter.recent_verdicts(conn, limit=limit)
+        return jsonify({"verdicts": rows, "limit": limit})
+    finally:
+        conn.close()
+
+
 @app.route("/api/edge_diff", methods=["GET"])
 def edge_diff():
     """Realized-vs-theoretical edge per strategy. Computed live from

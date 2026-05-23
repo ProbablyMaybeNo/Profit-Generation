@@ -313,6 +313,41 @@ _DDL = [
     "ON paper_trades_sar_overlay(strategy_id)",
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_sar_overlay_symbol "
     "ON paper_trades_sar_overlay(symbol)",
+    # 7.1.1 — LLM-filter shadow record. Captures the verdict the LLM
+    # contextual filter would have returned for every auto_trader fire,
+    # WITHOUT consuming the verdict in the live decision path. One row
+    # per fire (strategy_id, symbol, bar_ts, signal_type). Compared
+    # against the live outcome by joining back to paper_trades via
+    # (strategy_id, symbol, bar_ts) in the 7.1.2 aggregator.
+    """
+    CREATE TABLE IF NOT EXISTS paper_trades_llm_filter (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at     TEXT NOT NULL,
+        strategy_id     TEXT NOT NULL,
+        symbol          TEXT NOT NULL,
+        bar_ts          TEXT NOT NULL,
+        signal_type     TEXT NOT NULL,
+        side            TEXT,
+        close           REAL,
+        verdict         TEXT NOT NULL,
+        confidence      REAL,
+        rationale       TEXT,
+        factors_json    TEXT,
+        model           TEXT,
+        prompt_tokens   INTEGER,
+        cached_tokens   INTEGER,
+        output_tokens   INTEGER,
+        latency_ms      INTEGER,
+        failure_mode    TEXT,
+        UNIQUE(strategy_id, symbol, bar_ts, signal_type)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_llm_filter_strategy "
+    "ON paper_trades_llm_filter(strategy_id)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_llm_filter_symbol "
+    "ON paper_trades_llm_filter(symbol)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_llm_filter_recorded "
+    "ON paper_trades_llm_filter(recorded_at)",
 ]
 
 
