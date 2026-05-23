@@ -176,7 +176,8 @@ would have hidden behind better quality.
 
 ### Workstream A — Data layer (no behavior change on existing trades)
 
-- [ ] **7.5.1 Alpaca IEX WebSocket listener + minute-bar storage**
+- [x] **7.5.1 Alpaca IEX WebSocket listener + minute-bar storage**
+  - **Completed:** 2026-05-22 by milestone-builder (commit e85da5a)
   - **Deliverable:** `monitoring/live_stream.py` + new `intraday_bars`
     and `stream_heartbeat` tables (added to `_DDL` in `data/db.py`).
     Long-running process; either runs under a new scheduled task
