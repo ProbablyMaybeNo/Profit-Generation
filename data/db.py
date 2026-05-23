@@ -348,6 +348,47 @@ _DDL = [
     "ON paper_trades_llm_filter(symbol)",
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_llm_filter_recorded "
     "ON paper_trades_llm_filter(recorded_at)",
+    # 7.5.1 — live intraday bar ingestion. The Alpaca IEX WebSocket
+    # listener (monitoring/live_stream.py) upserts one row per
+    # (symbol, ts_utc, source) bar received. Idempotent on duplicate
+    # bars (Alpaca occasionally re-sends). `source='iex'` by default;
+    # future SIP upgrade lands as a second source value. This table
+    # is data-only — fire detection still runs through the existing
+    # 15m polling path until Workstream B activates 1m-native strategies.
+    """
+    CREATE TABLE IF NOT EXISTS intraday_bars (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol      TEXT NOT NULL,
+        ts_utc      TEXT NOT NULL,
+        open        REAL,
+        high        REAL,
+        low         REAL,
+        close       REAL,
+        volume      REAL,
+        source      TEXT NOT NULL DEFAULT 'iex',
+        recorded_at TEXT,
+        UNIQUE(symbol, ts_utc, source)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_intraday_bars_symbol_ts "
+    "ON intraday_bars(symbol, ts_utc)",
+    "CREATE INDEX IF NOT EXISTS idx_intraday_bars_ts "
+    "ON intraday_bars(ts_utc)",
+    # 7.5.1 — per-component heartbeat. Single-row-per-component upsert
+    # table written every 5 seconds while the listener is connected.
+    # Dashboard reads this to show CONNECTED / RECONNECTING / STALE
+    # state. `reconnects_today` resets at UTC midnight; the writer is
+    # responsible for that rollover.
+    """
+    CREATE TABLE IF NOT EXISTS stream_heartbeat (
+        component         TEXT PRIMARY KEY,
+        last_ts           TEXT NOT NULL,
+        reconnects_today  INTEGER NOT NULL DEFAULT 0,
+        last_error        TEXT,
+        rollover_date     TEXT,
+        state             TEXT
+    )
+    """,
 ]
 
 
