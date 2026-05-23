@@ -78,6 +78,12 @@ filter touches live PnL.
     day one, not as a follow-up.
 
 - [ ] **7.1.2 LLM filter A/B aggregation**
+  - **Sequencing note (2026-05-22):** §7.1.2 is paused behind §7.5
+    (Live intraday data layer). The LLM filter has nothing
+    intraday-relevant to evaluate until 7.5.5 ships 1m-native
+    strategies — see §7.5.6 for the filter's actual activation
+    milestone. 7.1.2 reopens once 30 days of shadow data has
+    accumulated post-activation.
   - **Deliverable:** `monitoring/llm_filter_ab.py` aggregation helper
     + dashboard card mirroring the Kelly card pattern (6.2.3).
   - **Acceptance:** computes the same A/B shape as the SAR overlay
@@ -150,20 +156,154 @@ proper, with a manual sign-off gate.
 
 ---
 
-## 7.5 Realtime websocket fills (replaces polling)
+## 7.5 Live intraday data layer (augments existing system)
 
-Current intraday loop polls Alpaca every 15m. For LLM filter at 1m
-cadence (or even just for fill-latency reduction on existing
-strategies), we need Alpaca's bar websocket subscription.
+**Approach revision (2026-05-22):** Original §7.5 framed this as
+"replace 15m polling with websocket." Per Ross's redirect, the
+new framing is **augment, not replace** — the existing 15m
+intraday loop and daily strategies keep trading throughout, and
+the new data layer runs alongside them with zero behavior change
+on existing strategies. New strategies that want minute-resolution
+data opt in via Workstream B. Existing strategies just gain
+visibility through Workstream A's skip-reason logging.
 
-- [ ] **7.5.1 Websocket bar subscription**
-  - **Deliverable:** `monitoring/ws_bars.py` + scheduler change.
-  - **Acceptance:** drop-in replacement for the 15m poll loop —
-    same fire-detection logic, but evaluated bar-by-bar as Alpaca's
-    websocket emits them. Reconnect logic, no-bars-for-N-seconds
-    heartbeat alarm. Tests: reconnect on dropped connection,
-    fire-detection equivalence vs polling on a recorded session,
-    heartbeat alarm fires at threshold.
+**Free-tier discipline:** stay on Alpaca free IEX WebSocket until
+the system proves it can handle minute-bar data without breaking.
+Upgrade to Algo Trader Plus ($99/mo SIP feed) only when there's
+concrete evidence the IEX-only view costs us fills. The whole
+point of this sequencing is to surface every bug paid data
+would have hidden behind better quality.
+
+### Workstream A — Data layer (no behavior change on existing trades)
+
+- [ ] **7.5.1 Alpaca IEX WebSocket listener + minute-bar storage**
+  - **Deliverable:** `monitoring/live_stream.py` + new `intraday_bars`
+    and `stream_heartbeat` tables (added to `_DDL` in `data/db.py`).
+    Long-running process; either runs under a new scheduled task
+    `schedulers/run_live_stream.bat` or as a service. Subscribes to
+    Alpaca's free IEX WebSocket bars channel for the
+    `TRACKED_STOCKS + TRACKED_SECTORS` universe (10 symbols initially).
+  - **Acceptance:** connects to `wss://stream.data.alpaca.markets/v2/iex`
+    using credentials from `config/credentials.json:alpaca`. Authenticates,
+    subscribes to bars + trades for the 10-symbol watchlist. Each incoming
+    bar is upserted into `intraday_bars(symbol, ts_utc, open, high, low,
+    close, volume, source='iex')`. `stream_heartbeat(component='live_stream',
+    last_ts, reconnects_today, last_error)` updates every 5 seconds.
+    Reconnects automatically on socket drop with exponential backoff
+    (1s, 2s, 4s, 8s, max 60s). Existing 15m polling loop is **NOT**
+    touched — it keeps running as the canonical fire-detection path.
+  - **Tests:** synthetic WebSocket server fixture; subscribe-confirm
+    handshake; bar parsing → row upsert byte-equality on replay;
+    reconnect-after-drop preserves subscription; heartbeat updates
+    on schedule; ungraceful crash → next invocation resumes without
+    duplicate bars.
+  - **Universe note:** start with 10 symbols. IEX free tier has
+    bandwidth limits and the full 503-symbol trend universe would
+    saturate the connection. Expand by editing the universe in
+    7.5.5 once the listener proves stable.
+
+- [ ] **7.5.2 Skip-reason logging retrofitted to the existing risk gate**
+  - **Deliverable:** new `intraday_skips` table + edits to
+    `monitoring/auto_trader.py` everywhere a fire is silently dropped.
+    No new module — pure retrofit.
+  - **Acceptance:** every gate in the existing auto_trader (kill_switch,
+    dry_run, max_position_usd cap, max_open_positions, concentration_cap,
+    cool_down, earnings_veto, negative_sentiment_veto, pdt_guard,
+    drawdown_breaker, intraday_symbol_cap) writes a row to `intraday_skips`
+    when it blocks a fire. Schema: `(id, recorded_at, strategy_id, symbol,
+    bar_ts, signal_type, gate, reason_detail, source)` with
+    `source IN ('daily','intraday_15m','live_stream')`. The block
+    decision is unchanged — we just stop dropping fires silently.
+    A new `/api/skip_reasons` route surfaces the last N rows for
+    the dashboard.
+  - **Tests:** each gate is exercised with a fire that would trigger
+    it; the row gets written with the correct gate/reason; the live
+    decision (block) is byte-identical to pre-retrofit behavior
+    (no-impact invariant — mirrors 6.4.2 SAR overlay test pattern);
+    `intraday_skips` table is idempotent on `init_db()` re-call.
+  - **Why this milestone matters most:** the existing 15m loop drops
+    fires for ~12 of every 14 entries (observed 2026-05-21). Today we
+    can't tell which gate is biting hardest without spelunking the
+    auto_trader code path. After 7.5.2, every drop is queryable.
+
+- [ ] **7.5.3 Dashboard cards: live feed status, intraday bars, skip reasons**
+  - **Deliverable:** new dashboard panel section in `dashboard/index.html`
+    + supporting routes in `dashboard/server.py`.
+  - **Acceptance:** three new cards on the existing dashboard:
+    (i) **Live Feed Status** — websocket state (CONNECTED / DISCONNECTED /
+    RECONNECTING), feed identifier (`Alpaca IEX`), subscribed symbol count,
+    seconds-since-last-message, reconnects-today; (ii) **Intraday Bars** —
+    most recent 1m bar per watched symbol with timestamp freshness indicator;
+    (iii) **Skip Reasons** — top 5 skip reasons over the last 24h with
+    counts, plus a clickable detail view showing recent skip rows.
+    Routes: `/api/live_feed_status`, `/api/intraday_bars_latest`,
+    `/api/skip_reasons`. All loopback-only (PG-011 precedent).
+  - **Tests:** route response-shape tests against a seeded
+    `intraday_bars` / `intraday_skips` / `stream_heartbeat` fixture;
+    `STALE` vs `FRESH` threshold logic for the bar freshness indicator.
+
+### Workstream B — Strategy integration (opt-in, shadow-first)
+
+- [ ] **7.5.4 Intraday confirmation overlay — shadow mode**
+  - **Deliverable:** `monitoring/intraday_confirm.py` + a new
+    `paper_trades_intraday_confirm` parallel table.
+  - **Acceptance:** mirrors 6.4.2 SAR overlay pattern exactly. Any
+    strategy with `intraday_confirm: "shadow"` in its declaration
+    records what *would* have happened if the entry required a 1m
+    close above the trigger price before order submission. The live
+    entry path is unchanged. Records `(strategy_id, symbol,
+    daily_signal_ts, would_have_confirmed_at, hypothetical_entry_price,
+    shadow_pnl_at_close, real_pnl_at_close)` for 30 days of A/B data.
+  - **Tests:** no-impact-on-live-paper-trades invariant
+    (`test_shadow_does_not_affect_paper_trades`); confirmation math
+    on a recorded 1m bar stream; missing-1m-data graceful degrade
+    (records `would_have_confirmed=null`, no exception).
+  - **Notes:** opt-in per strategy. Recommend starting with the three
+    trend strategies (donchian-breakout-20, ma-cross-20-50, new-high-volume)
+    — they're the slowest-firing entries and would benefit most from
+    a confirmation gate.
+
+- [ ] **7.5.5 NEW 1m-native strategies — ORB-1m + momentum + VWAP-reclaim**
+  - **Deliverable:** three new strategy declarations + compute functions
+    in `strategies/intraday/`. Added to `TRACKED_STRATEGIES` via a new
+    `INTRADAY_1M_DECLARATIONS` list in `monitoring/config.py`.
+  - **Acceptance:** runs alongside existing strategies; each new
+    strategy treated as a normal `TRACKED_STRATEGIES` entry with
+    `bar_interval: "1m"`, `grace_period: true`, `max_position_usd: 200`
+    (capped at 20% of normal max while the strategies prove themselves).
+    Routes through the existing auto_trader paper path; no special
+    handling needed. Strategies:
+    - `intraday-1m-orb` — 1-minute opening-range breakout (first 5 minutes
+      define the range; first break thereafter triggers entry).
+    - `intraday-1m-momentum` — 3 consecutive 1m bars closing above a
+      rising 20-period EMA with rvol > 1.5x.
+    - `intraday-1m-vwap-reclaim` — price crosses back above VWAP after
+      a dip below, with volume confirmation.
+  - **Tests:** compute_fn tests against fixture 1m bar arrays for each
+    strategy; integration test that all three resolve through
+    `_resolve_compute_fn`; smoke test of the full pipeline on a 1-hour
+    recorded session.
+  - **Why a starter triple, not 20:** Ross's plan called this out
+    explicitly — start with 2-3, observe, expand only when those work.
+
+- [ ] **7.5.6 EOD intraday report + LLM filter activation**
+  - **Deliverable:** `monitoring/intraday_eod_report.py` + flips
+    `settings.llm_filter.enabled` to true (with API key configured).
+  - **Acceptance:** end-of-day report drinks the day's `intraday_bars`,
+    `intraday_signals`, `intraday_skips`, and existing `paper_trades`
+    to produce a markdown summary: total fires by strategy, skip
+    breakdown by reason, paper P&L by strategy, top divergences
+    between intraday signals and EOD outcomes. Posts to Notion via
+    existing channel. **AND** at this milestone, the LLM filter shipped
+    in 7.1.1 finally activates — it has real intraday signal to filter
+    on now, where it didn't before. The filter still runs strict-shadow
+    (no live consumption), per 7.1.1 spec.
+  - **Tests:** EOD report shape on a seeded day; LLM filter activation
+    only happens when the API key is present (graceful no-op otherwise);
+    LLM filter no-impact invariant continues to hold post-activation.
+  - **Notes:** this is the milestone where the $18/mo Anthropic budget
+    starts. Don't flip `llm_filter.enabled` before 7.5.5 lands — the
+    filter has nothing intraday-relevant to evaluate until then.
 
 ---
 
