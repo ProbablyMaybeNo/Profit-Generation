@@ -907,6 +907,7 @@ def state():
             "kill_switch": _state_kill_switch(),
             "pdt": _state_pdt(conn),
             "kelly_fractions": _state_kelly_fractions(conn),
+            "live_stream": _live_stream_status(conn),
         })
     finally:
         conn.close()
@@ -1061,6 +1062,80 @@ def api_health():
         return jsonify(body), 200
     finally:
         conn.close()
+
+
+LIVE_STREAM_BAT = ROOT / "schedulers" / "run_live_stream.bat"
+
+
+def _live_stream_status(conn) -> dict:
+    """Read the live_stream row from stream_heartbeat. Returns shape:
+       { state, last_ts, minutes_ago, reconnects_today, last_error }.
+       state defaults to 'not_started' when no row exists yet.
+    """
+    row = conn.execute(
+        "SELECT last_ts, reconnects_today, last_error, state "
+        "  FROM stream_heartbeat WHERE component = ?",
+        ("live_stream",),
+    ).fetchone()
+    if row is None:
+        return {"state": "not_started", "last_ts": None, "minutes_ago": None,
+                "reconnects_today": 0, "last_error": None}
+    last_ts = row["last_ts"]
+    minutes_ago = None
+    if last_ts:
+        try:
+            ts = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+            from datetime import timezone as _tz
+            now_utc = datetime.now(_tz.utc)
+            minutes_ago = int((now_utc - ts).total_seconds() // 60)
+        except Exception:
+            minutes_ago = None
+    return {
+        "state": row["state"] or "unknown",
+        "last_ts": last_ts,
+        "minutes_ago": minutes_ago,
+        "reconnects_today": row["reconnects_today"] or 0,
+        "last_error": row["last_error"],
+    }
+
+
+@app.route("/api/live_stream/status", methods=["GET"])
+def live_stream_status_get():
+    """Return the current live_stream heartbeat row, or not_started."""
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    conn = db.init_db()
+    try:
+        return jsonify({"ok": True, "live_stream": _live_stream_status(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/live_stream/start", methods=["POST"])
+def live_stream_start():
+    """Spawn the live-stream listener detached from the dashboard process.
+       Fire-and-forget — returns immediately; the listener appears in
+       stream_heartbeat within ~5 seconds.
+    """
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    if not LIVE_STREAM_BAT.exists():
+        return jsonify({"error": f"launcher not found: {LIVE_STREAM_BAT}"}), 500
+    DETACHED = 0x00000008
+    NEW_PG = 0x00000200
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", str(LIVE_STREAM_BAT)],
+            creationflags=DETACHED | NEW_PG,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(ROOT),
+        )
+    except Exception as e:
+        return jsonify({"error": f"spawn failed: {e}"}), 500
+    return jsonify({"ok": True, "spawned_at": datetime.now().isoformat(timespec="seconds")})
 
 
 @app.route("/api/kill_switch", methods=["POST"])

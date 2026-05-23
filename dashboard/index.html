@@ -1082,6 +1082,10 @@
       <h2>account (alpaca paper) <span class="count" id="hb-info"></span></h2>
       <div id="account" class="loading">loading...</div>
     </div>
+    <div class="card">
+      <h2>live stream <span class="count" id="ls-info"></span></h2>
+      <div id="live-stream" class="loading">loading...</div>
+    </div>
   </div>
 
   <!-- Research cards live on /research — see Research tab above. -->
@@ -1642,6 +1646,51 @@ async function releaseKillSwitch() {
     refresh();
   } catch (e) {
     alert('release failed: ' + e.message);
+  }
+}
+
+function renderLiveStream(s) {
+  const el = document.getElementById('live-stream');
+  const info = document.getElementById('ls-info');
+  const ls = s.live_stream || { state: 'not_started' };
+  const state = ls.state || 'unknown';
+  const stale = ls.minutes_ago !== null && ls.minutes_ago > 2;
+  let badge = '';
+  if (state === 'connected' && !stale)        badge = '<span class="badge on">CONNECTED</span>';
+  else if (state === 'connected' && stale)    badge = '<span class="badge warn">STALE (' + ls.minutes_ago + 'm)</span>';
+  else if (state === 'reconnecting')          badge = '<span class="badge warn">RECONNECTING</span>';
+  else if (state === 'not_started')           badge = '<span class="badge off">NOT STARTED</span>';
+  else                                        badge = '<span class="badge off">' + state.toUpperCase() + '</span>';
+  const lastSeen = ls.last_ts
+    ? (ls.minutes_ago !== null ? ls.minutes_ago + 'm ago' : ls.last_ts.replace('T', ' ').slice(0, 19))
+    : '—';
+  const showStart = (state === 'not_started' || stale || state === 'error');
+  el.innerHTML = `
+    <div class="account-line">
+      <div class="pair"><span class="lbl">state</span><span class="val">${badge}</span></div>
+      <div class="pair"><span class="lbl">last bar</span><span class="val">${lastSeen}</span></div>
+      <div class="pair"><span class="lbl">reconnects today</span><span class="val">${ls.reconnects_today ?? 0}</span></div>
+      ${ls.last_error ? `<div class="pair"><span class="lbl">last error</span><span class="val err">${escapeHtml(ls.last_error)}</span></div>` : ''}
+      ${showStart ? '<div class="pair"><span class="lbl">&nbsp;</span><button id="ls-start" class="guide-btn">start listener</button></div>' : ''}
+    </div>`;
+  info.textContent = 'feed: alpaca iex';
+  const btn = document.getElementById('ls-start');
+  if (btn) btn.addEventListener('click', startLiveStream);
+}
+
+async function startLiveStream() {
+  const btn = document.getElementById('ls-start');
+  if (btn) { btn.disabled = true; btn.textContent = 'starting...'; }
+  try {
+    const r = await fetch('/api/live_stream/start', { method: 'POST' });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || ('http ' + r.status));
+    }
+    setTimeout(refresh, 3000);
+  } catch (e) {
+    alert('start failed: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'start listener'; }
   }
 }
 
@@ -2619,6 +2668,7 @@ async function refresh() {
       () => renderTriggers(),
       () => renderReport(s),
       () => renderAccount(s),
+      () => renderLiveStream(s),
       () => renderPDT(s),
       () => renderEdge(s),
       () => renderEquityCurves(s),
