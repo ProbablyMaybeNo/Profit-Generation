@@ -39,7 +39,8 @@ in as a parallel shadow recorder — same architecture as 6.4.2 — so we
 get 30 days of "LLM said skip / strategy fired anyway" data before the
 filter touches live PnL.
 
-- [ ] **7.1.1 LLM filter call + shadow table**
+- [x] **7.1.1 LLM filter call + shadow table**
+  - **Completed:** 2026-05-22 by milestone-builder
   - **Deliverable:** `monitoring/llm_filter.py` + `paper_trades_llm_filter`
     parallel table + Anthropic SDK wiring through `config.credentials`.
   - **Acceptance:** for every fire that auto_trader receives (EOD and
