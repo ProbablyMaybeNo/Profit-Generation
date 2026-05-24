@@ -1111,6 +1111,130 @@ def live_stream_status_get():
         conn.close()
 
 
+LIVE_FEED_STALE_SECONDS = 120
+INTRADAY_BAR_FRESH_SECONDS = 90
+
+
+@app.route("/api/live_feed_status", methods=["GET"])
+def live_feed_status_get():
+    """7.5.3 — Enriched live feed status card.
+
+    Extends the legacy ``/api/live_stream/status`` row with the feed
+    identifier and subscribed symbol count derived from
+    ``TRACKED_STOCKS + TRACKED_SECTORS`` (the universe the listener
+    subscribes to per 7.5.1). seconds_since_last_message is computed
+    against the heartbeat row's last_ts (UTC).
+    """
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    from monitoring.config import TRACKED_STOCKS, TRACKED_SECTORS
+    conn = db.init_db()
+    try:
+        ls = _live_stream_status(conn)
+    finally:
+        conn.close()
+    seconds_ago = None
+    if ls.get("last_ts"):
+        try:
+            ts = datetime.fromisoformat(ls["last_ts"].replace("Z", "+00:00"))
+            now_utc = datetime.now(timezone.utc)
+            seconds_ago = int((now_utc - ts).total_seconds())
+            if seconds_ago < 0:
+                seconds_ago = 0
+        except Exception:
+            seconds_ago = None
+    state = ls.get("state") or "unknown"
+    stale = (seconds_ago is not None
+             and seconds_ago > LIVE_FEED_STALE_SECONDS
+             and state == "connected")
+    return jsonify({
+        "ok": True,
+        "feed": "Alpaca IEX",
+        "state": state,
+        "stale": bool(stale),
+        "last_ts": ls.get("last_ts"),
+        "seconds_since_last_message": seconds_ago,
+        "subscribed_symbol_count": len(TRACKED_STOCKS) + len(TRACKED_SECTORS),
+        "reconnects_today": ls.get("reconnects_today") or 0,
+        "last_error": ls.get("last_error"),
+    })
+
+
+@app.route("/api/intraday_bars_latest", methods=["GET"])
+def intraday_bars_latest_get():
+    """7.5.3 — Most recent 1m bar per subscribed symbol.
+
+    Picks the latest row from ``intraday_bars`` per (symbol). Each row
+    is tagged FRESH vs STALE based on age of ``ts_utc`` (FRESH when ≤
+    INTRADAY_BAR_FRESH_SECONDS seconds old). Symbols in the watchlist
+    universe that have no row yet appear with ``bar=None``.
+    """
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    from monitoring.config import TRACKED_STOCKS, TRACKED_SECTORS
+    universe = list(dict.fromkeys(
+        [s.upper() for s in TRACKED_STOCKS + TRACKED_SECTORS]
+    ))
+    conn = db.init_db()
+    try:
+        rows = conn.execute(
+            "SELECT b.symbol, b.ts_utc, b.open, b.high, b.low, b.close, "
+            "       b.volume, b.source "
+            "  FROM intraday_bars b "
+            "  JOIN (SELECT symbol, MAX(ts_utc) AS mx FROM intraday_bars "
+            "         GROUP BY symbol) m "
+            "    ON m.symbol = b.symbol AND m.mx = b.ts_utc"
+        ).fetchall()
+    finally:
+        conn.close()
+    by_sym: dict = {}
+    now_utc = datetime.now(timezone.utc)
+    for r in rows:
+        sym = r["symbol"]
+        ts_str = r["ts_utc"]
+        seconds_ago = None
+        freshness = "STALE"
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            seconds_ago = int((now_utc - ts).total_seconds())
+            if seconds_ago < 0:
+                seconds_ago = 0
+            if seconds_ago <= INTRADAY_BAR_FRESH_SECONDS:
+                freshness = "FRESH"
+        except Exception:
+            pass
+        by_sym[sym] = {
+            "symbol": sym,
+            "bar": {
+                "ts_utc": ts_str,
+                "open": r["open"],
+                "high": r["high"],
+                "low": r["low"],
+                "close": r["close"],
+                "volume": r["volume"],
+                "source": r["source"],
+            },
+            "seconds_ago": seconds_ago,
+            "freshness": freshness,
+        }
+    out = []
+    for sym in universe:
+        if sym in by_sym:
+            out.append(by_sym[sym])
+        else:
+            out.append({
+                "symbol": sym,
+                "bar": None,
+                "seconds_ago": None,
+                "freshness": "NO_DATA",
+            })
+    return jsonify({
+        "ok": True,
+        "fresh_threshold_seconds": INTRADAY_BAR_FRESH_SECONDS,
+        "symbols": out,
+    })
+
+
 @app.route("/api/skip_reasons", methods=["GET"])
 def skip_reasons_get():
     """7.5.2 — Recent auto_trader skip rows + top-5 gates by count.

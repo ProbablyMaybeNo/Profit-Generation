@@ -1090,6 +1090,18 @@
 
   <!-- Research cards live on /research — see Research tab above. -->
 
+  <!-- Intraday bars (7.5.3) -->
+  <div class="card" id="intraday-bars-card">
+    <h2>intraday bars · latest per symbol <span class="count" id="bars-info"></span></h2>
+    <div id="intraday-bars-latest" class="loading">loading...</div>
+  </div>
+
+  <!-- Skip reasons (7.5.3) -->
+  <div class="card" id="skip-reasons-card">
+    <h2>skip reasons · last 24h <span class="count" id="skip-info"></span></h2>
+    <div id="skip-reasons" class="loading">loading...</div>
+  </div>
+
   <!-- PDT day-trade counter (5.4.2) -->
   <div class="card" id="pdt-card">
     <h2>pdt · day trades <span class="count" id="pdt-mode"></span></h2>
@@ -1698,6 +1710,84 @@ document.addEventListener('DOMContentLoaded', () => {
   const btn = document.getElementById('kb-release');
   if (btn) btn.addEventListener('click', releaseKillSwitch);
 });
+
+async function renderIntradayBarsLatest() {
+  const el = document.getElementById('intraday-bars-latest');
+  const info = document.getElementById('bars-info');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/intraday_bars_latest', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const body = await r.json();
+    const rows = body.symbols || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty">no intraday bars yet — start the live stream listener.</div>';
+      if (info) info.textContent = '';
+      return;
+    }
+    let fresh = 0, stale = 0, none = 0;
+    let h = '<table><thead><tr><th>symbol</th><th>close</th><th>volume</th><th>age</th><th></th></tr></thead><tbody>';
+    for (const row of rows) {
+      const sym = escapeHtml(row.symbol);
+      let badge, age, close, vol;
+      if (row.freshness === 'FRESH') {
+        badge = '<span class="badge on">FRESH</span>'; fresh += 1;
+      } else if (row.freshness === 'STALE') {
+        badge = '<span class="badge warn">STALE</span>'; stale += 1;
+      } else {
+        badge = '<span class="badge off">NO DATA</span>'; none += 1;
+      }
+      if (row.bar) {
+        close = Number(row.bar.close).toFixed(2);
+        vol = Number(row.bar.volume ?? 0).toLocaleString();
+        age = (row.seconds_ago !== null && row.seconds_ago !== undefined)
+          ? row.seconds_ago + 's' : '—';
+      } else {
+        close = '—'; vol = '—'; age = '—';
+      }
+      h += `<tr><td>${sym}</td><td class="num">${close}</td><td class="num">${vol}</td><td>${age}</td><td>${badge}</td></tr>`;
+    }
+    h += '</tbody></table>';
+    el.innerHTML = h;
+    if (info) info.textContent = `${fresh} fresh · ${stale} stale · ${none} no-data`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unable to load intraday bars: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function renderSkipReasons() {
+  const el = document.getElementById('skip-reasons');
+  const info = document.getElementById('skip-info');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/skip_reasons?hours=24&limit=20', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const body = await r.json();
+    const top = body.top_5 || [];
+    const recent = body.recent || [];
+    if (!top.length && !recent.length) {
+      el.innerHTML = '<div class="empty">no skip events in the last 24h.</div>';
+      if (info) info.textContent = '';
+      return;
+    }
+    let h = '<div class="skip-top"><strong>top 5 gates</strong><table><tbody>';
+    for (const t of top) {
+      h += `<tr><td>${escapeHtml(t.gate)}</td><td class="num">${t.count}</td></tr>`;
+    }
+    h += '</tbody></table></div>';
+    h += '<details class="skip-detail"><summary>recent skip rows (' + recent.length + ')</summary><table><thead><tr><th>time</th><th>gate</th><th>strategy</th><th>symbol</th><th>source</th></tr></thead><tbody>';
+    for (const row of recent) {
+      const t = (row.recorded_at || '').slice(0, 19).replace('T', ' ');
+      h += `<tr><td>${escapeHtml(t)}</td><td>${escapeHtml(row.gate || '')}</td><td>${escapeHtml(row.strategy_id || '')}</td><td>${escapeHtml(row.symbol || '')}</td><td>${escapeHtml(row.source || '')}</td></tr>`;
+    }
+    h += '</tbody></table></details>';
+    el.innerHTML = h;
+    const totalToday = top.reduce((a, t) => a + (t.count || 0), 0);
+    if (info) info.textContent = `${totalToday} skips · top ${top.length}`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unable to load skip reasons: ' + escapeHtml(e.message) + '</div>';
+  }
+}
 
 function macroValueClass(seriesId, value) {
   if (value === null || value === undefined) return '';
@@ -2669,6 +2759,8 @@ async function refresh() {
       () => renderReport(s),
       () => renderAccount(s),
       () => renderLiveStream(s),
+      () => renderIntradayBarsLatest(),
+      () => renderSkipReasons(),
       () => renderPDT(s),
       () => renderEdge(s),
       () => renderEquityCurves(s),
