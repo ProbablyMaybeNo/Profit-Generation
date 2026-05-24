@@ -266,7 +266,8 @@ would have hidden behind better quality.
     — they're the slowest-firing entries and would benefit most from
     a confirmation gate.
 
-- [ ] **7.5.5 NEW 1m-native strategies — ORB-1m + momentum + VWAP-reclaim**
+- [x] **7.5.5 NEW 1m-native strategies — ORB-1m + momentum + VWAP-reclaim**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** three new strategy declarations + compute functions
     in `strategies/intraday/`. Added to `TRACKED_STRATEGIES` via a new
     `INTRADAY_1M_DECLARATIONS` list in `monitoring/config.py`.
