@@ -76,6 +76,48 @@ INTRADAY_ORB_DECLARATIONS = [
     },
 ]
 
+# 7.5.5 — Three 1-minute-native strategies that read from the
+# intraday_bars table (7.5.1 ingestion). All three run alongside
+# existing strategies via the standard auto_trader paper path;
+# max_position_usd capped at 20% of normal ($200) while the new
+# strategies prove themselves.
+INTRADAY_1M_DECLARATIONS = [
+    {
+        "id": "intraday-1m-orb",
+        "compute": "compute_intraday_1m_orb",
+        "module": "strategies.intraday.orb_1m",
+        "strategy_class": "breakout",
+        "bar_interval": "1m",
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "active_in_window": ["09:35-15:55 ET"],
+        "grace_period": True,
+        "pyramidable": False,
+        "max_position_usd": 200,
+    },
+    {
+        "id": "intraday-1m-momentum",
+        "compute": "compute_intraday_1m_momentum",
+        "module": "strategies.intraday.momentum_1m",
+        "strategy_class": "momentum",
+        "bar_interval": "1m",
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "grace_period": True,
+        "pyramidable": False,
+        "max_position_usd": 200,
+    },
+    {
+        "id": "intraday-1m-vwap-reclaim",
+        "compute": "compute_intraday_1m_vwap_reclaim",
+        "module": "strategies.intraday.vwap_reclaim_1m",
+        "strategy_class": "mean_reversion",
+        "bar_interval": "1m",
+        "active_on": ["SPY", "QQQ", "IWM"],
+        "grace_period": True,
+        "pyramidable": False,
+        "max_position_usd": 200,
+    },
+]
+
 # 6.1.2 — All legacy botnet101 strategies are mean-reversion (3-bar-low,
 # 5-day-low, consec-bearish, 4-bar reversal, consec-below-EMA) or calendar-
 # effect mean-reversion (turn-of-month, turn-around-tuesday). Declaring
@@ -92,6 +134,7 @@ TRACKED_STRATEGIES = [
     *TREND_DECLARATIONS,
     *INTRADAY_MR_DECLARATIONS,
     *INTRADAY_ORB_DECLARATIONS,
+    *INTRADAY_1M_DECLARATIONS,
     *BREAKOUT_DECLARATIONS,
 ]
 
