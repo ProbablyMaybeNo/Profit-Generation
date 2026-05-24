@@ -58,6 +58,17 @@ LIQUIDITY_FLOOR_USD = 50_000_000.0
 DEFAULT_CAP = 5
 
 
+def _latest_business_day(d: Optional[date] = None) -> date:
+    """The most recent business day on or before d (default: today).
+    Weekdays return d unchanged; weekends snap backward to Friday so
+    the synthetic universe's "today" matches the bar-index endpoint
+    that pandas' freq='B' produces."""
+    d = d or date.today()
+    while d.weekday() >= 5:
+        d = d - timedelta(days=1)
+    return d
+
+
 def _date_string_index(n: int, end: date) -> List[str]:
     """Build a list of n consecutive business-day date strings (YYYY-MM-DD)
     ending on `end`. We use plain strings rather than a DatetimeIndex
@@ -78,7 +89,7 @@ def _breakout_bars(n: int = 60, peak: float = 150.0,
     last bar's bar_ts matches the auto_trader's `asof = date.today()`
     SELECT WHERE bar_ts = ?.
     """
-    end = end or date.today()
+    end = end or _latest_business_day()
     idx = _date_string_index(n, end)
     closes = np.concatenate([
         np.full(n - 10, 100.0),
@@ -95,7 +106,7 @@ def _breakout_bars(n: int = 60, peak: float = 150.0,
 
 def _flat_bars(n: int = 60, end: Optional[date] = None) -> pd.DataFrame:
     """No movement — no Donchian breakout fires."""
-    end = end or date.today()
+    end = end or _latest_business_day()
     idx = _date_string_index(n, end)
     return pd.DataFrame({
         "open": [100.0] * n, "high": [100.5] * n,
@@ -118,7 +129,7 @@ def _build_universe_bars() -> Dict[str, pd.DataFrame]:
 
 def _seed_liquidity_snapshots(conn) -> None:
     """High dollar volume for breakout + flat names, low for illiquid ones."""
-    today = date.today().isoformat()
+    today = _latest_business_day().isoformat()
     for sym in BREAKOUT_SYMBOLS + FLAT_SYMBOLS:
         db.upsert_liquidity_snapshot(
             conn, symbol=sym, as_of_date=today,
@@ -267,7 +278,7 @@ def _run_pipeline(cap: int = DEFAULT_CAP) -> Dict:
         ]
 
     result = at.process_signals(
-        conn, asof=date.today(), settings=settings,
+        conn, asof=_latest_business_day(), settings=settings,
         client=MagicMock(),
         bars_fetcher=_bars_for_symbol,
         account_summary_fn=_account_summary_stub,

@@ -48,12 +48,14 @@ def test_flat_bars_no_movement(smoke):
 
 
 def test_date_string_index_ends_today(smoke):
-    """Index must be date strings so bar_ts matches asof.isoformat()."""
-    from datetime import date
+    """Index must be date strings so bar_ts matches asof.isoformat().
+    On weekends pandas freq='B' snaps end to Friday, so we align with
+    the smoke script's _latest_business_day() helper rather than
+    asserting strict date.today()."""
     bars = smoke._breakout_bars(n=10)
     last = bars.index[-1]
     assert isinstance(last, str)
-    assert last == date.today().isoformat()
+    assert last == smoke._latest_business_day().isoformat()
 
 
 def test_universe_bars_covers_all_synthetic_symbols(smoke):
