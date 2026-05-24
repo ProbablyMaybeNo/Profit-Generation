@@ -15,7 +15,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -1109,6 +1109,69 @@ def live_stream_status_get():
         return jsonify({"ok": True, "live_stream": _live_stream_status(conn)})
     finally:
         conn.close()
+
+
+@app.route("/api/skip_reasons", methods=["GET"])
+def skip_reasons_get():
+    """7.5.2 — Recent auto_trader skip rows + top-5 gates by count.
+
+    Query params:
+      ?hours=24 — lookback window (default 24, capped at 168 = 1 week)
+      ?limit=50 — max recent rows returned (default 50, capped at 500)
+    """
+    if not _is_loopback_request():
+        return jsonify({"error": "loopback only"}), 403
+    try:
+        hours = int(request.args.get("hours", 24))
+    except (TypeError, ValueError):
+        hours = 24
+    hours = max(1, min(hours, 168))
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 500))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    conn = db.init_db()
+    try:
+        top_rows = conn.execute(
+            "SELECT gate, COUNT(*) AS n FROM intraday_skips "
+            " WHERE recorded_at >= ? "
+            " GROUP BY gate "
+            " ORDER BY n DESC, gate ASC "
+            " LIMIT 5",
+            (cutoff,),
+        ).fetchall()
+        recent_rows = conn.execute(
+            "SELECT id, recorded_at, strategy_id, symbol, bar_ts, "
+            "       signal_type, gate, reason_detail, source "
+            "  FROM intraday_skips "
+            " WHERE recorded_at >= ? "
+            " ORDER BY id DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({
+        "ok": True,
+        "hours": hours,
+        "top_5": [{"gate": r["gate"], "count": int(r["n"])} for r in top_rows],
+        "recent": [
+            {
+                "id": r["id"],
+                "recorded_at": r["recorded_at"],
+                "strategy_id": r["strategy_id"],
+                "symbol": r["symbol"],
+                "bar_ts": r["bar_ts"],
+                "signal_type": r["signal_type"],
+                "gate": r["gate"],
+                "reason_detail": r["reason_detail"],
+                "source": r["source"],
+            }
+            for r in recent_rows
+        ],
+    })
 
 
 @app.route("/api/live_stream/start", methods=["POST"])

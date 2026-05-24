@@ -75,6 +75,47 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _skip_source_for_bar_interval(bar_interval: Optional[str]) -> str:
+    """Map a bar_interval to the `source` value persisted on intraday_skips
+    rows. EOD (1d) → 'daily'; anything else → 'intraday_15m'. The 1m-native
+    live_stream source is reserved for the 7.5.4 path."""
+    bi = (bar_interval or "1d").lower()
+    if bi == "1d":
+        return "daily"
+    return "intraday_15m"
+
+
+def _record_skip(
+    conn, *, sig=None, strategy_id=None, symbol=None,
+    bar_ts=None, signal_type=None,
+    gate: str, reason_detail: Optional[str] = None,
+    source: str = "daily",
+) -> None:
+    """Thin wrapper around db.record_intraday_skip that never raises into
+    the caller. The block decision is the load-bearing behavior; the skip
+    write is observability and must not break trading if the DB hiccups."""
+    try:
+        if sig is not None:
+            strategy_id = strategy_id or (sig["strategy_id"]
+                if "strategy_id" in sig.keys() else None)
+            symbol = symbol or (sig["symbol"]
+                if "symbol" in sig.keys() else None)
+            bar_ts = bar_ts or (sig["bar_ts"]
+                if "bar_ts" in sig.keys() else None)
+            signal_type = signal_type or (sig["signal_type"]
+                if "signal_type" in sig.keys() else None)
+        db.record_intraday_skip(
+            conn,
+            strategy_id=strategy_id, symbol=symbol,
+            bar_ts=bar_ts, signal_type=signal_type,
+            gate=gate, reason_detail=reason_detail,
+            source=source,
+        )
+    except Exception as e:
+        log(f"intraday_skip write failed (non-fatal): "
+            f"{type(e).__name__}: {e}", "WARNING")
+
+
 def _config() -> dict:
     s = load_settings().get("auto_trade", {})
     out = dict(DEFAULT_SETTINGS)
@@ -384,14 +425,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
+    sig_bar_interval_top = (sig["bar_interval"]
+        if "bar_interval" in sig.keys() else "1d")
+    _src = _skip_source_for_bar_interval(sig_bar_interval_top)
     decl = _resolve_strategy_declaration(sid, tracked_strategies)
     grace_period_flag = bool((decl or {}).get("grace_period", False))
     eligible, stats = _is_eligible(conn, sid, settings,
                                    grace_period=grace_period_flag)
     if not eligible:
+        _record_skip(
+            conn, sig=sig, gate="ineligible",
+            reason_detail=(
+                f"n={stats.get('n')}, mean={stats.get('mean')}, "
+                f"sharpe={stats.get('sharpe')}"
+            ),
+            source=_src,
+        )
         return {"action": "SKIP_INELIGIBLE", "strategy_id": sid, "symbol": sym,
                 "reason": "fails edge thresholds", "stats": stats}
     if _already_traded(conn, sig["id"], "buy"):
+        _record_skip(
+            conn, sig=sig, gate="already_submitted",
+            reason_detail=f"signal_id={sig['id']} already has a buy",
+            source=_src,
+        )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
     is_crypto = crypto_mod.is_crypto_symbol(sym)
@@ -462,10 +519,24 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     sizing["throttle_multiplier"] = float(throttle_multiplier)
     sizing["notional_after_throttle"] = round(notional, 2)
     if notional <= 0:
+        _record_skip(
+            conn, sig=sig, gate="sizing_zero",
+            reason_detail=f"notional={notional} (after throttle)",
+            source=_src,
+        )
         return {"action": "SKIP_SIZING_ZERO", "strategy_id": sid, "symbol": sym,
                 "sizing": sizing}
     qty = _calc_qty(sig["close"], notional)
     if qty < 1:
+        _record_skip(
+            conn, sig=sig, gate="price_too_high",
+            reason_detail=(
+                f"cap=${max_pos_usd:.2f}, signal close="
+                f"${sig['close']}" if sig['close'] is not None
+                else f"cap=${max_pos_usd:.2f}, no signal close"
+            ),
+            source=_src,
+        )
         return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
                 "price": sig["close"], "max_usd": max_pos_usd,
                 "sizing": sizing}
@@ -688,13 +759,26 @@ def _process_pyramid_addon(
     """
     from monitoring import pyramiding as py_mod
     sid, sym = sig["strategy_id"], sig["symbol"]
+    sig_bar_interval_p = (sig["bar_interval"]
+        if "bar_interval" in sig.keys() else "1d")
+    _src_p = _skip_source_for_bar_interval(sig_bar_interval_p)
     if _already_traded(conn, sig["id"], "buy"):
+        _record_skip(
+            conn, sig=sig, gate="already_submitted",
+            reason_detail=f"signal_id={sig['id']} already has a buy (pyramid)",
+            source=_src_p,
+        )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
     decl = _resolve_strategy_declaration(sid, tracked_strategies)
     strategy_class = (decl or {}).get("strategy_class") or "trend"
     initial_qty = _initial_qty_for_pyramid(conn, sid, sym)
     if initial_qty is None or initial_qty <= 0:
+        _record_skip(
+            conn, sig=sig, gate="pyramid_no_base",
+            reason_detail="no tier-0 BUY to size add-on against",
+            source=_src_p,
+        )
         return {"action": "SKIP_NO_PYRAMID_BASE",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "reason": "no tier-0 BUY to size add-on against"}
@@ -716,15 +800,32 @@ def _process_pyramid_addon(
         strategy_class=str(strategy_class).lower(),
     )
     if decision["action"] == "VETO_NOT_PYRAMIDABLE":
+        _record_skip(
+            conn, sig=sig, gate="pyramid_not_pyramidable",
+            reason_detail=decision["reason"], source=_src_p,
+        )
         return {"action": "SKIP_NO_PYRAMID",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "reason": decision["reason"]}
     if decision["action"] == "VETO_REGIME":
+        _record_skip(
+            conn, sig=sig, gate="pyramid_regime",
+            reason_detail=(
+                f"regime={market_regime}; {decision['reason']}"
+            ), source=_src_p,
+        )
         return {"action": "SKIP_PYRAMID_REGIME",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "current_regime": market_regime,
                 "reason": decision["reason"]}
     if decision["action"] == "VETO_MAX_TIERS":
+        _record_skip(
+            conn, sig=sig, gate="pyramid_max_tiers",
+            reason_detail=(
+                f"tier={decision['tier']}, max={max_tiers}; "
+                f"{decision['reason']}"
+            ), source=_src_p,
+        )
         return {"action": "SKIP_MAX_TIERS",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "tier": decision["tier"],
@@ -735,6 +836,11 @@ def _process_pyramid_addon(
     addon_tier = int(decision["tier"])
     addon_price = float(sig["close"] or 0)
     if addon_price <= 0:
+        _record_skip(
+            conn, sig=sig, gate="pyramid_no_price",
+            reason_detail="no usable price on the entry signal",
+            source=_src_p,
+        )
         return {"action": "SKIP_PYRAMID_PRICE",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "reason": "no usable price on the entry signal"}
@@ -742,17 +848,22 @@ def _process_pyramid_addon(
     open_notional = _aggregate_open_notional(conn, sid, sym)
     cap_usd = float(settings.get("max_position_usd", 1000))
     if open_notional + addon_notional > cap_usd + 1e-6:
+        _reason_over_cap = (
+            f"add-on tier {addon_tier} ({addon_notional:.2f}) would "
+            f"push aggregate ({open_notional:.2f}) over the "
+            f"max_position_usd cap of {cap_usd:.2f}"
+        )
+        _record_skip(
+            conn, sig=sig, gate="pyramid_over_cap",
+            reason_detail=_reason_over_cap, source=_src_p,
+        )
         return {"action": "SKIP_PYRAMID_OVER_CAP",
                 "strategy_id": sid, "symbol": sym, "signal_id": sig["id"],
                 "tier": addon_tier,
                 "open_notional": round(open_notional, 2),
                 "addon_notional": round(addon_notional, 2),
                 "cap_usd": round(cap_usd, 2),
-                "reason": (
-                    f"add-on tier {addon_tier} ({addon_notional:.2f}) would "
-                    f"push aggregate ({open_notional:.2f}) over the "
-                    f"max_position_usd cap of {cap_usd:.2f}"
-                )}
+                "reason": _reason_over_cap}
     client_order_id = _build_client_order_id(
         strategy_id=sid, symbol=sym, side="buy",
         bar_ts=sig["bar_ts"], target_utc=None,
@@ -1016,7 +1127,15 @@ def _process_exit(
     *, trailing_triggered: Optional[dict] = None,
 ) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
+    _src_x = _skip_source_for_bar_interval(
+        sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
+    )
     if _already_traded(conn, sig["id"], "sell"):
+        _record_skip(
+            conn, sig=sig, gate="already_submitted",
+            reason_detail=f"signal_id={sig['id']} already has a sell",
+            source=_src_x,
+        )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
     # If the caller hasn't pre-computed a trailing trip, do it now using the
@@ -1030,6 +1149,11 @@ def _process_exit(
             )
     open_buy = _open_buy_for_pair(conn, sid, sym)
     if open_buy is None:
+        _record_skip(
+            conn, sig=sig, gate="no_open_position",
+            reason_detail=f"no open buy for {sid}/{sym} to close",
+            source=_src_x,
+        )
         return {"action": "SKIP_NO_POSITION", "strategy_id": sid, "symbol": sym}
     qty = int(open_buy["qty"])
 
@@ -2242,6 +2366,9 @@ def process_signals(
     llm_filter_market_context: Dict[str, Any] = {}
     llm_filter_market_context_loaded = False
     for sig in sigs:
+        sig_src = _skip_source_for_bar_interval(
+            sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
+        )
         if llm_filter_enabled:
             if not llm_filter_market_context_loaded:
                 from monitoring import llm_filter as _llmf
@@ -2268,6 +2395,14 @@ def process_signals(
                         "WARNING",
                     )
                     kill_switch_logged = True
+                _record_skip(
+                    conn, sig=sig, gate="kill_switch",
+                    reason_detail=(
+                        f"reason={kill_switch_state.get('reason') or '(none)'}; "
+                        f"set_at={kill_switch_state.get('set_at') or '?'}"
+                    ),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "KILL_SWITCH_HALT",
                     "strategy_id": sig["strategy_id"],
@@ -2278,6 +2413,11 @@ def process_signals(
                 })
                 continue
             if drawdown_block is not None:
+                _record_skip(
+                    conn, sig=sig, gate="drawdown_breaker",
+                    reason_detail=drawdown_block.get("reason"),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_DAILY_DRAWDOWN",
                     "strategy_id": sig["strategy_id"],
@@ -2293,6 +2433,13 @@ def process_signals(
                 )
             ev = earnings_cache[sym]
             if ev is not None:
+                _record_skip(
+                    conn, sig=sig, gate="earnings_veto",
+                    reason_detail=ev.get("reason") or (
+                        f"{sym} within earnings window"
+                    ),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_EARNINGS_WEEK",
                     "strategy_id": sig["strategy_id"],
@@ -2307,6 +2454,13 @@ def process_signals(
                 )
             ns = sentiment_cache[sym]
             if ns is not None:
+                _record_skip(
+                    conn, sig=sig, gate="negative_sentiment_veto",
+                    reason_detail=ns.get("reason") or (
+                        f"{sym} negative sentiment"
+                    ),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_NEGATIVE_SENTIMENT",
                     "strategy_id": sig["strategy_id"],
@@ -2322,6 +2476,11 @@ def process_signals(
                 )
             cd = cool_down_cache[sid]
             if cd is not None:
+                _record_skip(
+                    conn, sig=sig, gate="cool_down",
+                    reason_detail=cd.get("reason"),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_COOL_DOWN",
                     "strategy_id": sid,
@@ -2332,6 +2491,14 @@ def process_signals(
                 continue
             block = concentration_blocks.get(sig["id"])
             if block is not None:
+                _record_skip(
+                    conn, sig=sig, gate="concentration_cap",
+                    reason_detail=(
+                        f"cap=${block.get('cap_usd')}, used=${block.get('used_usd')}, "
+                        f"next=${block.get('next_position_usd')}"
+                    ),
+                    source=sig_src,
+                )
                 actions.append(block)
                 continue
             regime_skip_info = rr_mod.regime_skip(
@@ -2340,6 +2507,14 @@ def process_signals(
                 tracked_strategies=regime_tracked,
             )
             if regime_skip_info is not None:
+                _record_skip(
+                    conn, sig=sig, gate="regime_mismatch",
+                    reason_detail=(
+                        regime_skip_info.get("reason")
+                        or f"current_regime={current_regime}"
+                    ),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_REGIME_MISMATCH",
                     "strategy_id": sig["strategy_id"],
@@ -2358,12 +2533,21 @@ def process_signals(
                     "  FROM paused_strategies WHERE strategy_id=?",
                     (sig["strategy_id"],),
                 ).fetchone()
+                _paused_reason = (row["reason"] if row else "") or ""
+                _record_skip(
+                    conn, sig=sig, gate="paused_strategy",
+                    reason_detail=(
+                        f"paused: {_paused_reason}; "
+                        f"expires_at={(row['expires_at'] if row else '') or 'n/a'}"
+                    ),
+                    source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_PAUSED_STRATEGY",
                     "strategy_id": sig["strategy_id"],
                     "symbol": sig["symbol"],
                     "signal_id": sig["id"],
-                    "reason": (row["reason"] if row else "") or "",
+                    "reason": _paused_reason,
                     "paused_at": (row["paused_at"] if row else "") or "",
                     "expires_at": (row["expires_at"] if row else "") or "",
                     "source": (row["source"] if row else "") or "",
@@ -2372,6 +2556,14 @@ def process_signals(
             if max_open_per_strategy > 0:
                 cur_open = open_per_strategy.get(sig["strategy_id"], 0)
                 if cur_open >= max_open_per_strategy:
+                    _reason_mop = (
+                        f"strategy already has {cur_open} open "
+                        f"position(s) (cap={max_open_per_strategy})"
+                    )
+                    _record_skip(
+                        conn, sig=sig, gate="max_open_per_strategy",
+                        reason_detail=_reason_mop, source=sig_src,
+                    )
                     actions.append({
                         "action": "SKIP_MAX_OPEN_PER_STRATEGY",
                         "strategy_id": sig["strategy_id"],
@@ -2379,10 +2571,7 @@ def process_signals(
                         "signal_id": sig["id"],
                         "open_count": cur_open,
                         "cap": max_open_per_strategy,
-                        "reason": (
-                            f"strategy already has {cur_open} open "
-                            f"position(s) (cap={max_open_per_strategy})"
-                        ),
+                        "reason": _reason_mop,
                     })
                     continue
             # 5.4.1 — Pattern Day Trader guard. Only applies to intraday
@@ -2401,6 +2590,11 @@ def process_signals(
                     asof=asof,
                 )
                 if pdt_block is not None:
+                    _record_skip(
+                        conn, sig=sig, gate="pdt_guard",
+                        reason_detail=pdt_block.get("reason") or "PDT guard tripped",
+                        source=sig_src,
+                    )
                     actions.append({
                         "action": "SKIP_PDT_GUARD",
                         "strategy_id": sig["strategy_id"],
@@ -2422,6 +2616,14 @@ def process_signals(
                     conn, symbol=sig["symbol"], asof=asof, cap=sym_cap,
                 )
                 if sym_block is not None:
+                    _record_skip(
+                        conn, sig=sig, gate="intraday_symbol_cap",
+                        reason_detail=(
+                            sym_block.get("reason")
+                            or f"intraday symbol cap reached for {sig['symbol']}"
+                        ),
+                        source=sig_src,
+                    )
                     actions.append({
                         "action": "SKIP_INTRADAY_SYMBOL_CAP",
                         "strategy_id": sig["strategy_id"],
@@ -2439,6 +2641,10 @@ def process_signals(
                     live_cache=live_cache,
                 )
             except ValueError as e:
+                _record_skip(
+                    conn, sig=sig, gate="live_creds_missing",
+                    reason_detail=str(e), source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_LIVE_CREDS_MISSING",
                     "strategy_id": sig["strategy_id"],
@@ -2467,6 +2673,15 @@ def process_signals(
             # (they're handled above and don't consume new-entry budget).
             if (max_new_entries_per_day > 0
                     and entries_submitted_this_run >= max_new_entries_per_day):
+                _reason_cap = (
+                    f"capacity reached: {entries_submitted_this_run} "
+                    f"entries already submitted this run "
+                    f"(cap={max_new_entries_per_day})"
+                )
+                _record_skip(
+                    conn, sig=sig, gate="max_orders_per_day",
+                    reason_detail=_reason_cap, source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_CAPACITY",
                     "strategy_id": sig["strategy_id"],
@@ -2474,11 +2689,7 @@ def process_signals(
                     "signal_id": sig["id"],
                     "max_new_entries_per_day": max_new_entries_per_day,
                     "entries_submitted_this_run": entries_submitted_this_run,
-                    "reason": (
-                        f"capacity reached: {entries_submitted_this_run} "
-                        f"entries already submitted this run "
-                        f"(cap={max_new_entries_per_day})"
-                    ),
+                    "reason": _reason_cap,
                 })
                 continue
             entry_action = _process_entry(
@@ -2508,6 +2719,10 @@ def process_signals(
                     live_cache=live_cache,
                 )
             except ValueError as e:
+                _record_skip(
+                    conn, sig=sig, gate="live_creds_missing",
+                    reason_detail=str(e), source=sig_src,
+                )
                 actions.append({
                     "action": "SKIP_LIVE_CREDS_MISSING",
                     "strategy_id": sig["strategy_id"],

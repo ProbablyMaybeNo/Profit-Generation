@@ -389,6 +389,31 @@ _DDL = [
         state             TEXT
     )
     """,
+    # 7.5.2 — Skip-reason logging retrofit. Append-only history of every
+    # auto_trader risk-gate skip. One row per drop site per signal —
+    # re-evaluating the same blocked fire yields a NEW row (observability
+    # cares about every event, unlike record_signal which deduplicates).
+    # No FK to signals: skip rows can outlive the originating signal and
+    # we don't want delete cascades. `source` distinguishes the calling
+    # context: 'daily' (EOD loop), 'intraday_15m' (15m polling loop),
+    # 'live_stream' (future 1m-native path from 7.5.4).
+    """
+    CREATE TABLE IF NOT EXISTS intraday_skips (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at     TEXT NOT NULL,
+        strategy_id     TEXT,
+        symbol          TEXT,
+        bar_ts          TEXT,
+        signal_type     TEXT,
+        gate            TEXT NOT NULL,
+        reason_detail   TEXT,
+        source          TEXT NOT NULL DEFAULT 'daily'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_intraday_skips_recorded "
+    "ON intraday_skips(recorded_at)",
+    "CREATE INDEX IF NOT EXISTS idx_intraday_skips_gate_recorded "
+    "ON intraday_skips(gate, recorded_at)",
 ]
 
 
@@ -1121,6 +1146,44 @@ def upsert_liquidity_snapshot(
                 _utc_now_iso(),
             ),
         )
+
+
+def record_intraday_skip(
+    conn: sqlite3.Connection,
+    *,
+    strategy_id: Optional[str],
+    symbol: Optional[str],
+    bar_ts: Optional[str],
+    signal_type: Optional[str],
+    gate: str,
+    reason_detail: Optional[str] = None,
+    source: str = "daily",
+    recorded_at: Optional[str] = None,
+) -> Optional[int]:
+    """Append a row to intraday_skips. Always inserts — every skip event is
+    its own row even when the same gate fires on the same signal repeatedly
+    across runs (counter to record_signal's idempotent behavior).
+    """
+    if not gate:
+        return None
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO intraday_skips "
+            "(recorded_at, strategy_id, symbol, bar_ts, signal_type, "
+            " gate, reason_detail, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                recorded_at or _utc_now_iso(),
+                strategy_id,
+                symbol,
+                bar_ts,
+                signal_type,
+                gate,
+                reason_detail,
+                source,
+            ),
+        )
+        return cur.lastrowid
 
 
 def get_liquidity_snapshots(
