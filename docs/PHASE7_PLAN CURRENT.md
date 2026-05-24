@@ -94,7 +94,8 @@ filter touches live PnL.
     A/B math on hand-computed fixture, sample-size gate honored,
     strategy-filter pass-through.
 
-- [ ] **7.1.3 LLM filter graduation to live**
+- [x] **7.1.3 LLM filter graduation to live**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** settings flag + auto_trader integration.
   - **Acceptance:** after 30 days, if `llm_filter_ab.summary()` shows
     a positive PnL delta with min sample 200 outcomes AND a Sharpe
