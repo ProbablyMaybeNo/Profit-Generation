@@ -1570,6 +1570,28 @@ def strategy_correlation():
         conn.close()
 
 
+@app.route("/api/llm_filter_ab", methods=["GET"])
+def llm_filter_ab_get():
+    """7.1.2 — A/B aggregator for the LLM filter shadow record.
+
+    Returns a global aggregate + per-strategy breakdown showing what
+    PnL would have looked like if every "skip" verdict had been
+    honored. The card renders the verdict only when n >= min_sample
+    (50 by default) to avoid noise on tiny samples.
+    """
+    from monitoring import llm_filter_ab as lab
+    conn = db.init_db()
+    try:
+        overall = lab.summary(conn)
+        per_strategy = lab.summary_by_strategy(conn)
+    finally:
+        conn.close()
+    return jsonify({
+        "overall": overall,
+        "by_strategy": per_strategy,
+    })
+
+
 @app.route("/api/llm_filter_verdicts", methods=["GET"])
 def llm_filter_verdicts():
     """7.1.1 — most-recent LLM-filter shadow verdicts joined to signals.

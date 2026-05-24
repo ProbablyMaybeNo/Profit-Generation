@@ -1120,6 +1120,12 @@
     <div id="kelly-fractions" class="loading">loading...</div>
   </div>
 
+  <!-- LLM filter A/B (7.1.2) -->
+  <div class="card" id="llm-filter-ab-card">
+    <h2>llm filter · A/B verdict <span class="count" id="llm-ab-info"></span></h2>
+    <div id="llm-filter-ab" class="loading">loading...</div>
+  </div>
+
   <!-- Paper trades today -->
   <div class="card">
     <h2>auto-trader · paper orders today <span class="count" id="paper-count"></span></h2>
@@ -1752,6 +1758,51 @@ async function renderIntradayBarsLatest() {
     if (info) info.textContent = `${fresh} fresh · ${stale} stale · ${none} no-data`;
   } catch (e) {
     el.innerHTML = '<div class="empty">unable to load intraday bars: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function renderLlmFilterAb() {
+  const el = document.getElementById('llm-filter-ab');
+  const info = document.getElementById('llm-ab-info');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/llm_filter_ab', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const body = await r.json();
+    const overall = body.overall || {};
+    const byStrat = body.by_strategy || [];
+    if (!overall.verdict_available) {
+      el.innerHTML = `
+        <div class="empty">
+          insufficient sample: ${overall.n || 0} paired outcomes
+          (need ≥ 50 before verdict renders).
+        </div>`;
+      if (info) info.textContent = (overall.n || 0) + ' paired';
+      return;
+    }
+    const delta = (overall.delta_pct || 0);
+    const deltaCls = delta > 0 ? 'pos' : (delta < 0 ? 'neg' : '');
+    let h = `<div class="account-line">
+      <div class="pair"><span class="lbl">paired outcomes</span><span class="val">${overall.n}</span></div>
+      <div class="pair"><span class="lbl">live total %</span><span class="val">${(overall.live_total_pct || 0).toFixed(2)}</span></div>
+      <div class="pair"><span class="lbl">shadow total %</span><span class="val">${(overall.shadow_total_pct || 0).toFixed(2)}</span></div>
+      <div class="pair"><span class="lbl">delta %</span><span class="val ${deltaCls}">${delta > 0 ? '+' : ''}${delta.toFixed(2)}</span></div>
+      <div class="pair"><span class="lbl">sharpe delta</span><span class="val">${overall.sharpe_delta !== null && overall.sharpe_delta !== undefined ? overall.sharpe_delta.toFixed(3) : '—'}</span></div>
+    </div>`;
+    if (byStrat.length) {
+      h += '<details><summary>per-strategy breakdown (' + byStrat.length + ')</summary>';
+      h += '<table><thead><tr><th>strategy</th><th>n</th><th>live%</th><th>shadow%</th><th>delta%</th></tr></thead><tbody>';
+      for (const row of byStrat) {
+        const d = row.delta_pct || 0;
+        const cls = d > 0 ? 'pos' : (d < 0 ? 'neg' : '');
+        h += `<tr><td>${escapeHtml(row.strategy_id)}</td><td class="num">${row.n}</td><td class="num">${(row.live_total_pct || 0).toFixed(2)}</td><td class="num">${(row.shadow_total_pct || 0).toFixed(2)}</td><td class="num ${cls}">${d > 0 ? '+' : ''}${d.toFixed(2)}</td></tr>`;
+      }
+      h += '</tbody></table></details>';
+    }
+    el.innerHTML = h;
+    if (info) info.textContent = overall.n + ' paired · ' + byStrat.length + ' strategies';
+  } catch (e) {
+    el.innerHTML = '<div class="empty">unable to load LLM A/B: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
@@ -2772,6 +2823,7 @@ async function refresh() {
       () => renderNewsSentimentOverlay(),
       () => renderOpenPositions(s),
       () => renderKelly(s),
+      () => renderLlmFilterAb(),
       () => renderPaperTrades(s),
       () => renderIntradaySignals(s),
       () => renderSignals(s),
