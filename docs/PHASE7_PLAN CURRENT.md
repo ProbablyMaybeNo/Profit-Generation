@@ -143,7 +143,8 @@ per-strategy graduation flow — strategies that demonstrate stability
 over 200+ closed outcomes can promote from fractional to ½ Kelly
 proper, with a manual sign-off gate.
 
-- [ ] **7.4.1 Kelly tier promotion machinery**
+- [x] **7.4.1 Kelly tier promotion machinery**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** `monitoring/kelly_promotion.py` + new
     `kelly_tier` column on the strategies table.
   - **Acceptance:** background helper recomputes the current Kelly
