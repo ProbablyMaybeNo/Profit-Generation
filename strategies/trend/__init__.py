@@ -40,6 +40,7 @@ TREND_DECLARATIONS = [
         # parallel paper_trades_sar_overlay row whenever SAR would have
         # fired; live exit decision is unchanged.
         "sar_overlay": "shadow",
+        "intraday_confirm": "shadow",
     },
     {
         "id": "trend-ma-cross-20-50",
@@ -52,6 +53,7 @@ TREND_DECLARATIONS = [
         "active_on": ["SPY", "QQQ", "IWM"],
         "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
         "sar_overlay": "shadow",
+        "intraday_confirm": "shadow",
     },
     {
         "id": "trend-new-high-volume",
@@ -64,6 +66,7 @@ TREND_DECLARATIONS = [
         "active_on": ["SPY", "QQQ", "IWM"],
         "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
         "sar_overlay": "shadow",
+        "intraday_confirm": "shadow",
     },
 ]
 

@@ -414,6 +414,34 @@ _DDL = [
     "ON intraday_skips(recorded_at)",
     "CREATE INDEX IF NOT EXISTS idx_intraday_skips_gate_recorded "
     "ON intraday_skips(gate, recorded_at)",
+    # 7.5.4 — Intraday confirmation overlay shadow record. Captures what
+    # would have happened if a strategy's entry required a 1m close above
+    # the trigger price before order submission. The live entry path is
+    # unchanged — this table is observability only, for 30 days of A/B
+    # comparison vs. paper_trades' realized outcomes.
+    """
+    CREATE TABLE IF NOT EXISTS paper_trades_intraday_confirm (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at              TEXT NOT NULL,
+        strategy_id              TEXT NOT NULL,
+        symbol                   TEXT NOT NULL,
+        signal_id                INTEGER,
+        daily_signal_ts          TEXT NOT NULL,
+        trigger_price            REAL,
+        would_have_confirmed_at  TEXT,
+        hypothetical_entry_price REAL,
+        shadow_status            TEXT NOT NULL,
+        real_entry_price         REAL,
+        shadow_pnl_at_close      REAL,
+        real_pnl_at_close        REAL,
+        notes                    TEXT,
+        UNIQUE(strategy_id, symbol, daily_signal_ts)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_intraday_confirm_strategy "
+    "ON paper_trades_intraday_confirm(strategy_id)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_intraday_confirm_symbol "
+    "ON paper_trades_intraday_confirm(symbol)",
 ]
 
 

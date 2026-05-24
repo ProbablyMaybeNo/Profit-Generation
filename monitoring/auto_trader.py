@@ -451,6 +451,13 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
+    # 7.5.4 — Intraday confirmation overlay (shadow mode). Record what
+    # a 1m-close-above-trigger gate would have decided for this entry.
+    # Recorded BEFORE sizing/qty checks so even SKIP_PRICE entries still
+    # get a shadow observation. Never affects the live entry path.
+    _maybe_record_intraday_confirm_shadow(
+        conn, sig=sig, decl=decl, side="long",
+    )
     is_crypto = crypto_mod.is_crypto_symbol(sym)
     if is_crypto:
         max_pos_usd = crypto_mod.crypto_max_position_usd(settings)
@@ -1418,6 +1425,55 @@ def _maybe_record_llm_filter_shadow(
         return 1 if verdict else None
     except Exception as e:
         log(f"llm_filter shadow record failed (non-fatal): "
+            f"{type(e).__name__}", "WARNING")
+        return None
+
+
+def _maybe_record_intraday_confirm_shadow(
+    conn, *, sig, decl: Optional[Dict[str, Any]], side: str = "long",
+) -> Optional[int]:
+    """7.5.4 — observational intraday-confirmation shadow record.
+
+    When the strategy declaration opts in via ``intraday_confirm: "shadow"``,
+    read the day's 1m bars after the signal's bar_ts and record whether
+    a confirmation gate (close > trigger for long) would have fired.
+    **Never affects the live entry path** — caller never reads the
+    return value. Always wraps unexpected errors so a busted overlay
+    cannot break trading.
+    """
+    try:
+        from monitoring import intraday_confirm as ic
+        if not ic.strategy_has_intraday_confirm_shadow(decl):
+            return None
+        sid = sig["strategy_id"]
+        sym = sig["symbol"]
+        bar_ts = sig["bar_ts"]
+        trigger = sig["close"]
+        if trigger is None:
+            ic.record_intraday_confirm(
+                conn,
+                strategy_id=sid, symbol=sym,
+                daily_signal_ts=bar_ts,
+                trigger_price=None,
+                signal_id=sig["id"] if "id" in sig.keys() else None,
+                side=side,
+                bars=None,
+            )
+            return None
+        bars = ic.fetch_intraday_bars(
+            conn, symbol=sym, after_ts_utc=str(bar_ts),
+        )
+        return ic.record_intraday_confirm(
+            conn,
+            strategy_id=sid, symbol=sym,
+            daily_signal_ts=str(bar_ts),
+            trigger_price=float(trigger),
+            signal_id=sig["id"] if "id" in sig.keys() else None,
+            side=side,
+            bars=bars,
+        )
+    except Exception as e:
+        log(f"intraday_confirm shadow record failed (non-fatal): "
             f"{type(e).__name__}", "WARNING")
         return None
 
