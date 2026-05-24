@@ -290,7 +290,8 @@ would have hidden behind better quality.
   - **Why a starter triple, not 20:** Ross's plan called this out
     explicitly — start with 2-3, observe, expand only when those work.
 
-- [ ] **7.5.6 EOD intraday report + LLM filter activation**
+- [x] **7.5.6 EOD intraday report + LLM filter activation**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** `monitoring/intraday_eod_report.py` + flips
     `settings.llm_filter.enabled` to true (with API key configured).
   - **Acceptance:** end-of-day report drinks the day's `intraday_bars`,
