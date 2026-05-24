@@ -1384,12 +1384,15 @@ def _maybe_record_llm_filter_shadow(
     conn, *, sig, market_context: Dict[str, Any],
     asof: Optional[date],
     settings: Dict,
-) -> Optional[int]:
+) -> Optional[Dict[str, Any]]:
     """7.1.1 — observational LLM-filter shadow record.
 
     For every fire auto_trader sees, ask the LLM filter for a verdict
-    and persist it to ``paper_trades_llm_filter``. **Never affects the
-    live exit/entry decision** — caller never reads the return value.
+    and persist it to ``paper_trades_llm_filter``. Returns the verdict
+    dict so 7.1.3 callers can optionally consume it when
+    ``auto_trade.llm_filter_live`` is true. The persisted shadow row
+    is written regardless of whether the verdict is consumed.
+
     Always fail-open; helper itself swallows any unexpected error so a
     busted filter cannot break trading.
     """
@@ -1422,11 +1425,54 @@ def _maybe_record_llm_filter_shadow(
             model=model, daily_cap=daily_cap,
             timeout_sec=timeout,
         )
-        return 1 if verdict else None
+        return verdict
     except Exception as e:
         log(f"llm_filter shadow record failed (non-fatal): "
             f"{type(e).__name__}", "WARNING")
         return None
+
+
+LLM_FILTER_LIVE_SKIP_GATE = "llm_filter_skip"
+LLM_FILTER_DOWNSIZE_FACTOR = 0.5
+
+
+def _llm_filter_live_action(
+    *, settings: Dict, verdict: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """7.1.3 — derive the consume action from an LLM verdict.
+
+    Returns a dict with keys:
+      - action: "skip" | "downsize" | "pass"
+      - qty_multiplier: float (only meaningful when action == "downsize")
+      - reason: short string for skip/downsize logging
+
+    When ``auto_trade.llm_filter_live`` is false (default), this always
+    returns ``action='pass'`` regardless of verdict — the filter is
+    observed but not consumed.
+    """
+    auto = (settings.get("auto_trade") or {})
+    if not bool(auto.get("llm_filter_live", False)):
+        return {"action": "pass", "qty_multiplier": 1.0, "reason": "filter_off"}
+    if not isinstance(verdict, dict):
+        return {"action": "pass", "qty_multiplier": 1.0, "reason": "no_verdict"}
+    # Fail-open verdicts (failure_mode is non-None) always pass.
+    if (verdict.get("rationale") or "").startswith("fail-open"):
+        return {"action": "pass", "qty_multiplier": 1.0,
+                "reason": "fail_open_passthrough"}
+    v = (verdict.get("verdict") or "").lower()
+    if v == "skip":
+        return {
+            "action": "skip", "qty_multiplier": 0.0,
+            "reason": (verdict.get("rationale") or "llm verdict=skip")[:200],
+        }
+    if v == "downsize":
+        return {
+            "action": "downsize",
+            "qty_multiplier": LLM_FILTER_DOWNSIZE_FACTOR,
+            "reason": (verdict.get("rationale") or "llm verdict=downsize")[:200],
+        }
+    return {"action": "pass", "qty_multiplier": 1.0,
+            "reason": (verdict.get("rationale") or "allow")[:200]}
 
 
 def _maybe_record_intraday_confirm_shadow(
@@ -2421,6 +2467,10 @@ def process_signals(
     )
     llm_filter_market_context: Dict[str, Any] = {}
     llm_filter_market_context_loaded = False
+    # 7.1.3 — when settings.auto_trade.llm_filter_live is True, the
+    # verdict the filter returns is consumed in the live decision path.
+    # Default is False; the filter remains strict-shadow.
+    llm_filter_verdicts: Dict[int, Dict[str, Any]] = {}
     for sig in sigs:
         sig_src = _skip_source_for_bar_interval(
             sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
@@ -2435,12 +2485,14 @@ def process_signals(
                 except Exception:
                     llm_filter_market_context = {}
                 llm_filter_market_context_loaded = True
-            _maybe_record_llm_filter_shadow(
+            verdict = _maybe_record_llm_filter_shadow(
                 conn, sig=sig,
                 market_context=llm_filter_market_context,
                 asof=asof,
                 settings=settings,
             )
+            if verdict and "id" in sig.keys():
+                llm_filter_verdicts[sig["id"]] = verdict
         if sig["signal_type"] == "long_entry":
             if kill_switch_engaged:
                 if not kill_switch_logged:
@@ -2748,16 +2800,44 @@ def process_signals(
                     "reason": _reason_cap,
                 })
                 continue
+            # 7.1.3 — consume the LLM filter verdict iff llm_filter_live=true.
+            # Skip blocks the entry entirely (with intraday_skips row);
+            # downsize halves qty via throttle_multiplier; allow / fail-open
+            # pass through unchanged.
+            llm_action = _llm_filter_live_action(
+                settings=settings,
+                verdict=llm_filter_verdicts.get(sig["id"]),
+            )
+            if llm_action["action"] == "skip":
+                _record_skip(
+                    conn, sig=sig, gate=LLM_FILTER_LIVE_SKIP_GATE,
+                    reason_detail=llm_action["reason"],
+                    source=sig_src,
+                )
+                actions.append({
+                    "action": "SKIP_LLM_FILTER",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                    "reason": llm_action["reason"],
+                })
+                continue
+            local_throttle = throttle_multiplier * float(
+                llm_action["qty_multiplier"]
+            )
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
                 data_client=data_client,
                 portfolio_value=portfolio_value,
                 bars_fetcher=bars_fetcher,
-                throttle_multiplier=throttle_multiplier,
+                throttle_multiplier=local_throttle,
                 market_regime=current_regime,
                 tracked_strategies=regime_tracked,
             )
+            if llm_action["action"] == "downsize":
+                entry_action["llm_filter_downsize"] = True
+                entry_action["llm_filter_reason"] = llm_action["reason"]
             actions.append(entry_action)
             if entry_action.get("action") in ("BUY", "DRY_BUY"):
                 entries_submitted_this_run += 1
