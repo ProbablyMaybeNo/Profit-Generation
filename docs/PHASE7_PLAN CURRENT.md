@@ -203,7 +203,7 @@ would have hidden behind better quality.
     saturate the connection. Expand by editing the universe in
     7.5.5 once the listener proves stable.
 
-- [ ] **7.5.2 Skip-reason logging retrofitted to the existing risk gate**
+- [x] **7.5.2 Skip-reason logging retrofitted to the existing risk gate**
   - **Deliverable:** new `intraday_skips` table + edits to
     `monitoring/auto_trader.py` everywhere a fire is silently dropped.
     No new module — pure retrofit.
