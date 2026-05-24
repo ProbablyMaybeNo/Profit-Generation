@@ -246,7 +246,8 @@ would have hidden behind better quality.
 
 ### Workstream B — Strategy integration (opt-in, shadow-first)
 
-- [ ] **7.5.4 Intraday confirmation overlay — shadow mode**
+- [x] **7.5.4 Intraday confirmation overlay — shadow mode**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** `monitoring/intraday_confirm.py` + a new
     `paper_trades_intraday_confirm` parallel table.
   - **Acceptance:** mirrors 6.4.2 SAR overlay pattern exactly. Any
