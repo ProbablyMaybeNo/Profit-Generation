@@ -227,7 +227,8 @@ would have hidden behind better quality.
     can't tell which gate is biting hardest without spelunking the
     auto_trader code path. After 7.5.2, every drop is queryable.
 
-- [ ] **7.5.3 Dashboard cards: live feed status, intraday bars, skip reasons**
+- [x] **7.5.3 Dashboard cards: live feed status, intraday bars, skip reasons**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Deliverable:** new dashboard panel section in `dashboard/index.html`
     + supporting routes in `dashboard/server.py`.
   - **Acceptance:** three new cards on the existing dashboard:
