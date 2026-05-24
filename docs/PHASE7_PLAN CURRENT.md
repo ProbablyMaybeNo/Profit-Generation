@@ -77,7 +77,8 @@ filter touches live PnL.
     canonical patterns; this milestone should include caching from
     day one, not as a follow-up.
 
-- [ ] **7.1.2 LLM filter A/B aggregation**
+- [x] **7.1.2 LLM filter A/B aggregation**
+  - **Completed:** 2026-05-24 by milestone-builder
   - **Sequencing note (2026-05-22):** §7.1.2 is paused behind §7.5
     (Live intraday data layer). The LLM filter has nothing
     intraday-relevant to evaluate until 7.5.5 ships 1m-native
