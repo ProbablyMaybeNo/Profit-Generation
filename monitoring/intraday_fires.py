@@ -28,6 +28,24 @@ from monitoring.strategy_fires import _resolve_compute_fn
 
 DEFAULT_LOOKBACK_BARS = 200
 
+# 7.6 fix: the runner fires every 15 minutes. When a strategy's bar
+# interval is shorter than the runner cadence, checking only the most
+# recent bar misses signals that fired on intervening bars. The scan
+# window is the number of most-recent bars to evaluate per run; the
+# UNIQUE(strategy_id, symbol, bar_ts, bar_interval, signal_type)
+# constraint on the signals table dedupes any overlap across runs.
+# 15m and longer keep the original 1-bar behavior (zero behavior change
+# for those strategies).
+SCAN_WINDOWS = {
+    "1m": 20,
+    "5m": 5,
+    "15m": 1,
+    "30m": 1,
+    "1h": 1,
+    "4h": 1,
+}
+DEFAULT_SCAN_WINDOW = 1
+
 
 def _in_window(now: datetime, window) -> bool:
     """Check `now` (ET clock) against an `active_in_window` declaration.
@@ -135,44 +153,53 @@ def check_intraday_fires(
                         continue
                     if signals is None or signals.empty:
                         continue
-                    last = signals.iloc[-1]
-                    bar_ts = signals.index[-1]
-                    if isinstance(bar_ts, pd.Timestamp):
-                        bar_ts_iso = bar_ts.isoformat()
-                    else:
-                        bar_ts_iso = str(bar_ts)
-                    close = float(last.get("close", df["close"].iloc[-1]))
+                    scan_n = SCAN_WINDOWS.get(interval, DEFAULT_SCAN_WINDOW)
+                    window_df = signals.tail(scan_n)
                     extra = {
                         "asof": asof.isoformat(timespec="seconds"),
                         "source": "intraday_fires",
                         "bar_interval": interval,
                     }
-                    if bool(last.get("long_entry", False)):
-                        sig_id = db.record_signal(
-                            conn,
-                            strategy_id=sid, symbol=symbol,
-                            bar_ts=bar_ts_iso, signal_type="long_entry",
-                            close=close, bar_interval=interval, extra=extra,
-                        )
-                        fires.append({
-                            "strategy_id": sid, "symbol": symbol,
-                            "bar_ts": bar_ts_iso, "bar_interval": interval,
-                            "signal_type": "long_entry", "close": close,
-                            "signal_id": sig_id,
-                        })
-                    if bool(last.get("long_exit", False)):
-                        sig_id = db.record_signal(
-                            conn,
-                            strategy_id=sid, symbol=symbol,
-                            bar_ts=bar_ts_iso, signal_type="long_exit",
-                            close=close, bar_interval=interval, extra=extra,
-                        )
-                        fires.append({
-                            "strategy_id": sid, "symbol": symbol,
-                            "bar_ts": bar_ts_iso, "bar_interval": interval,
-                            "signal_type": "long_exit", "close": close,
-                            "signal_id": sig_id,
-                        })
+                    for i in range(len(window_df)):
+                        row = window_df.iloc[i]
+                        bar_ts = window_df.index[i]
+                        if isinstance(bar_ts, pd.Timestamp):
+                            bar_ts_iso = bar_ts.isoformat()
+                        else:
+                            bar_ts_iso = str(bar_ts)
+                        close = float(row.get("close", df["close"].iloc[-1]))
+                        if bool(row.get("long_entry", False)):
+                            sig_id = db.record_signal(
+                                conn,
+                                strategy_id=sid, symbol=symbol,
+                                bar_ts=bar_ts_iso,
+                                signal_type="long_entry",
+                                close=close, bar_interval=interval,
+                                extra=extra,
+                            )
+                            fires.append({
+                                "strategy_id": sid, "symbol": symbol,
+                                "bar_ts": bar_ts_iso,
+                                "bar_interval": interval,
+                                "signal_type": "long_entry",
+                                "close": close, "signal_id": sig_id,
+                            })
+                        if bool(row.get("long_exit", False)):
+                            sig_id = db.record_signal(
+                                conn,
+                                strategy_id=sid, symbol=symbol,
+                                bar_ts=bar_ts_iso,
+                                signal_type="long_exit",
+                                close=close, bar_interval=interval,
+                                extra=extra,
+                            )
+                            fires.append({
+                                "strategy_id": sid, "symbol": symbol,
+                                "bar_ts": bar_ts_iso,
+                                "bar_interval": interval,
+                                "signal_type": "long_exit",
+                                "close": close, "signal_id": sig_id,
+                            })
         return fires
     finally:
         if own_conn:

@@ -252,3 +252,132 @@ def test_in_window_helper():
     assert f(datetime(2026, 5, 14, 10, 31), "09:35-10:30") is False
     assert f(datetime(2026, 5, 14, 14, 0),  None) is True
     assert f(datetime(2026, 5, 14, 14, 0),  "bogus") is True
+
+
+def _bars_signal_at(
+    n: int, signal_indices: list, interval_min: int = 1,
+) -> pd.DataFrame:
+    idx = pd.date_range(
+        start="2026-05-14 09:30", periods=n, freq=f"{interval_min}min",
+    )
+    df = pd.DataFrame({
+        "open":   [100.0] * n,
+        "high":   [100.5] * n,
+        "low":    [99.5] * n,
+        "close":  [100.0] * n,
+        "volume": [10_000.0] * n,
+    }, index=idx)
+    long_entry = [False] * n
+    for i in signal_indices:
+        long_entry[i] = True
+    df["long_entry"] = long_entry
+    df["long_exit"] = [False] * n
+    return df
+
+
+def _install_fake_compute(monkeypatch, name: str, df_to_return: pd.DataFrame):
+    def _fake_resolver(compute_name):
+        if compute_name == name:
+            return lambda df: df_to_return
+        raise ValueError(compute_name)
+    monkeypatch.setattr(ifires, "_resolve_compute_fn", _fake_resolver)
+
+
+def test_scan_window_catches_1m_signal_not_at_last_bar(
+    isolated_db, monkeypatch,
+):
+    _seed_strategies(["intraday-1m-test"])
+    decls = [_decl("intraday-1m-test", "compute_fake_1m", "1m", ["SPY"])]
+    bars = _bars_signal_at(60, signal_indices=[55], interval_min=1)
+    _install_fake_compute(monkeypatch, "compute_fake_1m", bars)
+    fires = ifires.check_intraday_fires(
+        asof=datetime(2026, 5, 14, 10, 30),
+        declarations=decls,
+        bar_loader=lambda symbols, interval, lookback, *, now: {
+            s: bars.drop(columns=["long_entry", "long_exit"]) for s in symbols
+        },
+    )
+    entries = [f for f in fires if f["signal_type"] == "long_entry"
+               and f["signal_id"] is not None]
+    assert len(entries) == 1
+    assert entries[0]["bar_interval"] == "1m"
+
+
+def test_scan_window_emits_multiple_signals_within_window(
+    isolated_db, monkeypatch,
+):
+    _seed_strategies(["intraday-1m-test"])
+    decls = [_decl("intraday-1m-test", "compute_fake_1m", "1m", ["SPY"])]
+    bars = _bars_signal_at(
+        60, signal_indices=[45, 50, 55, 59], interval_min=1,
+    )
+    _install_fake_compute(monkeypatch, "compute_fake_1m", bars)
+    fires = ifires.check_intraday_fires(
+        asof=datetime(2026, 5, 14, 10, 30),
+        declarations=decls,
+        bar_loader=lambda symbols, interval, lookback, *, now: {
+            s: bars.drop(columns=["long_entry", "long_exit"]) for s in symbols
+        },
+    )
+    entries = [f for f in fires if f["signal_type"] == "long_entry"
+               and f["signal_id"] is not None]
+    assert len(entries) == 4
+
+
+def test_scan_window_15m_unchanged_only_checks_last_bar(
+    isolated_db, monkeypatch,
+):
+    _seed_strategies(["intraday-15m-test"])
+    decls = [_decl("intraday-15m-test", "compute_fake_15m", "15m", ["SPY"])]
+    bars = _bars_signal_at(40, signal_indices=[37], interval_min=15)
+    _install_fake_compute(monkeypatch, "compute_fake_15m", bars)
+    fires = ifires.check_intraday_fires(
+        asof=datetime(2026, 5, 14, 14, 0),
+        declarations=decls,
+        bar_loader=lambda symbols, interval, lookback, *, now: {
+            s: bars.drop(columns=["long_entry", "long_exit"]) for s in symbols
+        },
+    )
+    entries = [f for f in fires if f["signal_type"] == "long_entry"
+               and f["signal_id"] is not None]
+    assert entries == []
+
+
+def test_scan_window_dedupes_across_overlapping_runs(
+    isolated_db, monkeypatch,
+):
+    _seed_strategies(["intraday-1m-test"])
+    decls = [_decl("intraday-1m-test", "compute_fake_1m", "1m", ["SPY"])]
+    bars = _bars_signal_at(60, signal_indices=[50, 55], interval_min=1)
+    _install_fake_compute(monkeypatch, "compute_fake_1m", bars)
+    loader = lambda symbols, interval, lookback, *, now: {  # noqa: E731
+        s: bars.drop(columns=["long_entry", "long_exit"]) for s in symbols
+    }
+    a = ifires.check_intraday_fires(
+        asof=datetime(2026, 5, 14, 10, 30),
+        declarations=decls, bar_loader=loader,
+    )
+    b = ifires.check_intraday_fires(
+        asof=datetime(2026, 5, 14, 10, 30),
+        declarations=decls, bar_loader=loader,
+    )
+    a_ids = [f["signal_id"] for f in a
+             if f["signal_type"] == "long_entry" and f["signal_id"]]
+    b_ids = [f["signal_id"] for f in b
+             if f["signal_type"] == "long_entry" and f["signal_id"]]
+    assert len(a_ids) == 2
+    assert len(b_ids) == 0
+    conn = db.connect(isolated_db)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE bar_interval='1m' "
+        "AND signal_type='long_entry'"
+    ).fetchone()[0]
+    conn.close()
+    assert n == 2
+
+
+def test_scan_windows_table_default_for_unknown_interval():
+    assert ifires.SCAN_WINDOWS["1m"] == 20
+    assert ifires.SCAN_WINDOWS["5m"] == 5
+    assert ifires.SCAN_WINDOWS["15m"] == 1
+    assert ifires.DEFAULT_SCAN_WINDOW == 1
