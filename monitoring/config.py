@@ -81,6 +81,26 @@ INTRADAY_ORB_DECLARATIONS = [
 # existing strategies via the standard auto_trader paper path;
 # max_position_usd capped at 20% of normal ($200) while the new
 # strategies prove themselves.
+#
+# 7.6 — Universe expanded from [SPY, QQQ, IWM] to 20 liquid names.
+# Strategies fetch bars via Alpaca REST (load_intraday_bars), not via
+# the IEX WebSocket — so universe expansion does not increase IEX
+# bandwidth pressure (TRACKED_STOCKS stays at 3). Cap math: 20 names
+# × 3 strategies × $200 = $12K maximum simultaneous exposure, leaves
+# $88K for EOD swing entries.
+INTRADAY_1M_UNIVERSE = [
+    # Index ETFs (broad-market reflexivity)
+    "SPY", "QQQ", "IWM",
+    # Sector ETFs (correlated baskets, clean opens)
+    "XLK", "SMH", "XLE", "XBI", "KRE", "GDX",
+    # Large-cap tech (liquid, volatile, clean breakouts)
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA",
+    # Semis individual (high beta, clean momentum)
+    "AMD", "AVGO",
+    # High-vol growth
+    "NFLX", "COIN",
+]
+
 INTRADAY_1M_DECLARATIONS = [
     {
         "id": "intraday-1m-orb",
@@ -88,7 +108,7 @@ INTRADAY_1M_DECLARATIONS = [
         "module": "strategies.intraday.orb_1m",
         "strategy_class": "breakout",
         "bar_interval": "1m",
-        "active_on": ["SPY", "QQQ", "IWM"],
+        "active_on": list(INTRADAY_1M_UNIVERSE),
         "active_in_window": ["09:35-15:55 ET"],
         "grace_period": True,
         "pyramidable": False,
@@ -100,7 +120,7 @@ INTRADAY_1M_DECLARATIONS = [
         "module": "strategies.intraday.momentum_1m",
         "strategy_class": "momentum",
         "bar_interval": "1m",
-        "active_on": ["SPY", "QQQ", "IWM"],
+        "active_on": list(INTRADAY_1M_UNIVERSE),
         "grace_period": True,
         "pyramidable": False,
         "max_position_usd": 200,
@@ -111,7 +131,7 @@ INTRADAY_1M_DECLARATIONS = [
         "module": "strategies.intraday.vwap_reclaim_1m",
         "strategy_class": "mean_reversion",
         "bar_interval": "1m",
-        "active_on": ["SPY", "QQQ", "IWM"],
+        "active_on": list(INTRADAY_1M_UNIVERSE),
         "grace_period": True,
         "pyramidable": False,
         "max_position_usd": 200,
