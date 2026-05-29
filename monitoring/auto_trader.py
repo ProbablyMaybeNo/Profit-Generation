@@ -117,9 +117,17 @@ def _record_skip(
 
 
 def _config() -> dict:
-    s = load_settings().get("auto_trade", {})
+    raw = load_settings()
+    s = raw.get("auto_trade", {})
     out = dict(DEFAULT_SETTINGS)
     out.update({k: v for k, v in s.items() if not k.startswith("_")})
+    # The engine reads these sibling blocks off the same settings dict
+    # (settings.get("stops"/"kelly"/"trailing_stop"/"risk")), but they live
+    # at the top level of settings.json. Merge them in so the live path
+    # actually sees them — without clobbering an explicit auto_trade key.
+    for block in ("stops", "kelly", "trailing_stop", "risk"):
+        if block in raw and block not in out:
+            out[block] = raw[block]
     return out
 
 
@@ -357,6 +365,48 @@ def _mid_price(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
     if bid <= 0 or ask <= 0 or ask < bid:
         return None
     return round((bid + ask) / 2.0, 4)
+
+
+def _build_default_bars_fetcher(*, lookback_bars: int = 60) -> Callable:
+    """Lazy per-symbol daily-bars fetcher backed by monitoring.wide_bars.
+
+    Returns a callable ``symbol -> list[dict(open/high/low/close/volume)]``
+    (oldest bar first), or ``[]`` on any failure. Without this, the live
+    entry point passes ``bars_fetcher=None`` and every ATR-stop / trailing-
+    stop path silently no-ops. Fetches are cached per symbol within the run
+    so a symbol that's both signalled and held is fetched once.
+    """
+    from monitoring import wide_bars
+    cache: Dict[str, List[dict]] = {}
+
+    def fetcher(symbol: str) -> List[dict]:
+        sym = (symbol or "").upper()
+        if not sym:
+            return []
+        if sym in cache:
+            return cache[sym]
+        rows: List[dict] = []
+        try:
+            frames = wide_bars.fetch_wide_daily_bars(
+                [sym], lookback_bars=lookback_bars)
+            df = frames.get(sym)
+            if df is not None and not getattr(df, "empty", True):
+                for _, r in df.iterrows():
+                    rows.append({
+                        "open": float(r["open"]),
+                        "high": float(r["high"]),
+                        "low": float(r["low"]),
+                        "close": float(r["close"]),
+                        "volume": float(r["volume"]) if "volume" in r else 0.0,
+                    })
+        except Exception as e:
+            log(f"bars_fetcher: daily bars fetch failed for {sym}: {e}",
+                "WARNING")
+            rows = []
+        cache[sym] = rows
+        return rows
+
+    return fetcher
 
 
 def _normalize_order_type(raw) -> str:
@@ -2311,6 +2361,14 @@ def process_signals(
     if client is None and not dry_run:
         client = client_factory()
 
+    # Wire a default daily-bars fetcher for the live path when the caller
+    # didn't supply one. ATR initial stops and the trailing-stop engine both
+    # need bars; without this they no-op. Built only for real runs (dry-run
+    # and tests pass their own fetcher or have no stop/trailing config, so a
+    # lazily-built fetcher is never invoked there).
+    if bars_fetcher is None and not dry_run:
+        bars_fetcher = _build_default_bars_fetcher()
+
     live_set = _live_strategies(settings)
     if live_client_factory is None:
         live_client_factory = lambda: get_alpaca_client(live=True)
@@ -2339,7 +2397,8 @@ def process_signals(
     # concentration cap, AND by the daily drawdown circuit breaker. We
     # fetch the account summary once per pipeline invocation so all three
     # consumers see the same number.
-    needs_kelly = str(settings.get("sizing_method") or "").lower() == "kelly"
+    needs_kelly = str(settings.get("sizing_method") or "").lower() in (
+        "kelly", "kelly_quarter")
     has_cap_setting = (settings.get("risk") or {}).get("max_pct_per_symbol") \
         is not None or "max_pct_per_symbol" in settings
     has_drawdown_setting = (settings.get("risk") or {}).get(

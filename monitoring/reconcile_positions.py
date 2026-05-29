@@ -234,11 +234,14 @@ def reconcile(*,
               send_fn: Optional[Callable] = None,
               save_path: Optional[Path] = None,
               now_fn: Optional[Callable] = None,
-              alert: bool = True) -> Dict:
-    """End-to-end run: pull both sides, compute drift, persist snapshot,
-    alert on drift. Returns the full result dict.
+              alert: bool = True,
+              sync_fills: bool = True) -> Dict:
+    """End-to-end run: backfill broker fills, pull both sides, compute drift,
+    persist snapshot, alert on drift. Returns the full result dict.
 
-    All side-effects are pluggable for tests.
+    All side-effects are pluggable for tests. When `alpaca_positions_fn` is
+    supplied (test path), the broker fill-sync is skipped — tests stub the
+    position view directly and never touch a live order endpoint.
     """
     now_fn = now_fn or _utc_now_iso
     own_conn = False
@@ -246,6 +249,21 @@ def reconcile(*,
         conn = db.init_db()
         own_conn = True
     try:
+        # Backfill fills from the broker BEFORE measuring drift so the
+        # comparison runs on corrected data. Orders submitted as 'accepted'
+        # get their real status / fill_price / filled_at here.
+        if sync_fills and alpaca_positions_fn is None:
+            try:
+                from config.utils import get_alpaca_client
+                from monitoring import order_sync
+                client = client or get_alpaca_client()
+                sync_res = order_sync.sync_order_fills(conn, client)
+                if sync_res.get("updated"):
+                    log(f"reconcile: order_sync updated {sync_res['updated']} "
+                        f"row(s), {sync_res['filled']} newly filled", "INFO")
+            except Exception as e:
+                log(f"reconcile: order_sync skipped ({type(e).__name__}: {e})",
+                    "WARNING")
         db_pos = db_open_positions(conn)
     finally:
         if own_conn:

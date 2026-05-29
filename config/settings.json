@@ -23,9 +23,10 @@
     "min_mean_ret_pct": 0.0,
     "min_sharpe_ish": 0.1,
     "max_position_usd": 1000,
+    "sizing_method": "kelly_quarter",
     "skip_intraday_signals": true,
     "intraday_enabled": true,
-    "intraday_intervals": ["15m"],
+    "intraday_intervals": ["1m", "5m", "15m"],
     "cool_down_losers": 3,
     "cool_down_days": 5,
     "earnings_veto_days": 2,
@@ -64,6 +65,12 @@
     "max_position_fraction": 0.05,
     "min_samples": 50,
     "_notes": "6.2.2 — Fractional Kelly sizing tier. Activated per-strategy by setting auto_trade.sizing_method='kelly_quarter'. fraction_of_kelly (default 0.25 = ¼ Kelly) is multiplied against the raw Kelly fraction; code hard-clamps this at 0.5 (½ Kelly) so config typos can never push to full Kelly. max_position_fraction (default 0.05 = 5%) caps any single position as a fraction of portfolio. min_samples (default 50) is the closed-outcome guard — below it, sizing falls back to the tiered (3.2.1) tier. Ross can promote a strategy to fraction_of_kelly=0.5 after it accumulates 200+ closed outcomes."
+  },
+  "trailing_stop": {
+    "method": "atr_trail",
+    "multiplier": 3.0,
+    "atr_period": 14,
+    "_notes": "6.4 — Global trailing-stop policy. method one of {atr_trail, chandelier, percent_trail}. atr_trail: stop = highest_high_since_entry − (multiplier × ATR_14), ratcheting up only (never loosens). multiplier 3.0 gives the trade room above the tighter 2.5× ATR initial stop. Floored against the entry-time ATR stop so it can never slip below the initial protective level. Per-strategy overrides go in that strategy's TRACKED_STRATEGIES declaration under `trailing_stop`. Requires a bars_fetcher in the live path (wired in auto_trader.process_signals). Set method to null to disable."
   },
   "notes": "These are non-secret settings. Edit freely."
 }
