@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from datetime import datetime, time as dt_time
 from typing import Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+MARKET_TZ = ZoneInfo("America/New_York")
 
 import pandas as pd
 
@@ -105,7 +108,11 @@ def check_intraday_fires(
     per fire detected, including duplicates that were prevented by the
     UNIQUE constraint (signal_id will be None for those).
     """
-    asof = asof or datetime.now()
+    # ET-aware "now" so the active_in_window gate compares against the
+    # Eastern market clock (window strings are "HH:MM-HH:MM ET") and the bar
+    # loader derives the correct UTC fetch window. A caller-supplied asof
+    # (tests) is honored verbatim.
+    asof = asof or datetime.now(MARKET_TZ)
     declarations = (declarations if declarations is not None
                     else TRACKED_STRATEGIES)
     targets = intraday_strategies(declarations)

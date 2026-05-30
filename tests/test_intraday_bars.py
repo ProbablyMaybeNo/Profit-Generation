@@ -3,8 +3,9 @@ test_intraday_bars.py — 5.1.1: load_intraday_bars cache + shape behaviour.
 """
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -183,3 +184,31 @@ def test_last_closed_bar_ts_floors_correctly():
     assert f(datetime(2026, 5, 14, 9, 45), "15m") == datetime(2026, 5, 14, 9, 45)
     assert f(datetime(2026, 5, 14, 10, 59), "1h") == datetime(2026, 5, 14, 10, 0)
     assert f(datetime(2026, 5, 14, 11, 0),  "1h") == datetime(2026, 5, 14, 11, 0)
+
+
+def test_iso_to_utc_respects_offset_vs_naive():
+    """Naive strings are assumed UTC (daily path); tz-aware strings convert by
+    their real offset (the intraday-window fix)."""
+    naive = bt_data._iso_to_utc("2026-05-29T19:59:00")
+    assert naive == datetime(2026, 5, 29, 19, 59, tzinfo=timezone.utc)
+    et = bt_data._iso_to_utc("2026-05-29T15:59:00-04:00")
+    assert et == datetime(2026, 5, 29, 19, 59, tzinfo=timezone.utc)
+
+
+def test_tz_aware_now_builds_utc_session_window():
+    """Regression: an ET-aware `now` during the live session must fetch a
+    window that ends in the session, not shifted to premarket by the box's
+    UTC offset. Previously the naive-PDT wall-clock was stamped UTC downstream,
+    pulling premarket bars during RTH and starving intraday strategies."""
+    captured = {}
+
+    def fetcher(symbol, start, end, interval):
+        captured["start"], captured["end"] = start, end
+        return pd.DataFrame()
+
+    asof_et = datetime(2026, 5, 29, 15, 58, tzinfo=ZoneInfo("America/New_York"))
+    bt_data.load_intraday_bars(["SPY"], "1m", 60, now=asof_et, fetcher=fetcher)
+    end_utc = bt_data._iso_to_utc(captured["end"])
+    end_et = end_utc.astimezone(ZoneInfo("America/New_York"))
+    # Window ends within the RTH session (09:30–16:00 ET), not premarket.
+    assert end_et.hour == 15 and end_et.minute == 59

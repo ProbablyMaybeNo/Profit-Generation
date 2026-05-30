@@ -43,6 +43,17 @@ def _download_one_yf(symbol: str, start: str, end: str, interval: str) -> pd.Dat
     return df[["open", "high", "low", "close", "volume"]]
 
 
+def _iso_to_utc(s: str) -> datetime:
+    """Parse an ISO timestamp to an aware UTC datetime. A tz-aware string
+    (e.g. the intraday window built from ET-aware `now`) is converted by its
+    real offset; a naive string (the daily date path) is assumed UTC, which
+    preserves the long-standing behaviour for whole-day windows."""
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 @cached(ttl=24 * 3600, namespace="bars.alpaca")
 def _download_one_alpaca(symbol: str, start: str, end: str, interval: str) -> pd.DataFrame:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -60,8 +71,8 @@ def _download_one_alpaca(symbol: str, start: str, end: str, interval: str) -> pd
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=tf,
-        start=datetime.fromisoformat(start).replace(tzinfo=timezone.utc),
-        end=datetime.fromisoformat(end).replace(tzinfo=timezone.utc),
+        start=_iso_to_utc(start),
+        end=_iso_to_utc(end),
         feed="iex",
     )
     bars = client.get_stock_bars(req)
@@ -188,7 +199,16 @@ def load_intraday_bars(
     if lookback_bars <= 0:
         raise ValueError(f"lookback_bars must be positive, got {lookback_bars}")
 
-    now = now or datetime.now()
+    now = now or datetime.now(timezone.utc)
+    # A tz-aware `now` (the live path passes ET-aware time) is carried in UTC
+    # so the start/end window strings are absolute. Without this, a naive
+    # local wall-clock gets stamped UTC downstream and shifts the fetch window
+    # by the machine's offset — on a PDT box that pulled premarket bars during
+    # the live session, starving every intraday strategy of RTH data. Naive
+    # `now` is left untouched so the unit suite's relative cache-bucket
+    # behaviour is unchanged.
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc)
     bar_close_ts = _last_closed_bar_ts(now, interval)
     bar_minutes = _INTERVAL_MINUTES[interval]
     cache_ttl = bar_minutes * 60.0
