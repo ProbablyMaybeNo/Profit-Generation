@@ -470,7 +470,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     bars_fetcher: Optional[Callable] = None,
                     throttle_multiplier: float = 1.0,
                     market_regime: Optional[str] = None,
-                    tracked_strategies: Optional[List[dict]] = None) -> dict:
+                    tracked_strategies: Optional[List[dict]] = None,
+                    remaining_bp_budget: Optional[float] = None) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
@@ -598,6 +599,25 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "price": sig["close"], "max_usd": max_pos_usd,
                 "sizing": sizing}
 
+    # Aggregate buying-power guard. The caller tracks notional committed
+    # across this run and passes what's left of the account's spendable
+    # budget; refuse the entry rather than fire an order the broker would
+    # reject for insufficient buying power. None → unbounded (dry-run /
+    # no account summary).
+    order_notional = qty * float(sig["close"] or 0)
+    if (remaining_bp_budget is not None
+            and order_notional > remaining_bp_budget + 1e-6):
+        _record_skip(
+            conn, sig=sig, gate="buying_power",
+            reason_detail=(f"order notional ${order_notional:.2f} exceeds "
+                           f"remaining budget ${remaining_bp_budget:.2f}"),
+            source=_src,
+        )
+        return {"action": "SKIP_BUYING_POWER", "strategy_id": sid, "symbol": sym,
+                "order_notional": round(order_notional, 2),
+                "remaining_bp_budget": round(remaining_bp_budget, 2),
+                "sizing": sizing}
+
     offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
     target_utc = (
         _target_execution_utc(asof or date.today(), offset_min)
@@ -653,6 +673,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "INFO")
         return {"action": "DRY_BUY", "strategy_id": sid, "symbol": sym,
                 "qty": qty, "price": sig["close"], "signal_id": sig["id"],
+                "notional": round(order_notional, 2),
                 "client_order_id": client_order_id,
                 "target_execution_utc": target_utc.isoformat() if target_utc else None,
                 "entry_time_offset_min": offset_min,
@@ -735,6 +756,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
 
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
             "order_id": str(order.id), "signal_id": sig["id"],
+            "notional": round(order_notional, 2),
             "client_order_id": client_order_id,
             "target_execution_utc": target_utc.isoformat() if target_utc else None,
             "entry_time_offset_min": offset_min,
@@ -2358,7 +2380,8 @@ def process_signals(
 
     asof = asof or date.today()
     dry_run = bool(settings.get("dry_run", True))
-    if client is None and not dry_run:
+    built_own_client = client is None and not dry_run
+    if built_own_client:
         client = client_factory()
 
     # Wire a default daily-bars fetcher for the live path when the caller
@@ -2368,6 +2391,24 @@ def process_signals(
     # lazily-built fetcher is never invoked there).
     if bars_fetcher is None and not dry_run:
         bars_fetcher = _build_default_bars_fetcher()
+
+    # Backfill broker fills into paper_trades BEFORE evaluating signals, so
+    # the open-position view (concentration caps, per-strategy caps, trailing
+    # stops) sees this run's real fills instead of lagging until the nightly
+    # reconcile. Best-effort: a broker hiccup must never block trading.
+    # Gated on built_own_client so the live scheduled path (client=None ->
+    # we build the real client) syncs, while callers that inject an explicit
+    # client (tests) keep their controlled paper_trades state untouched.
+    if built_own_client:
+        try:
+            from monitoring import order_sync
+            sync_res = order_sync.sync_order_fills(conn, client)
+            if sync_res.get("updated"):
+                log(f"auto_trader: order_sync backfilled {sync_res['updated']} "
+                    f"row(s), {sync_res['filled']} newly filled", "INFO")
+        except Exception as e:
+            log(f"auto_trader: order_sync skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
 
     live_set = _live_strategies(settings)
     if live_client_factory is None:
@@ -2511,6 +2552,17 @@ def process_signals(
             conn=conn,
         )
     entries_submitted_this_run = 0
+
+    # Aggregate buying-power budget for this run. Cap new notional at 95% of
+    # spendable cash (unleveraged) so an aggressive-sizing day can't fire
+    # more orders than the account can fund and trigger a wave of broker
+    # rejections. Falls back to buying_power, then to unbounded when no
+    # account summary is available (dry-run / lookup failed).
+    _bp_base = (account_summary.get("cash")
+                or account_summary.get("buying_power")) if account_summary else None
+    bp_ceiling = (float(_bp_base) * 0.95
+                  if _bp_base not in (None, "") else None)
+    bp_committed_this_run = 0.0
 
     actions: List[dict] = []
     cool_down_cache: Dict[str, Optional[dict]] = {}
@@ -2884,6 +2936,8 @@ def process_signals(
             local_throttle = throttle_multiplier * float(
                 llm_action["qty_multiplier"]
             )
+            remaining_bp = (bp_ceiling - bp_committed_this_run
+                            if bp_ceiling is not None else None)
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
@@ -2893,6 +2947,7 @@ def process_signals(
                 throttle_multiplier=local_throttle,
                 market_regime=current_regime,
                 tracked_strategies=regime_tracked,
+                remaining_bp_budget=remaining_bp,
             )
             if llm_action["action"] == "downsize":
                 entry_action["llm_filter_downsize"] = True
@@ -2900,6 +2955,8 @@ def process_signals(
             actions.append(entry_action)
             if entry_action.get("action") in ("BUY", "DRY_BUY"):
                 entries_submitted_this_run += 1
+                bp_committed_this_run += float(
+                    entry_action.get("notional") or 0)
                 if max_open_per_strategy > 0:
                     open_per_strategy[sig["strategy_id"]] = (
                         open_per_strategy.get(sig["strategy_id"], 0) + 1

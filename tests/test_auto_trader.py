@@ -971,3 +971,49 @@ def test_process_signals_default_routes_everything_to_paper(
     )
     assert res["status"] == "OK"
     assert received == ["paper"]
+
+
+def test_buying_power_guard_skips_when_run_notional_exhausts_cash(
+        isolated_db, winner_settings, stub_submit):
+    """Aggregate BP guard: once committed notional reaches 95% of cash,
+    further entries this run are SKIP_BUYING_POWER instead of firing orders
+    the broker would reject."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    for sym in ("GDX", "SLV"):
+        db.record_signal(conn, strategy_id="winner", symbol=sym,
+                         bar_ts="2026-05-14", signal_type="long_entry",
+                         close=70.0, bar_interval="1d")
+    settings = {**winner_settings, "dry_run": False}
+    client = _mk_client()
+    # cash 1500 -> ceiling 1425. One $980 order (14 @ $70) commits, leaving
+    # 445 < the next $980 order -> guard trips on the second.
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings, client=client,
+        account_summary_fn=lambda: {"portfolio_value": 100000.0,
+                                     "cash": 1500.0, "buying_power": 3000.0,
+                                     "equity": 100000.0},
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    kinds = sorted(a["action"] for a in actions)
+    assert kinds == ["BUY", "SKIP_BUYING_POWER"], kinds
+    assert len(stub_submit) == 1  # only the funded order reached the broker
+
+
+def test_buying_power_guard_unbounded_without_account_summary(
+        isolated_db, winner_settings, stub_submit):
+    """No account summary (lookup failed / dry-run) -> ceiling is None and
+    the guard never blocks; both entries fire."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    for sym in ("GDX", "SLV"):
+        db.record_signal(conn, strategy_id="winner", symbol=sym,
+                         bar_ts="2026-05-14", signal_type="long_entry",
+                         close=70.0, bar_interval="1d")
+    settings = {**winner_settings, "dry_run": False}
+    client = _mk_client()
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings, client=client,
+        account_summary_fn=lambda: {},
+    )
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert sorted(a["action"] for a in actions) == ["BUY", "BUY"]
+    assert len(stub_submit) == 2
