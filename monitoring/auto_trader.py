@@ -116,19 +116,28 @@ def _record_skip(
             f"{type(e).__name__}: {e}", "WARNING")
 
 
-def _config() -> dict:
-    raw = load_settings()
+def merge_config(raw: dict) -> dict:
+    """Flatten a raw settings.json dict into the single dict the engine reads:
+    DEFAULT_SETTINGS, overlaid with the `auto_trade` block (minus `_` keys),
+    plus the sibling `stops`/`kelly`/`trailing_stop`/`risk` blocks merged in.
+
+    The engine reads those sibling blocks off the same settings dict
+    (settings.get("stops"/"kelly"/"trailing_stop"/"risk")), but they live at
+    the top level of settings.json — merge them so the live path sees them,
+    without clobbering an explicit auto_trade key. Shared by the EOD path
+    (_config) and the intraday path so both honor identical risk/sizing.
+    """
     s = raw.get("auto_trade", {})
     out = dict(DEFAULT_SETTINGS)
     out.update({k: v for k, v in s.items() if not k.startswith("_")})
-    # The engine reads these sibling blocks off the same settings dict
-    # (settings.get("stops"/"kelly"/"trailing_stop"/"risk")), but they live
-    # at the top level of settings.json. Merge them in so the live path
-    # actually sees them — without clobbering an explicit auto_trade key.
     for block in ("stops", "kelly", "trailing_stop", "risk"):
         if block in raw and block not in out:
             out[block] = raw[block]
     return out
+
+
+def _config() -> dict:
+    return merge_config(load_settings())
 
 
 def _is_eligible(conn, strategy_id: str, settings: dict,

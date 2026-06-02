@@ -26,11 +26,15 @@ DEFAULT_INTRADAY_INTERVALS: List[str] = ["15m"]
 
 def _intraday_config(settings: dict) -> dict:
     auto_trade = settings.get("auto_trade") or {}
+    # Build the SAME flattened/merged config the EOD path uses so intraday
+    # honors the top-level stops/kelly/trailing_stop/risk blocks (without
+    # them, intraday silently ran more conservative: max_open_per_strategy
+    # defaulted to 3, Kelly fell back, stops were weaker).
     return {
         "enabled": bool(auto_trade.get("intraday_enabled", False)),
         "intervals": list(auto_trade.get("intraday_intervals",
                                           DEFAULT_INTRADAY_INTERVALS)),
-        "auto_trade": auto_trade,
+        "auto_trade": at.merge_config(settings),
     }
 
 
