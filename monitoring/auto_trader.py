@@ -2553,14 +2553,16 @@ def process_signals(
         )
     entries_submitted_this_run = 0
 
-    # Aggregate buying-power budget for this run. Cap new notional at 95% of
-    # spendable cash (unleveraged) so an aggressive-sizing day can't fire
-    # more orders than the account can fund and trigger a wave of broker
-    # rejections. Falls back to buying_power, then to unbounded when no
-    # account summary is available (dry-run / lookup failed).
-    _bp_base = (account_summary.get("cash")
-                or account_summary.get("buying_power")) if account_summary else None
-    bp_ceiling = (float(_bp_base) * 0.95
+    # Aggregate buying-power budget for this run. We WANT maximum capital
+    # deployment (full margin line) to stress-test which strategies hold up
+    # aggressively — but a rejected order yields no data, so we cap new
+    # notional just under the broker's buying power (98% headroom for
+    # slippage between the close-price estimate and the actual fill). That
+    # keeps every order fundable/fillable rather than bounced. Falls back to
+    # cash, then unbounded when no account summary is available.
+    _bp_base = (account_summary.get("buying_power")
+                or account_summary.get("cash")) if account_summary else None
+    bp_ceiling = (float(_bp_base) * 0.98
                   if _bp_base not in (None, "") else None)
     bp_committed_this_run = 0.0
 
