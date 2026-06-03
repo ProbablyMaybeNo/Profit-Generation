@@ -148,7 +148,32 @@ def main():
         return 0
 
     print("\nReconciling outcomes (time-aware)...")
-    counts = outcome_tracker.reconcile_signals(conn)
+
+    def _backfill_bars_fetcher(symbol):
+        """Best-effort MFE/MAE source from the daily bars already loaded.
+        Returns rows with ts/high/low so excursion can window them; missing
+        symbols yield [] so the close still lands without excursion stats."""
+        df = bars_by_sym.get(symbol)
+        if df is None or getattr(df, "empty", True):
+            return []
+        cols = {c.lower(): c for c in df.columns}
+        if "high" not in cols or "low" not in cols:
+            return []
+        rows = []
+        for ts, row in df.iterrows():
+            ts_str = (ts.date().isoformat() if hasattr(ts, "date")
+                      else str(ts)[:10])
+            try:
+                rows.append({"ts": ts_str,
+                             "high": float(row[cols["high"]]),
+                             "low": float(row[cols["low"]])})
+            except (TypeError, ValueError):
+                continue
+        return rows
+
+    counts = outcome_tracker.reconcile_signals(
+        conn, bars_fetcher=_backfill_bars_fetcher,
+    )
     print(f"  reconcile: opened={counts['opened']} closed={counts['closed']} noop={counts['noop']}")
 
     # Cleanup: pre-existing live outcomes opened BEFORE backfill knew about

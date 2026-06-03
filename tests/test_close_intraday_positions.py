@@ -287,3 +287,68 @@ def test_run_daily_bat_invokes_close():
     """Sanity: schedulers/run_daily.bat references the module."""
     bat = (ROOT / "schedulers" / "run_daily.bat").read_text(encoding="utf-8")
     assert "monitoring.close_intraday_positions" in bat
+
+
+# ---------------- M1: outcome-close + MFE/MAE on intraday flatten ----------------
+
+class FakeFilledOrder:
+    def __init__(self, oid, fill_price):
+        self.id = oid
+        self.status = "filled"
+        self.submitted_at = "2026-05-14T16:00:00Z"
+        self.filled_at = "2026-05-14T16:00:01Z"
+        self.filled_avg_price = fill_price
+
+
+def _seed_intraday_bar(conn, symbol, ts_utc, high, low, close):
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, ts_utc, open, high, low, close, "
+        " volume, source, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (symbol, ts_utc, close, high, low, close, 1000, "iex", ts_utc),
+    )
+    conn.commit()
+
+
+def test_close_intraday_writes_outcome_with_mfe_mae(isolated_db):
+    """Flattening an intraday position closes its open outcome with
+    exit_reason='eod_close' and MFE/MAE from intraday_bars (the M1 gap)."""
+    conn = db.init_db()
+    sig_id = _seed_open_buy(conn, strategy_id="intra-a", symbol="SPY",
+                            bar_interval="1m",
+                            bar_ts="2026-05-14T14:30:00", qty=3, order_id="b1")
+    db.open_outcome(conn, signal_id=sig_id,
+                    entry_ts="2026-05-14T14:30:00", entry_price=100.0)
+    # In-window bars: max high 104 (+4%), min low 97 (-3%).
+    _seed_intraday_bar(conn, "SPY", "2026-05-14T14:35:00", 104, 99, 102)
+    _seed_intraday_bar(conn, "SPY", "2026-05-14T15:00:00", 103, 97, 101)
+
+    res = ci.close_intraday_positions(
+        conn=conn, dry_run=False, client=object(),
+        submit_market_order_fn=lambda client, symbol, qty, side:
+            FakeFilledOrder(f"close-{symbol}", 101.0),
+    )
+    assert res["closed"][0]["outcome_closed"] is True
+    o = conn.execute(
+        "SELECT status, exit_reason, exit_price, mfe_pct, mae_pct "
+        "  FROM outcomes WHERE signal_id=?", (sig_id,),
+    ).fetchone()
+    assert o["status"] == "closed"
+    assert o["exit_reason"] == "eod_close"
+    assert o["exit_price"] == pytest.approx(101.0)
+    assert o["mfe_pct"] == pytest.approx(0.04)
+    assert o["mae_pct"] == pytest.approx(-0.03)
+
+
+def test_close_intraday_outcome_close_is_best_effort(isolated_db):
+    """No open outcome -> flatten still records the sell, no crash."""
+    conn = db.init_db()
+    _seed_open_buy(conn, strategy_id="intra-a", symbol="SPY",
+                   bar_interval="1m",
+                   bar_ts="2026-05-14T14:30:00", qty=3, order_id="b1")
+    res = ci.close_intraday_positions(
+        conn=conn, dry_run=False, client=object(),
+        submit_market_order_fn=lambda client, symbol, qty, side:
+            FakeFilledOrder(f"close-{symbol}", 101.0),
+    )
+    assert res["status"] == "OK"
+    assert res["closed"][0]["outcome_closed"] is False

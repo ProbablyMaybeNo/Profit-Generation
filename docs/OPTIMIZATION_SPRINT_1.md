@@ -34,7 +34,7 @@ green. Suite green. After this lands, hard stops should actually rest on the boo
 
 ---
 
-## [ ] M1 (P0) — Instrument MFE/MAE/exit_reason + capture intraday outcomes
+## [x] M1 (P0) — Instrument MFE/MAE/exit_reason + capture intraday outcomes
 
 **Why:** `outcomes.mfe_pct`, `mae_pct`, `exit_reason` are 100% NULL across all 2,048
 rows, and every closed outcome is `bar_interval='1d'` — zero intraday outcomes exist.

@@ -87,8 +87,21 @@ def open_for_entry(conn: sqlite3.Connection, signal_row: sqlite3.Row) -> bool:
     return True
 
 
-def close_for_exit(conn: sqlite3.Connection, exit_signal_row: sqlite3.Row) -> bool:
-    """Close the matching open outcome for a long_exit signal. Returns True if closed."""
+def close_for_exit(
+    conn: sqlite3.Connection,
+    exit_signal_row: sqlite3.Row,
+    *,
+    exit_reason: str = "long_exit_signal",
+    bars_fetcher=None,
+) -> bool:
+    """Close the matching open outcome for a long_exit signal. Returns True if closed.
+
+    `exit_reason` lets a caller record the real cause (e.g. 'trailing_stop',
+    'eod_close', 'stop') instead of the signal-exit default. When a
+    `bars_fetcher` (symbol -> bars list/df) is supplied, MFE/MAE over the
+    entry..exit window is computed and persisted; a fetch failure is
+    swallowed so the close still lands without excursion stats.
+    """
     if exit_signal_row["close"] is None:
         return False
     open_sig_id = _get_open_outcome_signal_id(
@@ -98,16 +111,37 @@ def close_for_exit(conn: sqlite3.Connection, exit_signal_row: sqlite3.Row) -> bo
     if open_sig_id is None:
         return False
     entry = conn.execute(
-        "SELECT bar_ts FROM signals WHERE id = ?", (open_sig_id,)
+        "SELECT s.bar_ts AS bar_ts, o.entry_price AS entry_price "
+        "  FROM signals s JOIN outcomes o ON o.signal_id = s.id "
+        " WHERE s.id = ?",
+        (open_sig_id,),
     ).fetchone()
-    bars_held = _bars_held_calendar(entry["bar_ts"], exit_signal_row["bar_ts"]) if entry else None
+    entry_bar_ts = entry["bar_ts"] if entry else None
+    bars_held = (
+        _bars_held_calendar(entry_bar_ts, exit_signal_row["bar_ts"])
+        if entry_bar_ts else None
+    )
+    mfe = mae = None
+    if bars_fetcher is not None and entry is not None:
+        try:
+            from monitoring import excursion
+            bars = bars_fetcher(exit_signal_row["symbol"])
+            mfe, mae = excursion.compute_mfe_mae(
+                bars, entry_price=entry["entry_price"],
+                entry_ts=entry_bar_ts, exit_ts=exit_signal_row["bar_ts"],
+                side="long",
+            )
+        except Exception:
+            mfe = mae = None
     db.close_outcome(
         conn,
         signal_id=open_sig_id,
         exit_ts=exit_signal_row["bar_ts"],
         exit_price=float(exit_signal_row["close"]),
-        exit_reason="long_exit_signal",
+        exit_reason=exit_reason,
         bars_held=bars_held,
+        mfe_pct=mfe,
+        mae_pct=mae,
     )
     return True
 
@@ -118,6 +152,7 @@ def reconcile_signals(
     since_iso: Optional[str] = None,
     bar_interval: str = "1d",
     bar_intervals=None,
+    bars_fetcher=None,
 ) -> Dict[str, int]:
     """
     Walk signals in (bar_ts, id) order; open or close outcomes as needed.
@@ -153,7 +188,8 @@ def reconcile_signals(
         if row["signal_type"] == "long_entry":
             counts["opened" if open_for_entry(conn, row) else "noop"] += 1
         else:
-            counts["closed" if close_for_exit(conn, row) else "noop"] += 1
+            closed = close_for_exit(conn, row, bars_fetcher=bars_fetcher)
+            counts["closed" if closed else "noop"] += 1
     return counts
 
 

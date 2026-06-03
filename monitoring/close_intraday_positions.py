@@ -35,6 +35,7 @@ from typing import Callable, List, Optional
 
 from config.utils import get_alpaca_client, is_paper_mode, log
 from data import db
+from monitoring import excursion
 
 
 def _cancel_open_orders_for_symbols(client, symbols: List[str]) -> int:
@@ -94,6 +95,58 @@ def _open_intraday_buys(conn) -> List[dict]:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _open_outcome_for_signal(conn, signal_id) -> Optional[dict]:
+    """The open outcome row for an entry signal_id, or None."""
+    if signal_id is None:
+        return None
+    row = conn.execute(
+        "SELECT signal_id, entry_ts, entry_price FROM outcomes "
+        " WHERE signal_id=? AND status='open'",
+        (signal_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _intraday_bars_window(conn, symbol, after_ts, before_ts) -> List[dict]:
+    """intraday_bars for symbol in (after_ts, before_ts], chronological."""
+    try:
+        rows = conn.execute(
+            "SELECT ts_utc AS ts, high, low, close FROM intraday_bars "
+            " WHERE symbol=? AND ts_utc>=? AND ts_utc<=? "
+            " ORDER BY ts_utc ASC",
+            (symbol, after_ts or "", before_ts or "9999"),
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+
+def _close_outcome_for_eod(conn, pos, exit_ts, exit_price) -> bool:
+    """Close the open outcome behind an intraday EOD-flattened position.
+
+    Computes MFE/MAE over the intraday_bars between entry and exit when
+    available; persists exit_reason='eod_close'. Best-effort — a missing
+    outcome or missing bars never aborts the flatten. Returns True if an
+    outcome was closed.
+    """
+    outcome = _open_outcome_for_signal(conn, pos.get("signal_id"))
+    if outcome is None:
+        return False
+    entry_ts = outcome["entry_ts"]
+    entry_price = outcome["entry_price"]
+    bars = _intraday_bars_window(conn, pos["symbol"], entry_ts, exit_ts)
+    mfe, mae = excursion.compute_mfe_mae(
+        bars, entry_price=entry_price,
+        entry_ts=entry_ts, exit_ts=exit_ts, side="long",
+    )
+    db.close_outcome(
+        conn, signal_id=int(pos["signal_id"]),
+        exit_ts=str(exit_ts), exit_price=float(exit_price),
+        exit_reason="eod_close", mfe_pct=mfe, mae_pct=mae,
+    )
+    return True
 
 
 def close_intraday_positions(
@@ -209,6 +262,10 @@ def close_intraday_positions(
                 })
                 continue
 
+            exit_ts = str(getattr(order, "filled_at", None)
+                          or getattr(order, "submitted_at", None)
+                          or _utc_now_iso())
+            exit_price = getattr(order, "filled_avg_price", None)
             db.record_paper_trade(conn, {
                 "alpaca_order_id": str(getattr(order, "id", "")),
                 "signal_id": pos["signal_id"],
@@ -216,17 +273,37 @@ def close_intraday_positions(
                 "order_type": "market",
                 "submitted_at": str(getattr(order, "submitted_at",
                                              _utc_now_iso())),
+                "fill_price": (float(exit_price)
+                               if exit_price not in (None, "") else None),
                 "status": str(getattr(order, "status", "submitted")),
                 "notes": (f"auto-close intraday EOD; closing buy "
                           f"{pos.get('alpaca_order_id')}"),
             })
             log(f"EOD_CLOSE_INTRADAY SELL {qty} {sym} order: {order.id}",
                 "SUCCESS")
+            # Close the tracking outcome so intraday trades land in the
+            # outcomes table with MFE/MAE + exit_reason='eod_close'. This is
+            # the specific gap that left zero closed intraday outcomes.
+            outcome_exit_price = (
+                float(exit_price) if exit_price not in (None, "")
+                else (float(pos["fill_price"])
+                      if pos.get("fill_price") is not None else None)
+            )
+            outcome_closed = False
+            if outcome_exit_price is not None:
+                try:
+                    outcome_closed = _close_outcome_for_eod(
+                        conn, pos, exit_ts, outcome_exit_price,
+                    )
+                except Exception as e:
+                    log(f"close_intraday_positions: outcome-close failed for "
+                        f"{sid}/{sym} (flatten still recorded): {e}", "WARNING")
             closed.append({
                 "action": "CLOSE_INTRADAY",
                 "strategy_id": sid, "symbol": sym, "qty": qty,
                 "order_id": str(order.id),
                 "signal_id": pos["signal_id"],
+                "outcome_closed": outcome_closed,
             })
 
         return {"status": "OK", "closed": closed, "skipped": skipped,

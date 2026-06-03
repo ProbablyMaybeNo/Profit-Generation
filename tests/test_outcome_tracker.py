@@ -202,3 +202,81 @@ def test_close_for_exit_picks_prior_open_only(conn):
         "WHERE o.status='open'"
     ).fetchone()
     assert open_row["bar_ts"] == "2026-05-10"
+
+
+# ---------------------------------------------------------------------------
+# M1 — exit_reason override + MFE/MAE via bars_fetcher
+# ---------------------------------------------------------------------------
+
+def test_close_for_exit_accepts_exit_reason_override(conn):
+    sid = _record_entry(conn, "strat-A", "GDX", "2026-05-12", 100.0)
+    exit_row = conn.execute(
+        "SELECT * FROM signals WHERE id=?",
+        (_record_exit(conn, "strat-A", "GDX", "2026-05-15", 96.0),),
+    ).fetchone()
+    outcome_tracker.open_for_entry(
+        conn, conn.execute("SELECT * FROM signals WHERE id=?", (sid,)).fetchone(),
+    )
+    closed = outcome_tracker.close_for_exit(
+        conn, exit_row, exit_reason="trailing_stop",
+    )
+    assert closed is True
+    o = _outcome(conn, sid)
+    assert o["exit_reason"] == "trailing_stop"
+
+
+def test_reconcile_populates_mfe_mae_from_bars_fetcher(conn):
+    entry_id = _record_entry(conn, "strat-A", "GDX", "2026-05-12", 100.0)
+    _record_exit(conn, "strat-A", "GDX", "2026-05-15", 103.0)
+
+    def fetcher(symbol):
+        # In-window highs/lows: max high 112 (+12%), min low 94 (-6%).
+        return [
+            {"ts": "2026-05-12", "high": 105, "low": 99},
+            {"ts": "2026-05-13", "high": 112, "low": 94},
+            {"ts": "2026-05-14", "high": 108, "low": 101},
+        ]
+
+    counts = outcome_tracker.reconcile_signals(conn, bars_fetcher=fetcher)
+    assert counts["closed"] == 1
+    o = _outcome(conn, entry_id)
+    assert o["mfe_pct"] == pytest.approx(0.12)
+    assert o["mae_pct"] == pytest.approx(-0.06)
+    assert o["exit_reason"] == "long_exit_signal"
+
+
+def test_reconcile_swallows_bars_fetcher_error(conn):
+    entry_id = _record_entry(conn, "strat-A", "GDX", "2026-05-12", 100.0)
+    _record_exit(conn, "strat-A", "GDX", "2026-05-15", 103.0)
+
+    def boom(symbol):
+        raise RuntimeError("yfinance down")
+
+    counts = outcome_tracker.reconcile_signals(conn, bars_fetcher=boom)
+    # Close still lands, MFE/MAE just stay NULL.
+    assert counts["closed"] == 1
+    o = _outcome(conn, entry_id)
+    assert o["status"] == "closed"
+    assert o["mfe_pct"] is None
+    assert o["mae_pct"] is None
+
+
+def test_reconcile_processes_intraday_intervals(conn):
+    """An intraday (1m) entry+exit is reconciled into a closed outcome when
+    the 1m interval is included in the reconcile pass."""
+    db.record_signal(conn, strategy_id="strat-A", symbol="SPY",
+                     bar_ts="2026-05-14T14:30:00", signal_type="long_entry",
+                     close=100.0, bar_interval="1m")
+    db.record_signal(conn, strategy_id="strat-A", symbol="SPY",
+                     bar_ts="2026-05-14T15:45:00", signal_type="long_exit",
+                     close=101.5, bar_interval="1m")
+    counts = outcome_tracker.reconcile_signals(conn, bar_intervals=["1m"])
+    assert counts["opened"] == 1
+    assert counts["closed"] == 1
+    row = conn.execute(
+        "SELECT o.status, o.return_pct FROM outcomes o "
+        " JOIN signals s ON s.id=o.signal_id "
+        " WHERE s.bar_interval='1m' AND o.status='closed'"
+    ).fetchone()
+    assert row is not None
+    assert row["return_pct"] == pytest.approx(1.5)
