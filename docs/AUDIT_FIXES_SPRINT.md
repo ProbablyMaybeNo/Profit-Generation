@@ -75,7 +75,7 @@ Full non-live suite green.
 
 ---
 
-## [ ] F2 (P1, SilentFailure) — intraday signals never get outcome rows
+## [x] F2 (P1, SilentFailure) — intraday signals never get outcome rows
 
 **Evidence:** 0 outcomes for any non-1d signal vs 16,884 1m signals / 65 open intraday buys.
 The only live reconcile (`daily_report.py:371`) defaults `bar_interval='1d'`, so

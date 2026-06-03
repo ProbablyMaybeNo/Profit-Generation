@@ -153,6 +153,7 @@ def reconcile_signals(
     bar_interval: str = "1d",
     bar_intervals=None,
     bars_fetcher=None,
+    open_only: bool = False,
 ) -> Dict[str, int]:
     """
     Walk signals in (bar_ts, id) order; open or close outcomes as needed.
@@ -162,6 +163,13 @@ def reconcile_signals(
     when `bar_intervals` is set it takes precedence; otherwise the single
     interval is used. Pass `bar_intervals=['1d', '1d-intraday',
     'tv-webhook']` to process all signal sources in one pass.
+
+    `open_only` (F2, audit 2026-06-03): when True, only OPEN outcomes for
+    long_entry signals and never close on a long_exit signal. The intraday
+    reconcile pass uses this so intraday entries get an open outcome row,
+    while the EOD flatten (`close_intraday_positions`) owns the close and
+    stamps the true `exit_reason='eod_close'` with MFE/MAE — rather than an
+    intraday scanner long_exit signal pre-empting it as 'long_exit_signal'.
 
     Pass since_iso to scope by bar_ts; default is full history.
     """
@@ -187,6 +195,8 @@ def reconcile_signals(
     for row in conn.execute(sql, tuple(params)).fetchall():
         if row["signal_type"] == "long_entry":
             counts["opened" if open_for_entry(conn, row) else "noop"] += 1
+        elif open_only:
+            counts["noop"] += 1
         else:
             closed = close_for_exit(conn, row, bars_fetcher=bars_fetcher)
             counts["closed" if closed else "noop"] += 1

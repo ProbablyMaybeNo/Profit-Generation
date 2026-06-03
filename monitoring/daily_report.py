@@ -375,9 +375,27 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         # records excursion. (Stop/trailing reasons are handled in F5; the
         # intraday open/close pass is F2.)
         from monitoring.auto_trader import _build_default_bars_fetcher
-        return outcome_tracker.reconcile_signals(
+        counts = outcome_tracker.reconcile_signals(
             conn, bars_fetcher=_build_default_bars_fetcher()
         )
+        # F2 (audit 2026-06-03): the 1d pass above never opens intraday
+        # outcomes, so M1's EOD-flatten capture had nothing to close — 0
+        # outcome rows for any intraday signal. Run a second pass over the
+        # intraday intervals with open_only=True: it OPENS an outcome for
+        # each intraday entry but does NOT close on an intraday scanner
+        # long_exit signal. The EOD flatten (close_intraday_positions) then
+        # closes those open outcomes with exit_reason='eod_close' + MFE/MAE.
+        # Kept non-overlapping with the 1d pass (distinct bar_intervals) so
+        # no 1d outcome is double-opened. Runs here on the EOD schedule so
+        # the open happens before close_intraday_positions fires at 16:00 ET.
+        intraday_counts = outcome_tracker.reconcile_signals(
+            conn,
+            bar_intervals=["1m", "5m", "15m", "1d-intraday"],
+            open_only=True,
+        )
+        counts["opened"] += intraday_counts["opened"]
+        counts["noop"] += intraday_counts["noop"]
+        return counts
     finally:
         conn.close()
 

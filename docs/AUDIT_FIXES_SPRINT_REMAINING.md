@@ -52,7 +52,15 @@ mfe_pct/mae_pct. Full non-live suite green.
 
 ---
 
-## [ ] F2 (P1, SilentFailure) — intraday signals never get outcome rows
+## [x] F2 (P1, SilentFailure) — intraday signals never get outcome rows
+
+**Completed:** 2026-06-03 by milestone-builder — `reconcile_signals` gained an
+`open_only` mode; `daily_report.persist_report` now runs a second intraday pass
+(`bar_intervals=["1m","5m","15m","1d-intraday"]`, `open_only=True`) on the EOD
+schedule that OPENS intraday outcome rows without letting an intraday scanner
+long_exit pre-empt the EOD flatten. Wiring test drives the real persist_report +
+close_intraday_positions path (open → eod_close with MFE/MAE); full non-live
+suite green (2299 passed).
 
 **Evidence:** 0 outcomes for any non-1d signal vs 16,884 1m signals / 65 open intraday
 buys. The only live reconcile (`daily_report.py`) defaults `bar_interval='1d'`, so
