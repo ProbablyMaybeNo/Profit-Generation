@@ -1234,9 +1234,23 @@ def _check_trailing_exit(
     }
 
 
+def _open_outcome_for_pair(conn, strategy_id: str, symbol: str):
+    """Most recent OPEN outcome for (strategy, symbol) with entry ts/price,
+    or None. Used to window MFE/MAE on a trailing-stop close (F5)."""
+    return conn.execute(
+        "SELECT o.signal_id AS signal_id, o.entry_ts AS entry_ts, "
+        "       o.entry_price AS entry_price "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='open' AND s.strategy_id=? AND s.symbol=? "
+        " ORDER BY o.entry_ts DESC LIMIT 1",
+        (strategy_id, symbol),
+    ).fetchone()
+
+
 def _process_exit(
     conn, client, settings: dict, sig, dry_run: bool,
     *, trailing_triggered: Optional[dict] = None,
+    bars_fetcher: Optional[Callable] = None,
 ) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
     _src_x = _skip_source_for_bar_interval(
@@ -1313,6 +1327,42 @@ def _process_exit(
         ts_mod.clear_stop(conn, strategy_id=sid, symbol=sym)
     except Exception as e:
         log(f"trailing stop clear failed for {sid}/{sym}: {e}", "WARNING")
+    # F5 (audit 2026-06-03): on a trailing-stop exit, close the outcome HERE
+    # with exit_reason='trailing_stop' (+ MFE/MAE) so the later generic 1d
+    # signal-exit reconcile finds no open outcome and can't overwrite the
+    # reason as 'long_exit_signal' / strip excursion. A plain signal exit
+    # (trailing_triggered is None) is left for the reconcile as before.
+    if trailing_triggered is not None:
+        try:
+            outcome = _open_outcome_for_pair(conn, sid, sym)
+            if outcome is not None:
+                exit_ts = str(getattr(order, "filled_at", None)
+                              or getattr(order, "submitted_at", None)
+                              or _utc_now())
+                exit_price = getattr(order, "filled_avg_price", None)
+                if exit_price in (None, ""):
+                    exit_price = float(sig["close"] or 0) or None
+                if exit_price is not None:
+                    mfe = mae = None
+                    if bars_fetcher is not None:
+                        try:
+                            from monitoring import excursion
+                            bars = bars_fetcher(sym)
+                            mfe, mae = excursion.compute_mfe_mae(
+                                bars, entry_price=outcome["entry_price"],
+                                entry_ts=outcome["entry_ts"], exit_ts=exit_ts,
+                                side="long",
+                            )
+                        except Exception:
+                            mfe = mae = None
+                    db.close_outcome(
+                        conn, signal_id=int(outcome["signal_id"]),
+                        exit_ts=exit_ts, exit_price=float(exit_price),
+                        exit_reason="trailing_stop", mfe_pct=mfe, mae_pct=mae,
+                    )
+        except Exception as e:
+            log(f"trailing-stop outcome close failed for {sid}/{sym} "
+                f"(sell still recorded): {e}", "WARNING")
     log(f"SELL {qty} {sym} order submitted: {order.id}", "SUCCESS")
     out = {"action": "SELL", "strategy_id": sid, "symbol": sym, "qty": qty,
            "order_id": str(order.id), "signal_id": sig["id"],
@@ -1400,7 +1450,7 @@ def _check_trailing_exits_for_open_positions(
         # _open_buy_for_pair (returns None once SELL is submitted).
         action = _process_exit(
             conn, client, settings, synthetic_sig, dry_run,
-            trailing_triggered=trip,
+            trailing_triggered=trip, bars_fetcher=bars_fetcher,
         )
         action["synthetic_trailing_exit"] = True
         actions.append(action)
@@ -3022,7 +3072,9 @@ def process_signals(
                     "reason": str(e),
                 })
                 continue
-            actions.append(_process_exit(conn, strategy_client, settings, sig, dry_run))
+            actions.append(_process_exit(
+                conn, strategy_client, settings, sig, dry_run,
+                bars_fetcher=bars_fetcher))
 
     # 4.7.1 — After the explicit signal pass, check whether the latest bar
     # for any open position crossed its trailing stop. The default Alpaca

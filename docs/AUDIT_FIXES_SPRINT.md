@@ -94,7 +94,7 @@ exit_reason='eod_close'. Full non-live suite green.
 
 ---
 
-## [ ] F5 (P2, SilentFailure) — stop/trailing exits record no MFE/MAE
+## [x] F5 (P2, SilentFailure) — stop/trailing exits record no MFE/MAE
 
 **Evidence:** `monitoring/stops.py:265-269` closes with `exit_reason='stop_loss_atr'` and no
 mfe/mae; trailing exit in `auto_trader._process_exit` (~1272-1322) gets its outcome closed by the

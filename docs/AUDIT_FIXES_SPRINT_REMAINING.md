@@ -79,7 +79,16 @@ mfe/mae + exit_reason='eod_close'. Full non-live suite green.
 
 ---
 
-## [ ] F5 (P2, SilentFailure) — stop/trailing exits record no MFE/MAE
+## [x] F5 (P2, SilentFailure) — stop/trailing exits record no MFE/MAE
+
+**Completed:** 2026-06-03 by milestone-builder — `reconcile_stop_fills` gained an
+optional `bars_fetcher` and now computes MFE/MAE over entry..fill, persisting them
+with `exit_reason='stop_loss_atr'`. `_process_exit` now closes the outcome itself on
+a trailing-stop trip (`exit_reason='trailing_stop'` + MFE/MAE) so the later generic
+1d signal-exit reconcile finds no open outcome and can't overwrite it; `bars_fetcher`
+threaded into both `_process_exit` call sites. Tests: stop-loss close lands MFE/MAE,
+trailing-stop close lands MFE/MAE with the correct reason; full non-live suite green
+(2302 passed).
 
 **Evidence:** `monitoring/stops.py:265-269` closes with `exit_reason='stop_loss_atr'` and
 no mfe/mae; trailing exit in `auto_trader._process_exit` (~1272-1322) gets its outcome

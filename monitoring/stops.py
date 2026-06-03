@@ -198,15 +198,23 @@ def _open_stop_trades(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     ).fetchall()
 
 
-def _outcome_signal_id_for(conn: sqlite3.Connection,
-                            strategy_id: str, symbol: str) -> Optional[int]:
-    row = conn.execute(
-        "SELECT o.signal_id "
+def _open_outcome_for(conn: sqlite3.Connection,
+                      strategy_id: str, symbol: str) -> Optional[sqlite3.Row]:
+    """The most recent open outcome for (strategy, symbol) with its entry
+    ts/price, or None. Carries entry data so the caller can window MFE/MAE."""
+    return conn.execute(
+        "SELECT o.signal_id AS signal_id, o.entry_ts AS entry_ts, "
+        "       o.entry_price AS entry_price "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='open' AND s.strategy_id=? AND s.symbol=? "
         " ORDER BY o.entry_ts DESC LIMIT 1",
         (strategy_id, symbol),
     ).fetchone()
+
+
+def _outcome_signal_id_for(conn: sqlite3.Connection,
+                            strategy_id: str, symbol: str) -> Optional[int]:
+    row = _open_outcome_for(conn, strategy_id, symbol)
     return int(row["signal_id"]) if row else None
 
 
@@ -215,10 +223,16 @@ def reconcile_stop_fills(
     client,
     *,
     now_iso: Optional[str] = None,
+    bars_fetcher: Optional[Callable] = None,
 ) -> Dict:
     """For every pending stop in paper_trades, ask Alpaca for the order's
     current status. If `filled`, update the paper_trades row + close the
     matching outcome with exit_reason='stop_loss_atr'.
+
+    F5 (audit 2026-06-03): when `bars_fetcher` (symbol -> bars) is supplied,
+    compute MFE/MAE over the open outcome's entry..fill window and persist
+    them with the close, so stop exits stop landing with NULL excursion. A
+    fetch/compute failure is swallowed so the close still lands.
 
     Returns {checked, filled, closed}.
     """
@@ -257,15 +271,27 @@ def reconcile_stop_fills(
             "notes": (s["notes"] or "") + "; reconciled stop fill",
         })
         n_filled += 1
-        signal_id = _outcome_signal_id_for(
-            conn, s["strategy_id"], s["symbol"],
-        )
-        if signal_id is None:
+        outcome = _open_outcome_for(conn, s["strategy_id"], s["symbol"])
+        if outcome is None:
             continue
+        signal_id = int(outcome["signal_id"])
+        mfe = mae = None
+        if bars_fetcher is not None:
+            try:
+                from monitoring import excursion
+                bars = bars_fetcher(s["symbol"])
+                mfe, mae = excursion.compute_mfe_mae(
+                    bars, entry_price=outcome["entry_price"],
+                    entry_ts=outcome["entry_ts"], exit_ts=filled_at,
+                    side="long",
+                )
+            except Exception:
+                mfe = mae = None
         db.close_outcome(
             conn, signal_id=signal_id,
             exit_ts=filled_at, exit_price=fill_price,
             exit_reason="stop_loss_atr",
+            mfe_pct=mfe, mae_pct=mae,
         )
         n_closed += 1
     return {"checked": len(stops), "filled": n_filled, "closed": n_closed}

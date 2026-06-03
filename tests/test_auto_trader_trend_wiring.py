@@ -216,6 +216,66 @@ def test_trailing_stop_triggers_exit_when_price_crosses(
     assert sells[0].get("synthetic_trailing_exit") is True
 
 
+def test_trailing_stop_exit_closes_outcome_with_reason_and_excursion(
+    isolated_db, winner_settings, trend_declarations, stub_submit,
+):
+    """F5 (audit 2026-06-03): a trailing-stop exit must close the outcome
+    itself with exit_reason='trailing_stop' + non-NULL MFE/MAE, so the later
+    generic 1d signal-exit reconcile can't overwrite it as 'long_exit_signal'
+    with NULL excursion."""
+    conn = _seed_outcomes(TREND_SID, [2.0, 1.0] * 10)
+    entry_sig = db.record_signal(
+        conn, strategy_id=TREND_SID, symbol="NVDA",
+        bar_ts="2026-05-14", signal_type="long_entry",
+        close=100.0, bar_interval="1d",
+    )
+    bars = {"NVDA": _ohlc(list(range(80, 101)))}
+    settings = {**winner_settings, "dry_run": False}
+    at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings,
+        client=MagicMock(), bars_fetcher=lambda s: bars[s],
+    )
+    # In production the EOD reconcile (reconcile_signals/open_for_entry) opens
+    # the outcome for this entry between the buy and the next-day exit. Mirror
+    # that here so the trailing exit has an open outcome to close.
+    db.open_outcome(conn, signal_id=entry_sig,
+                    entry_ts="2026-05-14", entry_price=100.0)
+    assert conn.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (entry_sig,),
+    ).fetchone()["status"] == "open"
+
+    # Lift the stop with favorable bars, then crash through it.
+    bars["NVDA"] = _ohlc(list(range(80, 131)))
+    at.process_signals(
+        conn, asof=date(2026, 5, 15), settings=settings,
+        client=MagicMock(), bars_fetcher=lambda s: bars[s],
+    )
+    stop_before = ts_mod.get_stop(conn, strategy_id=TREND_SID, symbol="NVDA")
+    crash_close = stop_before["stop_price"] - 5.0
+    bars["NVDA"] = _ohlc(list(range(80, 131)) + [crash_close])
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 16), settings=settings,
+        client=MagicMock(), bars_fetcher=lambda s: bars[s],
+    )
+    sells = [a for a in res["actions"]
+             if a.get("action") == "SELL" and a.get("strategy_id") == TREND_SID]
+    assert len(sells) == 1
+    assert sells[0]["exit_reason"] == "trailing_stop"
+
+    o = conn.execute(
+        "SELECT status, exit_reason, mfe_pct, mae_pct FROM outcomes "
+        " WHERE signal_id=?", (entry_sig,),
+    ).fetchone()
+    assert o["status"] == "closed"
+    assert o["exit_reason"] == "trailing_stop", \
+        "F5 regression: trailing exit reason overwritten / outcome not closed"
+    assert o["mfe_pct"] is not None, "F5 regression: trailing close has NULL mfe"
+    assert o["mae_pct"] is not None, "F5 regression: trailing close has NULL mae"
+    # Favorable run to ~130.5 high, crash low well below entry 100.
+    assert o["mfe_pct"] > 0
+    assert o["mae_pct"] < 0
+
+
 def test_trailing_stop_does_not_loosen_below_entry_floor(
     isolated_db, winner_settings, trend_declarations,
 ):

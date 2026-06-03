@@ -295,6 +295,76 @@ def test_reconcile_stop_fills_closes_open_outcome(isolated_db):
     conn.close()
 
 
+def test_reconcile_stop_fills_records_mfe_mae(isolated_db):
+    """F5 (audit 2026-06-03): when a bars_fetcher is supplied, a stop fill
+    closes the outcome with exit_reason='stop_loss_atr' AND non-NULL MFE/MAE
+    windowed over entry..fill. Without the fetcher (default) excursion stays
+    NULL but the close still lands (back-compat)."""
+    conn = _seed_outcomes_with_open([2.0, 1.0] * 18, open_at="2026-05-14")
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "stop-mm",
+        "strategy_id": "winner", "symbol": "GDX",
+        "side": "sell", "qty": 10, "order_type": "stop",
+        "stop_price": 96.0,
+        "submitted_at": "2026-05-14T14:00:00Z",
+        "status": "accepted",
+    })
+    order = MagicMock()
+    order.status = "filled"
+    order.filled_avg_price = 96.0
+    order.filled_at = "2026-05-15T17:00:00Z"
+    client = MagicMock()
+    client.get_order_by_id.return_value = order
+
+    # Entry 100.0 on 2026-05-14; bars between entry and fill: high 108 (+8%),
+    # low 94 (-6%). Bars carry ts inside the window.
+    bars = [
+        {"high": 108.0, "low": 99.0, "close": 104.0,
+         "ts": "2026-05-14T18:00:00+00:00"},
+        {"high": 103.0, "low": 94.0, "close": 96.0,
+         "ts": "2026-05-15T16:00:00+00:00"},
+    ]
+    out = stops.reconcile_stop_fills(conn, client, bars_fetcher=lambda s: bars)
+    assert out["closed"] == 1
+    row = conn.execute(
+        "SELECT exit_reason, mfe_pct, mae_pct FROM outcomes "
+        " WHERE status='closed' AND exit_reason='stop_loss_atr'"
+    ).fetchone()
+    assert row is not None
+    assert row["mfe_pct"] == pytest.approx(0.08)
+    assert row["mae_pct"] == pytest.approx(-0.06)
+    conn.close()
+
+
+def test_reconcile_stop_fills_no_fetcher_keeps_excursion_null(isolated_db):
+    """Back-compat: no bars_fetcher → close still lands, MFE/MAE NULL."""
+    conn = _seed_outcomes_with_open([2.0, 1.0] * 18, open_at="2026-05-14")
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "stop-nm",
+        "strategy_id": "winner", "symbol": "GDX",
+        "side": "sell", "qty": 10, "order_type": "stop",
+        "stop_price": 96.0,
+        "submitted_at": "2026-05-14T14:00:00Z",
+        "status": "accepted",
+    })
+    order = MagicMock()
+    order.status = "filled"
+    order.filled_avg_price = 96.0
+    order.filled_at = "2026-05-15T17:00:00Z"
+    client = MagicMock()
+    client.get_order_by_id.return_value = order
+
+    out = stops.reconcile_stop_fills(conn, client)
+    assert out["closed"] == 1
+    row = conn.execute(
+        "SELECT mfe_pct, mae_pct FROM outcomes WHERE status='closed' "
+        " AND exit_reason='stop_loss_atr'"
+    ).fetchone()
+    assert row["mfe_pct"] is None
+    assert row["mae_pct"] is None
+    conn.close()
+
+
 def test_reconcile_stop_fills_ignores_unfilled(isolated_db):
     conn = _seed_outcomes_with_open(
         [2.0, 1.0] * 18, open_at="2026-05-14",
