@@ -105,7 +105,13 @@ being overwritten by the signal-exit close.
 
 ---
 
-## [ ] F7 (P3, Optimization) — `no_open_position` skip spam (187,814 rows)
+## [x] F7 (P3, Optimization) — `no_open_position` skip spam (187,814 rows)
+
+**Completed:** 2026-06-03 by milestone-builder — `_process_exit` no longer writes a
+`no_open_position` skip row when flat (the normal case); the SKIP_NO_POSITION control
+flow / return is unchanged so no trading decision moved. Existing test updated to
+assert zero skip rows while still returning SKIP_NO_POSITION. Full non-live suite green
+(2302 passed).
 
 **Evidence:** `intraday_skips` gate distribution: `no_open_position`=187,814 — the exit
 scanner records a skip per (strategy,symbol,bar) when flat. Pure noise; bloats the table.

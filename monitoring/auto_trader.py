@@ -1275,11 +1275,11 @@ def _process_exit(
             )
     open_buy = _open_buy_for_pair(conn, sid, sym)
     if open_buy is None:
-        _record_skip(
-            conn, sig=sig, gate="no_open_position",
-            reason_detail=f"no open buy for {sid}/{sym} to close",
-            source=_src_x,
-        )
+        # F7 (audit 2026-06-03): being flat when an exit signal fires is the
+        # NORMAL case, not a noteworthy skip — the exit scanner emits one per
+        # (strategy, symbol, bar) and persisting each bloated intraday_skips
+        # with 187,814 pure-noise rows. Skip the control flow (decision
+        # unchanged) WITHOUT writing the DB row.
         return {"action": "SKIP_NO_POSITION", "strategy_id": sid, "symbol": sym}
     qty = int(open_buy["qty"])
 

@@ -440,8 +440,11 @@ def test_gate_price_too_high_writes_skip_row(isolated_db, base_settings):
     assert len(rows) == 1
 
 
-def test_gate_no_open_position_writes_skip_row(isolated_db, base_settings):
-    # long_exit with no open position → SKIP_NO_POSITION
+def test_gate_no_open_position_skips_without_writing_row(isolated_db, base_settings):
+    # F7 (audit 2026-06-03): a long_exit with no open position still returns
+    # SKIP_NO_POSITION (decision unchanged) but must NOT persist a skip row —
+    # being flat is the normal case and was bloating intraday_skips with
+    # 187,814 noise rows.
     conn = _seed_outcomes("winner", [2.0, 1.0] * 18, symbol="GDX")
     db.record_signal(conn, strategy_id="winner", symbol="GDX",
                      bar_ts="2026-05-14", signal_type="long_exit",
@@ -453,7 +456,7 @@ def test_gate_no_open_position_writes_skip_row(isolated_db, base_settings):
     assert before == after
     assert any(a["action"] == "SKIP_NO_POSITION" for a in res["actions"])
     rows = _skip_rows(conn, gate="no_open_position")
-    assert len(rows) == 1
+    assert len(rows) == 0
 
 
 # ---------------------------------------------------------------------------
