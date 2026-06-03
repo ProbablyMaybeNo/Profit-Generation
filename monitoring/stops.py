@@ -132,6 +132,27 @@ def _rows_from(bars) -> List[Dict]:
     return []
 
 
+def quantize_stop_price(price: Optional[float]) -> Optional[float]:
+    """Round a stop/limit price to a broker-valid tick.
+
+    US equities priced >= $1.00 must trade in 1-cent (2dp) increments;
+    sub-penny ticks (e.g. 741.9597) are rejected by Alpaca with
+    code 42210000 "sub-penny increment". Names priced < $1.00 may use
+    finer 4dp ticks. Returns None unchanged so callers can keep their
+    "no stop" sentinel.
+    """
+    if price is None:
+        return None
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    if p <= 0:
+        return None
+    decimals = 4 if p < 1.0 else 2
+    return round(p, decimals)
+
+
 def stop_price_for(entry_price: float, atr: Optional[float],
                     multiple: float) -> Optional[float]:
     """Return the stop level, or None if the inputs make it nonsensical."""
@@ -156,7 +177,7 @@ def submit_atr_stop(
         symbol=symbol, qty=qty,
         side=OrderSide.SELL,
         time_in_force=TimeInForce.GTC,
-        stop_price=stop_price,
+        stop_price=quantize_stop_price(stop_price),
     )
     if client_order_id:
         kwargs["client_order_id"] = client_order_id

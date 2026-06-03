@@ -139,6 +139,67 @@ def test_stop_price_for_returns_none_when_stop_above_entry():
 
 
 # ---------------------------------------------------------------------------
+# quantize_stop_price (M0 — sub-penny tick fix)
+# ---------------------------------------------------------------------------
+
+def test_quantize_stop_price_2dp_for_dollar_and_up():
+    # >= $1 must snap to a 1-cent tick (Alpaca rejects sub-penny).
+    assert stops.quantize_stop_price(123.4567) == pytest.approx(123.46)
+    assert stops.quantize_stop_price(741.9597) == pytest.approx(741.96)
+    assert stops.quantize_stop_price(1.0) == pytest.approx(1.0)
+    assert stops.quantize_stop_price(99.991) == pytest.approx(99.99)
+
+
+def test_quantize_stop_price_keeps_finer_precision_below_dollar():
+    # Sub-$1 names may use up to 4dp ticks.
+    assert stops.quantize_stop_price(0.8755) == pytest.approx(0.8755)
+    assert stops.quantize_stop_price(0.123456) == pytest.approx(0.1235)
+
+
+def test_quantize_stop_price_sentinels():
+    assert stops.quantize_stop_price(None) is None
+    assert stops.quantize_stop_price(0) is None
+    assert stops.quantize_stop_price(-5) is None
+
+
+def test_submit_atr_stop_quantizes_subpenny(monkeypatch):
+    import types
+    fake_alpaca = types.ModuleType("alpaca")
+    fake_trading = types.ModuleType("alpaca.trading")
+    fake_requests = types.ModuleType("alpaca.trading.requests")
+    fake_enums = types.ModuleType("alpaca.trading.enums")
+
+    class StopOrderRequest:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+    class OrderSide:
+        BUY = "buy"
+        SELL = "sell"
+    class TimeInForce:
+        DAY = "day"
+        GTC = "gtc"
+    fake_requests.StopOrderRequest = StopOrderRequest
+    fake_enums.OrderSide = OrderSide
+    fake_enums.TimeInForce = TimeInForce
+    monkeypatch.setitem(sys.modules, "alpaca", fake_alpaca)
+    monkeypatch.setitem(sys.modules, "alpaca.trading", fake_trading)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.enums", fake_enums)
+
+    captured = {}
+    client = MagicMock()
+    def submit(req):
+        captured["req"] = req
+        return MagicMock(id="stop-1")
+    client.submit_order = submit
+    # A real sub-penny value that Alpaca rejected (see INTRADAY_REALITY_CHECK).
+    stops.submit_atr_stop(
+        client, symbol="SPY", qty=1, stop_price=741.9597,
+    )
+    assert captured["req"].kwargs["stop_price"] == pytest.approx(741.96)
+
+
+# ---------------------------------------------------------------------------
 # submit_atr_stop (mocked, no alpaca-py needed at import time)
 # ---------------------------------------------------------------------------
 

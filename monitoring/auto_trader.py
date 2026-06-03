@@ -2260,7 +2260,11 @@ def _maybe_attach_stop(
     if resolved["stop_price"] is None:
         info["status"] = "no_stop"
         return info
-    stop_price = resolved["stop_price"]
+    # Quantize to a broker-valid tick (2dp for >= $1, finer below) so the
+    # on-book stop, the recorded paper_trade, and the log note all agree and
+    # Alpaca doesn't reject the order for a sub-penny increment.
+    stop_price = stops_mod.quantize_stop_price(resolved["stop_price"])
+    info["stop_price"] = stop_price
     stop_cid = (client_order_id + "-stop")[:MAX_CLIENT_ORDER_ID_LEN] \
         if client_order_id else None
     info["stop_order_client_id"] = stop_cid
