@@ -218,6 +218,59 @@ def test_close_handles_multiple_open_positions(isolated_db):
     assert "IWM" not in syms_closed
 
 
+def test_close_cancels_resting_orders_before_flatten(isolated_db):
+    """The live flatten cancels resting stops/entries for the symbols it's
+    about to sell so Alpaca doesn't reject for wash-trade / held qty."""
+    conn = db.init_db()
+    _seed_open_buy(conn, strategy_id="intra-a", symbol="SPY",
+                    bar_interval="15m",
+                    bar_ts="2026-05-14T14:30:00", qty=3, order_id="b1")
+    _seed_open_buy(conn, strategy_id="intra-b", symbol="QQQ",
+                    bar_interval="5m",
+                    bar_ts="2026-05-14T13:00:00", qty=4, order_id="b2")
+    seen = {}
+
+    def fake_cancel(client, symbols):
+        seen["symbols"] = list(symbols)
+        return 2
+
+    fake_submit = lambda client, symbol, qty, side: FakeOrder(  # noqa: E731
+        oid=f"close-{symbol}",
+    )
+    res = ci.close_intraday_positions(
+        conn=conn, dry_run=False, client=object(),
+        submit_market_order_fn=fake_submit,
+        cancel_open_orders_fn=fake_cancel,
+        settle_seconds=0,
+    )
+    assert res["status"] == "OK"
+    assert sorted(seen["symbols"]) == ["QQQ", "SPY"]
+    assert len(res["closed"]) == 2
+
+
+def test_close_continues_when_cancel_sweep_raises(isolated_db):
+    """A broken cancel sweep must not abort the flatten."""
+    conn = db.init_db()
+    _seed_open_buy(conn, strategy_id="intra-a", symbol="SPY",
+                    bar_interval="15m",
+                    bar_ts="2026-05-14T14:30:00", qty=3, order_id="b1")
+
+    def boom(client, symbols):
+        raise RuntimeError("broker down")
+
+    fake_submit = lambda client, symbol, qty, side: FakeOrder(  # noqa: E731
+        oid=f"close-{symbol}",
+    )
+    res = ci.close_intraday_positions(
+        conn=conn, dry_run=False, client=object(),
+        submit_market_order_fn=fake_submit,
+        cancel_open_orders_fn=boom,
+        settle_seconds=0,
+    )
+    assert res["status"] == "OK"
+    assert len(res["closed"]) == 1
+
+
 def test_close_skips_zero_qty(isolated_db):
     conn = db.init_db()
     _seed_open_buy(conn, strategy_id="intra-a", symbol="SPY",

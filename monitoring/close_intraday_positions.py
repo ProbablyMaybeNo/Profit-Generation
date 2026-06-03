@@ -29,11 +29,40 @@ before the close, which is functionally equivalent in paper.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from config.utils import get_alpaca_client, is_paper_mode, log
 from data import db
+
+
+def _cancel_open_orders_for_symbols(client, symbols: List[str]) -> int:
+    """Cancel resting open orders (initial ATR stops, trailing stops,
+    unfilled entries) for the given symbols so the EOD flatten isn't
+    rejected for "potential wash trade detected" (an opposite-side order
+    exists) or "insufficient qty available" (shares held_for_orders by a
+    resting stop). Returns the number of cancel requests issued.
+
+    Best-effort per order — one bad cancel never blocks the rest.
+    """
+    if not symbols:
+        return 0
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest
+
+    req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=list(symbols))
+    orders = client.get_orders(filter=req)
+    n = 0
+    for o in orders:
+        try:
+            client.cancel_order_by_id(o.id)
+            n += 1
+        except Exception as e:
+            log(f"close_intraday_positions: cancel failed for order "
+                f"{getattr(o, 'id', '?')} ({getattr(o, 'symbol', '?')}): {e}",
+                "WARNING")
+    return n
 
 
 def _open_intraday_buys(conn) -> List[dict]:
@@ -74,6 +103,8 @@ def close_intraday_positions(
     client=None,
     client_factory: Callable = get_alpaca_client,
     submit_market_order_fn: Optional[Callable] = None,
+    cancel_open_orders_fn: Optional[Callable] = None,
+    settle_seconds: float = 2.0,
 ) -> dict:
     """Walk open intraday-strategy positions and submit closing sells.
 
@@ -120,6 +151,27 @@ def close_intraday_positions(
         if submitter is None:
             from monitoring.auto_trader import _submit_market_order
             submitter = _submit_market_order
+
+        # Clear resting stops/entries for every symbol we're about to
+        # flatten. Without this, Alpaca rejects the market sell because a
+        # protective stop is still on the book (wash-trade) or is holding
+        # the shares (insufficient qty). Best-effort: a failed sweep must
+        # never abort the flatten.
+        if not dry_run:
+            canceller = cancel_open_orders_fn or _cancel_open_orders_for_symbols
+            symbols = sorted({p["symbol"] for p in positions})
+            canceled = 0
+            try:
+                canceled = canceller(client, symbols)
+            except Exception as e:
+                log(f"close_intraday_positions: order-cancel sweep failed "
+                    f"(continuing to flatten): {e}", "WARNING")
+            if canceled:
+                log(f"close_intraday_positions: canceled {canceled} resting "
+                    f"order(s) across {len(symbols)} symbol(s) before flatten",
+                    "INFO")
+                if settle_seconds > 0:
+                    time.sleep(settle_seconds)
 
         for pos in positions:
             sid = pos["strategy_id"]
