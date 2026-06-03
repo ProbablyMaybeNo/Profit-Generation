@@ -91,7 +91,12 @@ def check_fires(as_of: date) -> List[Dict]:
     Returns: list of {strategy_id, symbol, fired (bool), bar_date, close}
     """
     end = (as_of + timedelta(days=1)).isoformat()
-    start = (as_of - timedelta(days=120)).isoformat()
+    # F1 (audit 2026-06-03): the old 120-day window (~84 trading bars) starved
+    # any strategy gating on a 200-bar SMA (rsi2/rsi14-oversold) — sma200 was
+    # 100% NaN on the loaded history so long_entry could never be True. Widen
+    # to 320 calendar days (~220 trading bars) so a 200-bar SMA is non-NaN on
+    # the latest bar. Bollinger (<=34 bars) is unaffected by the wider window.
+    start = (as_of - timedelta(days=320)).isoformat()
     fires: List[Dict] = []
 
     # Filter out intraday-class strategies — their compute_fns are designed for
