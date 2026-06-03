@@ -395,6 +395,30 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         )
         counts["opened"] += intraday_counts["opened"]
         counts["noop"] += intraday_counts["noop"]
+        # F2-SAFETY (audit 2026-06-03): F2 lets ONLY the EOD flatten close an
+        # intraday outcome. If a prior session's flatten was missed (crash,
+        # restart, schedule gap) the outcome is orphaned OPEN forever. Sweep
+        # PRIOR-session orphans here (entry strictly before this report's
+        # session) and close them honestly at the last available bar with
+        # exit_reason='stale_intraday_flatten_missed'. Same-session intraday
+        # outcomes are NOT touched — the flatten still owns the normal close,
+        # so this never races the report-date session's flatten. Best-effort:
+        # a sweep failure must not abort report persistence.
+        try:
+            from monitoring import close_intraday_positions
+            # Boundary is THIS report's session date: the EOD flatten owns the
+            # current (report_date) session, so only outcomes entered strictly
+            # before report_date are prior-session orphans to be swept.
+            sweep = close_intraday_positions.sweep_stale_intraday_outcomes(
+                conn, session_date=report.report_date)
+            if sweep.get("swept"):
+                from config.utils import log
+                log(f"persist_report: stale-intraday safety net closed "
+                    f"{sweep['swept']} orphaned outcome(s)", "INFO")
+        except Exception as e:
+            from config.utils import log
+            log(f"persist_report: stale-intraday sweep skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
         return counts
     finally:
         conn.close()

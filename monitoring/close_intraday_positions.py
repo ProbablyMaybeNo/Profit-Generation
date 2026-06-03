@@ -30,12 +30,18 @@ before the close, which is functionally equivalent in paper.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Callable, List, Optional
 
 from config.utils import get_alpaca_client, is_paper_mode, log
 from data import db
 from monitoring import excursion
+
+# F2-SAFETY (audit 2026-06-03): exit_reason stamped on intraday outcomes that
+# were left OPEN by a PRIOR session — i.e. the EOD flatten that normally owns
+# their close never ran (crash / restart / schedule gap). Distinct from
+# 'eod_close' so these orphan-sweeps are honestly attributable in stats.
+STALE_INTRADAY_EXIT_REASON = "stale_intraday_flatten_missed"
 
 
 def _cancel_open_orders_for_symbols(client, symbols: List[str]) -> int:
@@ -147,6 +153,121 @@ def _close_outcome_for_eod(conn, pos, exit_ts, exit_price) -> bool:
         exit_reason="eod_close", mfe_pct=mfe, mae_pct=mae,
     )
     return True
+
+
+def _session_date(value) -> Optional[date]:
+    """Coerce an ISO date/datetime string (or date) to a calendar date.
+
+    Intraday entry_ts is the entry bar's ISO datetime (e.g.
+    '2026-06-02T15:57:00'); the leading 10 chars are the session date. Returns
+    None on anything unparseable so the caller can skip it safely.
+    """
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _open_intraday_outcomes(conn) -> List[dict]:
+    """Every OPEN outcome whose signal is intraday (bar_interval != '1d'),
+    carrying entry ts/price + symbol. Used by the stale-orphan safety net."""
+    rows = conn.execute(
+        """
+        SELECT o.signal_id AS signal_id, o.entry_ts AS entry_ts,
+               o.entry_price AS entry_price, s.symbol AS symbol,
+               s.strategy_id AS strategy_id, s.bar_interval AS bar_interval
+          FROM outcomes o
+          JOIN signals  s ON s.id = o.signal_id
+         WHERE o.status = 'open'
+           AND COALESCE(s.bar_interval, '1d') != '1d'
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def sweep_stale_intraday_outcomes(
+    conn,
+    *,
+    session_date: Optional[date] = None,
+    now_iso: Optional[str] = None,
+) -> dict:
+    """Bounded safety net for intraday outcomes orphaned OPEN by a prior session.
+
+    F2 opens an intraday outcome row at entry and deliberately lets ONLY the
+    EOD flatten (close_intraday_positions) close it. If that flatten is missed
+    (crash, restart, schedule gap), the outcome is stranded OPEN forever,
+    polluting open-position state and eligibility stats.
+
+    This sweep closes ONLY intraday outcomes whose entry session date is
+    STRICTLY BEFORE `session_date` (the session the EOD flatten owns; callers
+    pass the report's session date, default today's UTC date). Same-session
+    intraday outcomes are left untouched so the EOD flatten retains sole
+    ownership of the normal close — this never races the flatten for the
+    current session.
+
+    Each swept outcome is closed at the LAST available intraday bar's close
+    (the best honest mark we have post-hoc), with MFE/MAE computed over
+    entry..last-bar, and exit_reason=STALE_INTRADAY_EXIT_REASON. Outcomes with
+    no usable bars after entry are skipped (no fabricated exit price).
+
+    Idempotent: closed outcomes drop out of the OPEN query, so re-running is a
+    no-op. Best-effort per row — one failure never aborts the rest.
+
+    Returns {scanned, swept, skipped}.
+    """
+    boundary = session_date or datetime.now(timezone.utc).date()
+    fallback_ts = now_iso or _utc_now_iso()
+    candidates = _open_intraday_outcomes(conn)
+    swept = 0
+    skipped = 0
+    for o in candidates:
+        entry_date = _session_date(o.get("entry_ts"))
+        # Staleness boundary: strictly prior to the current session. Same- or
+        # future-session (clock skew) rows are NOT swept — the flatten owns them.
+        if entry_date is None or entry_date >= boundary:
+            skipped += 1
+            continue
+        symbol = o["symbol"]
+        entry_ts = o["entry_ts"]
+        # Last available bar from entry onward becomes the exit mark.
+        bars = _intraday_bars_window(conn, symbol, entry_ts, None)
+        if not bars:
+            skipped += 1
+            continue
+        last_bar = bars[-1]
+        exit_ts = str(last_bar.get("ts") or fallback_ts)
+        try:
+            exit_price = float(last_bar.get("close"))
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        mfe, mae = excursion.compute_mfe_mae(
+            bars, entry_price=o["entry_price"],
+            entry_ts=entry_ts, exit_ts=exit_ts, side="long",
+        )
+        try:
+            db.close_outcome(
+                conn, signal_id=int(o["signal_id"]),
+                exit_ts=exit_ts, exit_price=exit_price,
+                exit_reason=STALE_INTRADAY_EXIT_REASON,
+                mfe_pct=mfe, mae_pct=mae,
+            )
+        except Exception as e:
+            log(f"sweep_stale_intraday_outcomes: close failed for "
+                f"{o.get('strategy_id')}/{symbol} sig {o.get('signal_id')}: {e}",
+                "WARNING")
+            skipped += 1
+            continue
+        log(f"STALE_INTRADAY_SWEEP closed orphan outcome sig "
+            f"{o.get('signal_id')} ({o.get('strategy_id')}/{symbol}) entered "
+            f"{entry_date} @ {o['entry_price']} -> {exit_price} "
+            f"(reason={STALE_INTRADAY_EXIT_REASON})", "INFO")
+        swept += 1
+    return {"scanned": len(candidates), "swept": swept, "skipped": skipped}
 
 
 def close_intraday_positions(

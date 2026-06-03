@@ -163,3 +163,84 @@ def test_intraday_pass_does_not_close_on_intraday_exit_signal(
     assert o["status"] == "open", \
         "intraday long_exit must not close the outcome; EOD flatten owns it"
     assert o["exit_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# F2-SAFETY (audit 2026-06-03): stale-intraday orphan safety net.
+#
+# F2 lets ONLY the EOD flatten close an intraday outcome. If a prior session's
+# flatten is missed (crash, restart, schedule gap) the outcome is stranded
+# OPEN forever. persist_report now runs a bounded sweep that closes ONLY
+# PRIOR-session orphans (entry session date strictly before today's UTC
+# session) with exit_reason='stale_intraday_flatten_missed', leaving
+# current-session intraday outcomes to the flatten.
+#
+# WIRING test: drives the real persist_report entry point (not the sweep in
+# isolation) and proves (a) a current-session open intraday outcome is NOT
+# swept, and (b) a prior-session orphan IS swept with non-NULL MFE/MAE. On the
+# old code (no sweep wired) the prior-session orphan stays OPEN -> this FAILS.
+# ---------------------------------------------------------------------------
+
+def test_persist_report_sweeps_prior_session_intraday_orphan_only(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "f2safety.db"
+    # OOM-safe: capture the real init_db before patching so the lambda calls
+    # the real callable, never itself.
+    _real_init_db = db.init_db
+    monkeypatch.setattr(dr.db, "init_db", lambda *a, **k: _real_init_db(db_path))
+
+    # The report (and thus the EOD flatten) owns the 2026-05-14 session.
+    conn = db.init_db(db_path)
+    db.upsert_strategy(conn, {"extra": {"strategy_id": "intra-mr"}})
+
+    # --- Prior-session orphan: entered 2026-05-13, strictly before the
+    #     report's 2026-05-14 session -> the flatten that owned 05-13 was
+    #     missed, so this is a stale orphan the safety net must sweep. ---
+    stale_sig = db.record_signal(
+        conn, strategy_id="intra-mr", symbol="QQQ",
+        bar_ts="2026-05-13T14:30:00", signal_type="long_entry",
+        close=100.0, bar_interval="1m",
+    )
+    # Intraday bars after entry; last bar close 99 is the honest exit mark.
+    # Window high 104 (+4%), low 96 (-4%).
+    _seed_intraday_bar(conn, "QQQ", "2026-05-13T14:35:00", 104, 99, 102)
+    _seed_intraday_bar(conn, "QQQ", "2026-05-13T15:00:00", 101, 96, 99)
+
+    # --- Current-session outcome: entered 2026-05-14 (== report session).
+    #     The flatten still owns it, so the sweep must NOT touch it. ---
+    fresh_sig = db.record_signal(
+        conn, strategy_id="intra-mr", symbol="SPY",
+        bar_ts="2026-05-14T14:30:00", signal_type="long_entry",
+        close=200.0, bar_interval="1m",
+    )
+    _seed_intraday_bar(conn, "SPY", "2026-05-14T14:35:00", 205, 199, 201)
+    conn.commit()
+    conn.close()
+
+    report = dr.DailyReport(report_date=date(2026, 5, 14), market_regime="x")
+    dr.persist_report(report, markdown="x")
+
+    conn = db.init_db(db_path)
+    stale = conn.execute(
+        "SELECT status, exit_reason, exit_price, mfe_pct, mae_pct "
+        "  FROM outcomes WHERE signal_id=?", (stale_sig,),
+    ).fetchone()
+    fresh = conn.execute(
+        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?",
+        (fresh_sig,),
+    ).fetchone()
+    conn.close()
+
+    # (b) prior-session orphan swept with the distinct reason + non-NULL MFE/MAE.
+    assert stale is not None
+    assert stale["status"] == "closed"
+    assert stale["exit_reason"] == "stale_intraday_flatten_missed"
+    assert stale["exit_price"] == pytest.approx(99.0)
+    assert stale["mfe_pct"] == pytest.approx(0.04)
+    assert stale["mae_pct"] == pytest.approx(-0.04)
+
+    # (a) current-session outcome untouched — the EOD flatten still owns it.
+    assert fresh is not None
+    assert fresh["status"] == "open"
+    assert fresh["exit_reason"] is None
