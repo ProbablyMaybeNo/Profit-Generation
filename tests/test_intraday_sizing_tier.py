@@ -275,3 +275,48 @@ def test_auto_trader_intraday_settings_override(isolated_db, monkeypatch):
     sizing = submits[0]["sizing"]
     assert sizing["intraday_multiplier"] == 0.3
     assert sizing["notional"] == 300.0
+
+
+# ---------------- M4: intraday floor lets liquid names size >= 1 share ----------------
+
+def test_intraday_floor_lets_liquid_name_size_one_share(isolated_db, monkeypatch):
+    """A $760 intraday SPY entry: base 1000 × 0.5 = 500 (< one share), but
+    the intraday floor of $800 lifts notional so qty floors to 1 share."""
+    _patch_tracked(monkeypatch, _NO_META_INTRA)
+    conn = db.init_db()
+    _seed(conn, sid="test-intra-15m",
+          sym="SPY", bar_ts="2026-05-14T14:30:00", bar_interval="15m",
+          close=760.0)
+    # max_position_usd=1000 (from _settings) × 0.5 intraday = 500 (< one
+    # $760 share). The $800 floor lifts it so qty floors to 1.
+    s = _settings()
+    s["intraday"] = {"min_position_usd": 800}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14),
+        bar_interval="15m", settings=s,
+    )
+    submits = [a for a in res["actions"]
+               if a.get("action") in ("DRY_BUY", "SUBMITTED")]
+    assert submits, f"expected DRY_BUY in {res['actions']}"
+    sizing = submits[0]["sizing"]
+    # Floored to 800 (from the 500 the multiplier would have produced).
+    assert sizing["notional"] == pytest.approx(800.0)
+    assert submits[0]["qty"] >= 1
+
+
+def test_intraday_floor_not_applied_to_eod(isolated_db, monkeypatch):
+    """The intraday floor must not touch EOD sizing."""
+    _patch_tracked(monkeypatch, _NO_META_EOD)
+    conn = db.init_db()
+    _seed(conn, sid="test-eod-1d",
+          sym="SPY", bar_ts="2026-05-14", bar_interval="1d", close=50.0)
+    s = _settings()
+    s["intraday"] = {"min_position_usd": 800}
+    res = at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=s,
+    )
+    submits = [a for a in res["actions"]
+               if a.get("action") in ("DRY_BUY", "SUBMITTED")]
+    assert submits, f"expected DRY_BUY in {res['actions']}"
+    # EOD notional unchanged at max_position_usd (1000), not floored to 800.
+    assert submits[0]["sizing"]["notional"] == 1000.0

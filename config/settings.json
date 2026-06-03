@@ -73,13 +73,23 @@
     "fraction_of_kelly": 0.25,
     "max_position_fraction": 0.10,
     "min_samples": 50,
-    "_notes": "6.2.2 — Fractional Kelly sizing tier. Activated per-strategy by setting auto_trade.sizing_method='kelly_quarter'. fraction_of_kelly (default 0.25 = ¼ Kelly) is multiplied against the raw Kelly fraction; code hard-clamps this at 0.5 (½ Kelly) so config typos can never push to full Kelly. max_position_fraction (default 0.05 = 5%) caps any single position as a fraction of portfolio. min_samples (default 50) is the closed-outcome guard — below it, sizing falls back to the tiered (3.2.1) tier. Ross can promote a strategy to fraction_of_kelly=0.5 after it accumulates 200+ closed outcomes."
+    "pf_size_up": {
+      "enabled": true,
+      "pf_threshold": 2.0,
+      "boosted_max_position_fraction": 0.15
+    },
+    "_notes": "6.2.2 — Fractional Kelly sizing tier. Activated per-strategy by setting auto_trade.sizing_method='kelly_quarter'. fraction_of_kelly (default 0.25 = ¼ Kelly) is multiplied against the raw Kelly fraction; code hard-clamps this at 0.5 (½ Kelly) so config typos can never push to full Kelly. max_position_fraction (default 0.05 = 5%) caps any single position as a fraction of portfolio. min_samples (default 50) is the closed-outcome guard — below it, sizing falls back to the tiered (3.2.1) tier. Ross can promote a strategy to fraction_of_kelly=0.5 after it accumulates 200+ closed outcomes.",
+    "_notes_pf_size_up": "Sprint-1 M4 — expectancy-tiered size-up. A strategy whose measured profit factor exceeds pf_threshold (2.0) gets boosted_max_position_fraction (0.15) instead of the base max_position_fraction (0.10), so proven high-edge EOD winners (3-bar-low PF 2.92, 4bar-reversal PF 3.31) deploy more of the idle capital. fraction_of_kelly stays at 0.25 (NOT raised — conservative posture held until stop effectiveness is confirmed via M1 MFE/MAE). The boost is hard-clamped in code to 0.20. Set enabled=false to disable."
   },
   "trailing_stop": {
     "method": "atr_trail",
     "multiplier": 3.0,
     "atr_period": 14,
     "_notes": "6.4 — Global trailing-stop policy. method one of {atr_trail, chandelier, percent_trail}. atr_trail: stop = highest_high_since_entry − (multiplier × ATR_14), ratcheting up only (never loosens). multiplier 3.0 gives the trade room above the tighter 2.5× ATR initial stop. Floored against the entry-time ATR stop so it can never slip below the initial protective level. Per-strategy overrides go in that strategy's TRACKED_STRATEGIES declaration under `trailing_stop`. Requires a bars_fetcher in the live path (wired in auto_trader.process_signals). Set method to null to disable."
+  },
+  "intraday": {
+    "min_position_usd": 800,
+    "_notes": "Sprint-1 M4 — intraday position floor. After the intraday size multiplier (0.5) shrinks the notional, it is floored to this value so an intraday entry can afford >=1 share of liquid names (SPY ~$590-760, QQQ ~$500, NVDA ~$140). Applies to intraday entries only (bar_interval != '1d'); EOD sizing is untouched. Stays well within risk.max_position_usd ($10k) and, at risk.max_open_positions (12), caps intraday exposure far below the idle cash buffer. Set to 0 to disable the intraday-specific floor."
   },
   "notes": "These are non-secret settings. Edit freely."
 }

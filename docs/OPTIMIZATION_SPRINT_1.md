@@ -126,7 +126,7 @@ in the commit which approach was taken and why.
 
 ---
 
-## [ ] M4 (P1) — Deploy idle capital: scale intraday/position size to edge
+## [x] M4 (P1) — Deploy idle capital: scale intraday/position size to edge
 
 **Why:** ~70% of capital idle (\$69.5k cash; median fill \$914 vs \$10k cap). Sizing
 is flat across edge tiers; `kelly_quarter × fraction_of_kelly=0.25 ×

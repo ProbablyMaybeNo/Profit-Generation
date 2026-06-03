@@ -91,6 +91,18 @@ def kelly_stats(returns: list) -> Dict:
     }
 
 
+def profit_factor(returns: list) -> Optional[float]:
+    """Gross profit / gross loss over the returns. None when there are no
+    losses (undefined / infinite PF) or no returns at all."""
+    if not returns:
+        return None
+    gross_profit = sum(r for r in returns if r > 0)
+    gross_loss = abs(sum(r for r in returns if r < 0))
+    if gross_loss <= 0:
+        return None
+    return round(gross_profit / gross_loss, 4)
+
+
 def _kelly_raw(p: float, b: float) -> float:
     """The textbook Kelly formula: f* = (p × (b + 1) - 1) / b.
 

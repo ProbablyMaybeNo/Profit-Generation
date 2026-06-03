@@ -53,6 +53,14 @@ HARD_CAP_FRACTION_OF_KELLY = 0.50  # never above ½ Kelly
 DEFAULT_MAX_POSITION_FRACTION = 0.05
 DEFAULT_KELLY_MIN_SAMPLES = 50
 
+# Sprint-1 M4 — expectancy-tiered size-up. Strategies whose measured
+# profit factor clears `pf_threshold` get the boosted max_position_fraction
+# instead of the base, so proven high-edge EOD winners (PF>2.0) deploy more
+# of the idle capital WITHOUT raising fraction_of_kelly past its 0.25 cap.
+# The boost is hard-clamped so a config typo can't blow past a safe ceiling.
+DEFAULT_PF_SIZE_UP_THRESHOLD = 2.0
+HARD_CAP_BOOSTED_MAX_POSITION_FRACTION = 0.20
+
 # Tiered sizing defaults (per-tier capital in USD). All overridable via
 # settings.auto_trade.tiered.{tier_0_usd, tier_1_usd, tier_2_usd,
 # tier_3_usd, tier_3_min_sharpe}.
@@ -279,6 +287,7 @@ def _coerce_kelly_settings(raw: Optional[Dict]) -> Dict:
         "fraction_of_kelly": DEFAULT_FRACTION_OF_KELLY,
         "max_position_fraction": DEFAULT_MAX_POSITION_FRACTION,
         "min_samples": DEFAULT_KELLY_MIN_SAMPLES,
+        "pf_size_up": None,
     }
     if not isinstance(raw, dict):
         return out
@@ -313,6 +322,32 @@ def _coerce_kelly_settings(raw: Optional[Dict]) -> Dict:
                 out["min_samples"] = n
         except (TypeError, ValueError):
             pass
+    # pf_size_up (M4) — {enabled, pf_threshold, boosted_max_position_fraction}.
+    # Disabled / malformed → None (no boost). The boosted fraction is clamped
+    # to [base, HARD_CAP_BOOSTED_MAX_POSITION_FRACTION] so a typo can't push a
+    # single position past a safe portfolio ceiling.
+    pf = raw.get("pf_size_up")
+    if isinstance(pf, dict) and bool(pf.get("enabled")):
+        threshold = DEFAULT_PF_SIZE_UP_THRESHOLD
+        try:
+            t = float(pf.get("pf_threshold"))
+            if t > 0:
+                threshold = t
+        except (TypeError, ValueError):
+            pass
+        boosted = out["max_position_fraction"]
+        try:
+            b = float(pf.get("boosted_max_position_fraction"))
+            if b > 0:
+                boosted = b
+        except (TypeError, ValueError):
+            pass
+        boosted = max(out["max_position_fraction"],
+                      min(boosted, HARD_CAP_BOOSTED_MAX_POSITION_FRACTION))
+        out["pf_size_up"] = {
+            "pf_threshold": threshold,
+            "boosted_max_position_fraction": boosted,
+        }
     return out
 
 
@@ -358,6 +393,20 @@ def kelly_quarter_notional(
         conn, strategy_id,
         min_samples=settings["min_samples"], cap=cap,
     )
+    # M4 — expectancy-tiered size-up: a strategy whose measured profit factor
+    # clears the threshold gets the boosted max_position_fraction. PF is read
+    # from the same closed-outcome set Kelly uses, so the boost only ever
+    # applies to strategies with enough resolved trades to qualify for Kelly.
+    effective_max_fraction = settings["max_position_fraction"]
+    pf_value = None
+    pf_boosted = False
+    pf_cfg = settings.get("pf_size_up")
+    if isinstance(pf_cfg, dict):
+        rets = kelly_mod.fetch_closed_outcomes(conn, strategy_id)
+        pf_value = kelly_mod.profit_factor(rets)
+        if pf_value is not None and pf_value > pf_cfg["pf_threshold"]:
+            effective_max_fraction = pf_cfg["boosted_max_position_fraction"]
+            pf_boosted = True
     raw_fraction = diag.get("fraction")
     if raw_fraction is None:
         # Guard failed → caller falls back to previous tier.
@@ -386,7 +435,7 @@ def kelly_quarter_notional(
         }
     sized_fraction = min(
         settings["fraction_of_kelly"] * raw_fraction,
-        settings["max_position_fraction"],
+        effective_max_fraction,
     )
     if portfolio_value is None or portfolio_value <= 0:
         return {
@@ -394,7 +443,9 @@ def kelly_quarter_notional(
             "fraction": raw_fraction,
             "sized_fraction": round(sized_fraction, 6),
             "fraction_of_kelly": settings["fraction_of_kelly"],
-            "max_position_fraction": settings["max_position_fraction"],
+            "max_position_fraction": effective_max_fraction,
+            "pf": pf_value,
+            "pf_boosted": pf_boosted,
             "stats": diag.get("stats"),
             "guard_status": diag.get("guard"),
             "fallback": False,
@@ -407,7 +458,9 @@ def kelly_quarter_notional(
         "fraction": raw_fraction,
         "sized_fraction": round(sized_fraction, 6),
         "fraction_of_kelly": settings["fraction_of_kelly"],
-        "max_position_fraction": settings["max_position_fraction"],
+        "max_position_fraction": effective_max_fraction,
+        "pf": pf_value,
+        "pf_boosted": pf_boosted,
         "stats": diag.get("stats"),
         "guard_status": diag.get("guard"),
         "fallback": False,

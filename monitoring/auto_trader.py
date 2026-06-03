@@ -130,7 +130,7 @@ def merge_config(raw: dict) -> dict:
     s = raw.get("auto_trade", {})
     out = dict(DEFAULT_SETTINGS)
     out.update({k: v for k, v in s.items() if not k.startswith("_")})
-    for block in ("stops", "kelly", "trailing_stop", "risk"):
+    for block in ("stops", "kelly", "trailing_stop", "risk", "intraday"):
         if block in raw and block not in out:
             out[block] = raw[block]
     return out
@@ -562,6 +562,18 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     # (no change). Intraday entries (bar_interval != "1d") get a multiplier
     # from the strategy declaration override or settings default (0.5).
     sig_bar_interval = sig["bar_interval"] if "bar_interval" in sig.keys() else "1d"
+    # M4 — raise the intraday floor so the post-multiplier notional clears the
+    # price of one liquid share (SPY/QQQ etc.). settings.intraday.min_position_usd
+    # overrides the shared floor for intraday entries only; EOD is untouched.
+    if sig_bar_interval != "1d":
+        intraday_cfg = settings.get("intraday")
+        if isinstance(intraday_cfg, dict):
+            try:
+                imp = float(intraday_cfg.get("min_position_usd") or 0)
+                if imp > min_position_usd:
+                    min_position_usd = imp
+            except (TypeError, ValueError):
+                pass
     intraday_multiplier = sizing_mod.resolve_intraday_multiplier(
         bar_interval=sig_bar_interval,
         declaration=decl,
