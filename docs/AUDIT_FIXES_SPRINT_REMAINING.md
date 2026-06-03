@@ -153,6 +153,25 @@ closed outcomes, and 1d strategies are unchanged. Full non-live suite green.
 
 ---
 
-### Deferred (not in this batch)
-- **F8** — verification only (re-measure `price_too_high` / `qty_floored_to_cap_min` after
-  the next RTH session). Owner runs this; nothing to build.
+### Verification
+
+## [x] F8 (verification) — re-measure `price_too_high` / `qty_floored_to_cap_min`
+
+**Verified:** 2026-06-03. Measured against `data/trading.db` `intraday_skips` at matched
+signal volume:
+
+| Day | Total skips | `price_too_high` | share |
+|-----|------------:|-----------------:|------:|
+| 2026-06-01 | 99,468 | 6,238 | 6.3% |
+| 2026-06-02 | 99,905 | 84 | 0.08% |
+| 2026-06-03 (partial) | 16,603 | 0 | 0% |
+
+The M3 sizing fix (`b787627`) collapsed the `price_too_high` veto by 98.7% at constant
+volume (06-01 vs 06-02 both ~99k skips). `qty_floored_to_cap_min` records NO skip rows —
+the path that used to veto now buys 1 share at cap-min instead of discarding the signal.
+Remaining `price_too_high` hits are genuine (cap can't afford even one share). PASS.
+
+**Operational note:** F7 (`no_open_position` skip suppression, `5f2afbe`) is committed but
+`no_open_position` rows are still being written on 2026-06-03 (15,940) — the live trading
+process must be RESTARTED to pick up F7 / F5-LIVE / F2-SAFETY. Code is correct; runtime is
+stale until the next process bounce.
