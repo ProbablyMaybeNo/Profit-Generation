@@ -77,7 +77,7 @@ suite green.
 
 ---
 
-## [ ] M2 (P0) — Quarantine the negative-edge strategies
+## [x] M2 (P0) — Quarantine the negative-edge strategies
 
 **Why:** evidence-backed money-losers. `intraday-1m-orb` (−$56 live, 22% WR; ORB
 backtest −12.9% vs SPY +22.6%), `intraday-1m-vwap-reclaim` (negative live + backtest),
