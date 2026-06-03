@@ -569,3 +569,78 @@ def test_auto_trader_live_submits_stop_and_records_paper_trade(
     assert stop_row["order_type"] == "stop"
     assert stop_row["stop_price"] == pytest.approx(96.0)
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# F5-LIVE: reconcile_stop_fills is wired into the live in-loop sync path.
+#
+# The earlier reconcile tests above call stops.reconcile_stop_fills in
+# ISOLATION — they would still pass even if nothing in auto_trader ever
+# called it. This test exercises the REAL production call path: it drives
+# process_signals down the built_own_client branch (client=None + dry_run
+# False + a client_factory stub) and asserts the loop itself invokes
+# reconcile_stop_fills WITH a bars_fetcher, landing a stop fill in outcomes
+# with non-NULL MFE/MAE and exit_reason='stop_loss_atr'. With the wiring
+# absent this test fails (outcome stays open, excursion NULL).
+# ---------------------------------------------------------------------------
+
+def test_reconcile_stop_fills_wired_into_live_loop(isolated_db, monkeypatch):
+    # One OPEN outcome for (winner, GDX) entered 2026-05-14, plus a pending
+    # stop paper_trade pointing at a broker order that has since filled.
+    conn = _seed_outcomes_with_open([2.0, 1.0] * 18, open_at="2026-05-14")
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "stop-live-1",
+        "strategy_id": "winner", "symbol": "GDX",
+        "side": "sell", "qty": 10, "order_type": "stop",
+        "stop_price": 96.0,
+        "submitted_at": "2026-05-14T14:00:00Z",
+        "status": "accepted",
+    })
+
+    filled_stop = MagicMock()
+    filled_stop.status = "filled"
+    filled_stop.filled_avg_price = 96.0
+    filled_stop.filled_at = "2026-05-15T17:00:00Z"
+
+    # The client the live loop builds itself. get_order_by_id answers for
+    # both order_sync and reconcile_stop_fills.
+    live_client = MagicMock()
+    live_client.get_order_by_id.return_value = filled_stop
+
+    # Bars windowed entry(100 @ 2026-05-14)..fill: high 108 (+8%), low 94
+    # (-6%). _build_default_bars_fetcher would hit yfinance, so replace it
+    # with a deterministic fetcher — asserting the wiring passes SOME
+    # bars_fetcher through to reconcile (excursion lands non-NULL).
+    bars = [
+        {"high": 108.0, "low": 99.0, "close": 104.0,
+         "ts": "2026-05-14T18:00:00+00:00"},
+        {"high": 103.0, "low": 94.0, "close": 96.0,
+         "ts": "2026-05-15T16:00:00+00:00"},
+    ]
+    monkeypatch.setattr(at, "_build_default_bars_fetcher",
+                        lambda *a, **k: (lambda sym: bars))
+
+    # No entry signal for asof → no live order submission; the loop's only
+    # broker work is the in-loop order_sync + reconcile_stop_fills pass.
+    settings = {**_winner_settings(), "dry_run": False}
+    res = at.process_signals(
+        conn,
+        asof=date(2026, 5, 16),
+        settings=settings,
+        client=None,                       # forces built_own_client path
+        client_factory=lambda: live_client,
+        account_summary_fn=lambda: {"portfolio_value": 100000.0,
+                                    "cash": 100000.0, "equity": 100000.0,
+                                    "buying_power": 100000.0},
+    )
+    assert res["status"] == "OK"
+
+    row = conn.execute(
+        "SELECT exit_reason, exit_price, mfe_pct, mae_pct FROM outcomes "
+        " WHERE status='closed' AND exit_reason='stop_loss_atr'"
+    ).fetchone()
+    assert row is not None, "live loop did not reconcile the stop fill"
+    assert row["exit_price"] == pytest.approx(96.0)
+    assert row["mfe_pct"] == pytest.approx(0.08)
+    assert row["mae_pct"] == pytest.approx(-0.06)
+    conn.close()

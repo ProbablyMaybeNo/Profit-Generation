@@ -2500,6 +2500,31 @@ def process_signals(
     # we build the real client) syncs, while callers that inject an explicit
     # client (tests) keep their controlled paper_trades state untouched.
     if built_own_client:
+        # F5-LIVE: reconcile ATR stop-loss fills in the same in-loop pass as
+        # order_sync. F5 taught reconcile_stop_fills to record MFE/MAE and the
+        # correct exit_reason='stop_loss_atr', but nothing called it from the
+        # live loop — stop fills were left unreconciled (orphan open outcomes,
+        # NULL excursion). Pass the same default bars_fetcher used by the
+        # ATR/trailing-stop engines so the excursion window is computed.
+        #
+        # ORDER MATTERS: reconcile runs BEFORE order_sync. reconcile_stop_fills
+        # only considers stop rows in a non-terminal status; order_sync would
+        # otherwise flip the stop paper_trade to 'filled' first, hiding it from
+        # reconcile and orphaning the outcome. Running reconcile first lets it
+        # close the outcome + mark the row filled; order_sync then sees it
+        # terminal and skips it.
+        # Best-effort: a failure here must never crash the trading loop.
+        try:
+            from monitoring import stops
+            rec_res = stops.reconcile_stop_fills(
+                conn, client, bars_fetcher=bars_fetcher)
+            if rec_res.get("closed"):
+                log(f"auto_trader: reconcile_stop_fills closed "
+                    f"{rec_res['closed']} stop outcome(s) "
+                    f"({rec_res['filled']} filled)", "INFO")
+        except Exception as e:
+            log(f"auto_trader: reconcile_stop_fills skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
         try:
             from monitoring import order_sync
             sync_res = order_sync.sync_order_fills(conn, client)
