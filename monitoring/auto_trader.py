@@ -141,7 +141,8 @@ def _config() -> dict:
 
 
 def _is_eligible(conn, strategy_id: str, settings: dict,
-                 *, grace_period: bool = False) -> tuple:
+                 *, grace_period: bool = False,
+                 bar_interval: str = "1d") -> tuple:
     """Return (ok: bool, stats: dict). Stats always populated for logging.
 
     When `grace_period=True`, the strategy is allowed to fire orders even
@@ -150,11 +151,22 @@ def _is_eligible(conn, strategy_id: str, settings: dict,
     setting). Stats includes `in_grace=True` so callers can apply that
     multiplier. Once n >= min_outcomes, grace mode is ignored and the
     normal mean / sharpe thresholds apply.
+
+    F6 (audit 2026-06-03): scope the outcome set to the signal's own class so
+    an intraday strategy is judged on its INTRADAY record, not the (empty) 1d
+    set. A 1d signal counts 1d outcomes; any non-1d (intraday) signal counts
+    the strategy's non-1d closed outcomes. The two classes are kept separate
+    so incomparable interval stats aren't pooled. Thresholds are unchanged —
+    only WHICH outcomes are counted.
     """
+    if (bar_interval or "1d") == "1d":
+        interval_clause = "s.bar_interval='1d'"
+    else:
+        interval_clause = "s.bar_interval!='1d'"
     rows = conn.execute(
         "SELECT o.return_pct FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
-        "   AND s.bar_interval='1d' AND s.strategy_id=?",
+        f"   AND {interval_clause} AND s.strategy_id=?",
         (strategy_id,),
     ).fetchall()
     rets = [r["return_pct"] for r in rows]
@@ -491,7 +503,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
     decl = _resolve_strategy_declaration(sid, tracked_strategies)
     grace_period_flag = bool((decl or {}).get("grace_period", False))
     eligible, stats = _is_eligible(conn, sid, settings,
-                                   grace_period=grace_period_flag)
+                                   grace_period=grace_period_flag,
+                                   bar_interval=sig_bar_interval_top)
     if not eligible:
         _record_skip(
             conn, sig=sig, gate="ineligible",

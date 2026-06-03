@@ -124,7 +124,7 @@ still skipping correctly. Full non-live suite green.
 
 ---
 
-## [ ] F6 (P3, Blockage) — `_is_eligible` should count intraday outcomes, not just 1d
+## [x] F6 (P3, Blockage) — `_is_eligible` should count intraday outcomes, not just 1d
 
 **RUN LAST — depends on F2** (intraday outcomes must exist before the gate can measure them).
 Owner approved building this (fake money, lean risky on trade-behavior changes).

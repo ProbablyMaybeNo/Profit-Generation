@@ -125,7 +125,15 @@ while still skipping correctly. Full non-live suite green.
 
 ---
 
-## [ ] F6 (P3, Blockage) — `_is_eligible` should count intraday outcomes, not just 1d
+## [x] F6 (P3, Blockage) — `_is_eligible` should count intraday outcomes, not just 1d
+
+**Completed:** 2026-06-03 by milestone-builder — `_is_eligible` takes a
+`bar_interval`; a 1d signal counts 1d closed outcomes, any non-1d (intraday)
+signal counts the strategy's non-1d closed outcomes. Classes kept separate (no
+pooling); thresholds untouched. Call site passes the signal's bar_interval.
+Tests prove an intraday signal is judged on its intraday record (eligible) while
+its 1d view stays empty, and a 1d strategy's count is unaffected by intraday
+outcomes. Full non-live suite green (2304 passed).
 
 **RUN LAST — depends on F2** (intraday outcomes must exist before the gate can measure them).
 Owner approved building this (fake money, lean risky on trade-behavior changes).

@@ -126,6 +126,56 @@ def test_grace_period_still_fails_negative_edge_after_graduation(isolated_db,
     assert stats["in_grace"] is False
 
 
+def _seed_outcomes_interval(strat, returns, *, bar_interval):
+    """Seed N closed outcomes for a strategy at a specific bar_interval."""
+    conn = db.init_db()
+    for i, ret in enumerate(returns):
+        ts = f"2024-01-{i+1:02d}T14:{i % 60:02d}:00"
+        sid = db.record_signal(conn, strategy_id=strat, symbol="X",
+                               bar_ts=ts, signal_type="long_entry",
+                               close=100.0, bar_interval=bar_interval)
+        db.open_outcome(conn, signal_id=sid, entry_ts=ts, entry_price=100.0)
+        db.close_outcome(conn, signal_id=sid, exit_ts=ts,
+                         exit_price=100.0 * (1 + ret / 100),
+                         exit_reason="eod_close", bars_held=0)
+    return conn
+
+
+def test_f6_intraday_signal_judged_on_intraday_outcomes(isolated_db,
+                                                        winner_settings):
+    """F6 (audit 2026-06-03): an intraday signal's eligibility is computed
+    from the strategy's INTRADAY closed outcomes, not the (empty) 1d set."""
+    # Strategy has a strong intraday record but ZERO 1d outcomes.
+    conn = _seed_outcomes_interval("winner", [2.0, 1.0] * 18,
+                                   bar_interval="1m")
+    # 1d view: no outcomes -> ineligible.
+    ok_1d, stats_1d = at._is_eligible(conn, "winner", winner_settings,
+                                      bar_interval="1d")
+    assert ok_1d is False
+    assert stats_1d["n"] == 0
+    # Intraday view: counts the 1m outcomes -> eligible.
+    ok_intra, stats_intra = at._is_eligible(conn, "winner", winner_settings,
+                                            bar_interval="1m")
+    assert ok_intra is True
+    assert stats_intra["n"] == 36
+
+
+def test_f6_1d_strategy_unaffected_by_intraday_outcomes(isolated_db,
+                                                        winner_settings):
+    """A 1d strategy still measures only its 1d outcomes; intraday outcomes
+    for the same strategy_id do not leak into the 1d eligibility set."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)  # 36 1d outcomes
+    # Add intraday outcomes that would skew counts if pooled.
+    conn = _seed_outcomes_interval("winner", [-5.0] * 10, bar_interval="5m")
+    ok, stats = at._is_eligible(conn, "winner", winner_settings,
+                                bar_interval="1d")
+    assert ok is True
+    assert stats["n"] == 36  # only the 1d outcomes counted, not the 46
+    # Default arg keeps the legacy 1d behavior.
+    ok_default, stats_default = at._is_eligible(conn, "winner", winner_settings)
+    assert stats_default["n"] == 36
+
+
 # ----- Sizing -----
 
 def test_calc_qty_floor():
