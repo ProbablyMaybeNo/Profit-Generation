@@ -40,7 +40,7 @@ oversold setup CAN produce a fire on a constructed series. Full non-live suite g
 
 ---
 
-## [ ] F4 (P2, Bug) — excursion window TZ/format mismatch (do before F2/F3 produce data)
+## [x] F4 (P2, Bug) — excursion window TZ/format mismatch (do before F2/F3 produce data)
 
 **Evidence:** `intraday_bars.ts_utc='...T20:46:00+00:00'` (offset-aware UTC) vs signal
 `bar_ts='...T15:57:00'` (naive, ~ET, this box is non-UTC). `monitoring/excursion.py::_in_window`

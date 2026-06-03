@@ -295,8 +295,14 @@ class FakeFilledOrder:
     def __init__(self, oid, fill_price):
         self.id = oid
         self.status = "filled"
-        self.submitted_at = "2026-05-14T16:00:00Z"
-        self.filled_at = "2026-05-14T16:00:01Z"
+        # F4: broker fill timestamps are UTC. A 16:00 ET EOD flatten is
+        # 20:00 UTC (EDT = UTC-4). The entry bar_ts is naive ET 14:30
+        # (== 18:30 UTC), so the exit must be a *later* UTC instant for the
+        # excursion window to be valid. The old "16:00:01Z" (= 12:00 ET)
+        # predated the entry and only "worked" under the broken lexical
+        # string compare this fix removes.
+        self.submitted_at = "2026-05-14T20:00:00Z"
+        self.filled_at = "2026-05-14T20:00:01Z"
         self.filled_avg_price = fill_price
 
 

@@ -19,7 +19,15 @@ caller can persist NULL rather than a misleading 0.0.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+# Convention used across the codebase (monitoring.intraday_fires.MARKET_TZ):
+# naive timestamps are America/New_York wall-clock. Bars persisted from the
+# broker carry offset-aware UTC (e.g. '...T20:46:00+00:00'); signal entry/exit
+# timestamps are naive ET (e.g. '...T15:57:00'). Compare both as aware UTC.
+_MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def _to_rows(bars) -> List[Dict]:
@@ -62,12 +70,48 @@ def _to_rows(bars) -> List[Dict]:
     return []
 
 
+def _to_utc(ts: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp string to an aware UTC datetime.
+
+    Naive strings (no offset) are interpreted as America/New_York wall-clock
+    — the same convention used by intraday_fires / the bar pipeline on this
+    non-UTC box. Returns None if the value is empty or unparseable, in which
+    case the caller falls back to lexical-free inclusion.
+    """
+    if not ts:
+        return None
+    s = str(ts).strip()
+    if not s:
+        return None
+    # Normalize a trailing 'Z' which fromisoformat rejects on older builds.
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_MARKET_TZ)
+    return dt.astimezone(timezone.utc)
+
+
 def _in_window(ts: str, entry_ts: Optional[str], exit_ts: Optional[str]) -> bool:
     if not ts:
         return True
-    if entry_ts and ts < entry_ts:
+    bar_dt = _to_utc(ts)
+    entry_dt = _to_utc(entry_ts)
+    exit_dt = _to_utc(exit_ts)
+    # If the bar ts can't be parsed, fall back to lexical compare so we never
+    # crash on malformed data (preserves prior behavior for that edge).
+    if bar_dt is None:
+        if entry_ts and ts < entry_ts:
+            return False
+        if exit_ts and ts > exit_ts:
+            return False
+        return True
+    if entry_dt is not None and bar_dt < entry_dt:
         return False
-    if exit_ts and ts > exit_ts:
+    if exit_dt is not None and bar_dt > exit_dt:
         return False
     return True
 
