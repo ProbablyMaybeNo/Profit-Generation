@@ -151,6 +151,11 @@ TRACKED_STRATEGIES = [
     {"id": "botnet101-consec-below-ema",     "compute": "compute_consecutive_below_ema",      "strategy_class": "mean_reversion", "active_on": ["XOP", "XBI", "KRE", "XME", "GDX"]},
     {"id": "botnet101-turn-around-tuesday",  "compute": "compute_turn_around_tuesday",        "strategy_class": "mean_reversion", "active_on": ["XOP", "XME", "GDX"]},
     {"id": "botnet101-turn-of-month",        "compute": "compute_turn_of_month",              "strategy_class": "mean_reversion", "active_on": ["XME", "GDX"]},
+    # P2 sweep 2026-06-02 — validated MR extensions (docs/P2_BACKTEST_SWEEP.md), promoted at
+    # grace_period (reduced size) to forward-test live. KRE excluded (consistent money-loser).
+    {"id": "rsi2-oversold",                  "compute": "compute_rsi2_oversold",             "strategy_class": "mean_reversion", "grace_period": True, "active_on": ["QQQ", "XOP", "XME", "GDX", "XLE", "XBI", "XHB", "IWM", "XLK", "SMH", "SPY", "DIA", "XLY", "XLC", "EFA", "GLD"]},
+    {"id": "rsi14-oversold",                 "compute": "compute_rsi14_oversold",            "strategy_class": "mean_reversion", "grace_period": True, "active_on": ["GDX", "XME", "IWM", "XLE", "XOP", "QQQ"]},
+    {"id": "bollinger-bandit",               "compute": "compute_bollinger_bandit",          "strategy_class": "mean_reversion", "grace_period": True, "active_on": ["GDX", "XHB", "XLE", "XME", "XOP", "QQQ", "XBI", "IWM"]},
     *TREND_DECLARATIONS,
     *INTRADAY_MR_DECLARATIONS,
     *INTRADAY_ORB_DECLARATIONS,
