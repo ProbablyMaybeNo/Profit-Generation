@@ -311,6 +311,52 @@ def test_qty_zero_skips_when_price_too_high(isolated_db, winner_settings):
     assert actions[0]["action"] == "SKIP_PRICE"
 
 
+# ----- M3: qty<1 veto sizes against the real cap, not shrunken notional -----
+
+def _patch_small_notional(monkeypatch, notional):
+    """Force compute_notional to return a tiny notional so the qty<1 path
+    is exercised regardless of the real sizing math."""
+    from monitoring import sizing as sizing_mod
+
+    def fake_compute_notional(conn, sid, **kw):
+        return {"notional": float(notional), "fraction": 0.0, "stats": {}}
+
+    monkeypatch.setattr(sizing_mod, "compute_notional", fake_compute_notional)
+
+
+def test_high_priced_liquid_name_not_vetoed_when_cap_affords_share(
+    isolated_db, winner_settings, monkeypatch,
+):
+    """SPY-like $760 name with a shrunken $250 notional but a $10k cap is
+    no longer vetoed — it sizes to 1 share against the real cap."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    _patch_small_notional(monkeypatch, 250.0)  # < one $760 share
+    db.record_signal(conn, strategy_id="winner", symbol="SPY",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=760.0, bar_interval="1d")
+    settings = {**winner_settings, "max_position_usd": 10000}
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=settings)
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "DRY_BUY"
+    assert actions[0]["qty"] == 1
+    assert actions[0]["sizing"].get("qty_floored_to_cap_min") is True
+
+
+def test_zero_budget_high_price_still_skips(
+    isolated_db, winner_settings, monkeypatch,
+):
+    """A genuinely unaffordable case (cap can't buy one share) still skips."""
+    conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
+    _patch_small_notional(monkeypatch, 250.0)
+    db.record_signal(conn, strategy_id="winner", symbol="BRK.A",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=600000.0, bar_interval="1d")
+    settings = {**winner_settings, "max_position_usd": 10000}
+    res = at.process_signals(conn, asof=date(2026, 5, 14), settings=settings)
+    actions = [a for a in res["actions"] if a["strategy_id"] == "winner"]
+    assert actions[0]["action"] == "SKIP_PRICE"
+
+
 def test_alpaca_failure_logged_not_raised(isolated_db, winner_settings, monkeypatch):
     conn = _seed_outcomes("winner", [2.0, 1.0] * 18)
     db.record_signal(conn, strategy_id="winner", symbol="GDX",

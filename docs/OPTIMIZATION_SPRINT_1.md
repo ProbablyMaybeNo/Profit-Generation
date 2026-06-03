@@ -99,7 +99,7 @@ are paused in the DB (or a committed seed/migration script that pauses them). Su
 
 ---
 
-## [ ] M3 (P1) — Fix the qty<1 veto on high-priced liquid names (the real "price cap")
+## [x] M3 (P1) — Fix the qty<1 veto on high-priced liquid names (the real "price cap")
 
 **Why:** `price_too_high` fired 6,338× in a week (5,139 on `intraday-1m-momentum`) on
 SPY/QQQ/NVDA/AVGO/SMH/IWM. ROOT CAUSE (verified): there is NO literal $250 share-price

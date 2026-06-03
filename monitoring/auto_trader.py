@@ -595,18 +595,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "sizing": sizing}
     qty = _calc_qty(sig["close"], notional)
     if qty < 1:
-        _record_skip(
-            conn, sig=sig, gate="price_too_high",
-            reason_detail=(
-                f"cap=${max_pos_usd:.2f}, signal close="
-                f"${sig['close']}" if sig['close'] is not None
-                else f"cap=${max_pos_usd:.2f}, no signal close"
-            ),
-            source=_src,
-        )
-        return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
-                "price": sig["close"], "max_usd": max_pos_usd,
-                "sizing": sizing}
+        # M3 — the shrunken (intraday) notional can't afford one share, but
+        # the strategy's REAL cap (max_pos_usd) might. The old veto skipped
+        # the best, most liquid high-priced names (SPY/QQQ/NVDA) purely
+        # because the intraday position was sized too small — not because the
+        # share was genuinely unaffordable. Only skip when even the full cap
+        # can't afford a single share; otherwise buy the cap-affordable
+        # minimum (1 share). The aggregate buying-power guard below still
+        # refuses orders that don't fit the spendable budget.
+        cap_qty = _calc_qty(sig["close"], max_pos_usd)
+        if cap_qty < 1:
+            _record_skip(
+                conn, sig=sig, gate="price_too_high",
+                reason_detail=(
+                    f"cap=${max_pos_usd:.2f}, signal close="
+                    f"${sig['close']}" if sig['close'] is not None
+                    else f"cap=${max_pos_usd:.2f}, no signal close"
+                ),
+                source=_src,
+            )
+            return {"action": "SKIP_PRICE", "strategy_id": sid, "symbol": sym,
+                    "price": sig["close"], "max_usd": max_pos_usd,
+                    "sizing": sizing}
+        qty = 1
+        sizing["qty_floored_to_cap_min"] = True
 
     # Aggregate buying-power guard. The caller tracks notional committed
     # across this run and passes what's left of the account's spendable
