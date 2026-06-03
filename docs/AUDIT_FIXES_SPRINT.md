@@ -57,7 +57,7 @@ over the right window. Full non-live suite green.
 
 ---
 
-## [ ] F3 (P1, SilentFailure) — MFE/MAE/exit_reason 100% NULL in production
+## [x] F3 (P1, SilentFailure) — MFE/MAE/exit_reason 100% NULL in production
 
 **Evidence:** 1,853 closed outcomes, all `mfe_pct/mae_pct=NULL`, all
 `exit_reason='long_exit_signal'`. `monitoring/daily_report.py:371` calls

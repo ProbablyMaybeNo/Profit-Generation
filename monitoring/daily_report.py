@@ -368,7 +368,16 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
                 f"— this run had fewer fires/watchlist than the existing row "
                 f"(probable yfinance hiccup). Re-run with force to override.",
                 "WARNING")
-        return outcome_tracker.reconcile_signals(conn)
+        # F3 (audit 2026-06-03): the live reconcile previously passed no
+        # bars_fetcher, so close_for_exit could never compute MFE/MAE — every
+        # closed outcome landed with mfe_pct/mae_pct NULL. Feed it the same
+        # daily bars fetcher auto_trader uses so the 1d signal-exit majority
+        # records excursion. (Stop/trailing reasons are handled in F5; the
+        # intraday open/close pass is F2.)
+        from monitoring.auto_trader import _build_default_bars_fetcher
+        return outcome_tracker.reconcile_signals(
+            conn, bars_fetcher=_build_default_bars_fetcher()
+        )
     finally:
         conn.close()
 
