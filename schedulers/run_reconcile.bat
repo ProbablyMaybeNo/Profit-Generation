@@ -13,7 +13,7 @@ set PY=D:\AI-Hub\environments\conda-envs\trading\python.exe
 echo. >> "%LOGFILE%"
 echo === run_reconcile start %DATE% %TIME% === >> "%LOGFILE%"
 
-"%PY%" -m monitoring.reconcile_positions >> "%LOGFILE%" 2>&1
+"%PY%" -m monitoring.reconcile_positions --sweep-orphans >> "%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 
 echo === run_reconcile exit %EXITCODE% %DATE% %TIME% === >> "%LOGFILE%"

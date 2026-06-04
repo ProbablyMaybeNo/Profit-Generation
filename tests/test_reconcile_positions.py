@@ -595,6 +595,40 @@ def test_main_without_flag_does_not_sweep(isolated_db, tmp_path, monkeypatch):
     assert o["status"] == "open", "no --sweep-orphans flag => no sweep"
 
 
+# ---- B3: scheduled entry point reaches the orphan sweep ------------------
+#
+# The nightly Reconcile task runs `python -m monitoring.reconcile_positions`,
+# i.e. main(). Before B3 that defaulted sweep_orphans=False, so the nightly
+# task never swept. The chosen wiring: run_reconcile.bat passes --sweep-orphans
+# (operator .bat edit) and main() routes that flag into sweep_orphan_outcomes.
+# This test pins that the scheduled entry point (main) reaches the sweep.
+
+def test_scheduled_main_flag_reaches_sweep_orphan_outcomes(
+        isolated_db, tmp_path, monkeypatch):
+    """B3 acceptance: main(['--sweep-orphans']) — the nightly Reconcile task's
+    invocation — actually calls sweep_orphan_outcomes with the broker's held
+    set. FAILS pre-B3 (no flag => sweep_orphan_outcomes never called)."""
+    db.init_db()
+    monkeypatch.setattr(rp, "RECONCILE_SNAPSHOT", tmp_path / "rec.json")
+    _stub_broker_for_main(monkeypatch, {"NVDA": {"qty": 5.0}},
+                          daily=lambda syms: {})
+
+    calls = []
+    real_sweep = rp.sweep_orphan_outcomes  # capture real callable (no recursion)
+
+    def _spy(conn, held_symbols, **kw):
+        calls.append(set(held_symbols))
+        return real_sweep(conn, held_symbols, **kw)
+
+    monkeypatch.setattr(rp, "sweep_orphan_outcomes", _spy)
+
+    with pytest.raises(SystemExit):
+        rp.main(["--sweep-orphans", "--no-alert"])
+
+    assert len(calls) == 1, "scheduled entry point must invoke the sweep once"
+    assert calls[0] == {"NVDA"}, "sweep must receive the broker's held set"
+
+
 def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
     """End-to-end: reconcile(sweep_orphans=True) closes the phantom outcome
     using broker truth, leaves the held one open."""
