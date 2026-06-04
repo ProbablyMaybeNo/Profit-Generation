@@ -2318,6 +2318,20 @@ def _intraday_edge_veto(conn, sig, settings: dict) -> Optional[dict]:
     )
 
 
+def _ma_cross_strength_veto(sig, settings: dict, bars_fetcher) -> Optional[dict]:
+    """M7: confirm trend strength for a trend-ma-cross-20-50 entry. Returns the
+    ma_cross_filter descriptor (with confirmed=bool) or None when bars can't be
+    fetched (then NOT blocked — never veto on missing data)."""
+    try:
+        bars = bars_fetcher(sig["symbol"])
+    except Exception:
+        return None
+    if not bars:
+        return None
+    from monitoring import ma_cross_filter as mac_mod
+    return mac_mod.evaluate_ma_cross_strength(bars, settings=settings)
+
+
 def _coerce_earnings_veto_days(raw) -> int:
     """Trading-day window for earnings veto. 0/negative = disabled."""
     try:
@@ -3198,6 +3212,28 @@ def process_signals(
                     "source": (row["source"] if row else "") or "",
                 })
                 continue
+            # M7 (Sprint 2): regime/trend-strength confirmation for
+            # trend-ma-cross-20-50. It catches weak continuations / large
+            # drawdowns; rather than pause it, gate its entries — a cross with
+            # a thin EMA spread, a flat/falling slow EMA, or price below the
+            # EMAs is a weak continuation and is vetoed. Genuine strong-trend
+            # crosses pass. Other strategies are unaffected.
+            if (sig["strategy_id"] == "trend-ma-cross-20-50"
+                    and bars_fetcher is not None):
+                mac = _ma_cross_strength_veto(sig, settings, bars_fetcher)
+                if mac is not None and not mac.get("confirmed", True):
+                    _record_skip(
+                        conn, sig=sig, gate="ma_cross_weak_continuation",
+                        reason_detail=mac.get("reason"), source=sig_src,
+                    )
+                    actions.append({
+                        "action": "SKIP_MA_CROSS_WEAK_CONTINUATION",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sig["symbol"],
+                        "signal_id": sig["id"],
+                        **mac,
+                    })
+                    continue
             if max_open_per_strategy > 0:
                 cur_open = open_per_strategy.get(sig["strategy_id"], 0)
                 if cur_open >= max_open_per_strategy:

@@ -130,7 +130,7 @@ and a clearly-profitable setup passes.
 
 ---
 
-## [ ] M7 (P2, Trade-logic) — trend-ma-cross-20-50 regime/stop review
+## [x] M7 (P2, Trade-logic) — trend-ma-cross-20-50 regime/stop review
 
 **Problem:** −2.06% today, ZS −23% worst loser; mixed recent aggregate. Catches weak
 continuation / large drawdowns.
