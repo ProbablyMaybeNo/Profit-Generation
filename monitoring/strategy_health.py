@@ -69,6 +69,136 @@ def _closed_returns_for_strategy(conn, strategy_id: str) -> List[float]:
     return [float(r["return_pct"]) for r in rows]
 
 
+# Expectancy-gate defaults (Sprint 2 M4). Below MIN_SAMPLE closed outcomes a
+# strategy is on probation and never killed on noise; at/above it, a negative
+# average return auto-pauses (size-down to zero) the strategy until re-eval.
+EXPECTANCY_MIN_SAMPLE = 20
+EXPECTANCY_PAUSE_DAYS = 30
+EXPECTANCY_PAUSE_SOURCE = "auto_expectancy_gate"
+
+
+def _interval_class_clause(bar_interval: str) -> str:
+    """SQL clause scoping returns to a strategy's own interval class.
+
+    Mirrors the eligibility convention (sizing/F6): a 1d strategy is judged on
+    its 1d outcomes; any intraday strategy on its non-1d outcomes. Judging a
+    strategy on the wrong interval class is the noise M4 must avoid.
+    """
+    if (bar_interval or "1d") == "1d":
+        return "s.bar_interval='1d'"
+    return "s.bar_interval!='1d'"
+
+
+def closed_returns_in_class(conn, strategy_id: str,
+                            bar_interval: str = "1d") -> List[float]:
+    """Closed-outcome returns for a strategy scoped to its interval class."""
+    clause = _interval_class_clause(bar_interval)
+    rows = conn.execute(
+        "SELECT o.return_pct "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        f"   AND {clause} AND s.strategy_id=? "
+        " ORDER BY o.exit_ts ASC, o.signal_id ASC",
+        (strategy_id,),
+    ).fetchall()
+    return [float(r["return_pct"]) for r in rows]
+
+
+def evaluate_expectancy_gate(
+    conn, strategy_id: str, *,
+    bar_interval: str = "1d",
+    min_sample: int = EXPECTANCY_MIN_SAMPLE,
+) -> Dict:
+    """Decide whether a strategy should be expectancy-killed (size-down to 0).
+
+    Returns {strategy_id, n, avg_return_pct, on_probation, should_pause, reason}.
+
+    Rules:
+      * n < min_sample  → on_probation=True, should_pause=False (never kill on
+        noise — leave at probation size).
+      * n >= min_sample AND avg_return_pct < 0 → should_pause=True.
+      * otherwise (n >= min_sample AND avg >= 0) → should_pause=False.
+    """
+    rets = closed_returns_in_class(conn, strategy_id, bar_interval)
+    n = len(rets)
+    avg = (sum(rets) / n) if n else 0.0
+    out = {
+        "strategy_id": strategy_id,
+        "n": n,
+        "avg_return_pct": round(avg, 4),
+        "on_probation": n < min_sample,
+        "should_pause": False,
+        "reason": "",
+    }
+    if n < min_sample:
+        out["reason"] = (
+            f"n={n} < {min_sample} min-sample → probation (not killed on noise)"
+        )
+        return out
+    if avg < 0:
+        out["should_pause"] = True
+        out["reason"] = (
+            f"n={n} closed outcomes, avg return {avg:+.3f}% < 0 → "
+            f"expectancy-killed"
+        )
+    else:
+        out["reason"] = f"n={n}, avg return {avg:+.3f}% >= 0 → keep"
+    return out
+
+
+def auto_expectancy_pause_check(
+    conn, *,
+    min_sample: int = EXPECTANCY_MIN_SAMPLE,
+    pause_days: int = EXPECTANCY_PAUSE_DAYS,
+    send_fn=None,
+    now_iso: Optional[str] = None,
+) -> List[Dict]:
+    """Scan every strategy with closed outcomes and auto-pause those whose
+    interval-scoped avg return is negative with N >= min_sample.
+
+    Generalizes M3: self-maintaining negative-expectancy kill. Already-paused
+    (non-expired) strategies are skipped. N<min_sample strategies are left
+    untouched (probation). Returns the list of newly-paused dicts.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT s.strategy_id, "
+        "       MAX(CASE WHEN s.bar_interval='1d' THEN 1 ELSE 0 END) AS has_1d, "
+        "       MAX(CASE WHEN s.bar_interval!='1d' THEN 1 ELSE 0 END) AS has_intraday "
+        "  FROM signals s JOIN outcomes o ON o.signal_id = s.id "
+        " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        " GROUP BY s.strategy_id"
+    ).fetchall()
+    fired: List[Dict] = []
+    for r in rows:
+        sid = r["strategy_id"]
+        if is_paused(conn, sid, asof_iso=now_iso):
+            continue
+        # Judge on the strategy's dominant interval class — intraday if it has
+        # any intraday outcomes, else 1d.
+        bar_interval = "1m" if r["has_intraday"] else "1d"
+        result = evaluate_expectancy_gate(
+            conn, sid, bar_interval=bar_interval, min_sample=min_sample,
+        )
+        if not result["should_pause"]:
+            continue
+        paused = pause_strategy(
+            conn, sid,
+            reason=result["reason"],
+            source=EXPECTANCY_PAUSE_SOURCE,
+            pause_days=pause_days,
+            live_mean_pct=result["avg_return_pct"],
+            sample_size=result["n"],
+            now_iso=now_iso,
+        )
+        _send_pause_alert(
+            sid=sid, action="PAUSED", reason=result["reason"], send_fn=send_fn,
+        )
+        fired.append({**paused, "action": "PAUSED",
+                      "avg_return_pct": result["avg_return_pct"],
+                      "n": result["n"]})
+    return fired
+
+
 def evaluate_strategy(
     conn, strategy_id: str,
     *,
@@ -527,6 +657,14 @@ def main():
                         help="Manually remove a paused_strategies row + alert")
     parser.add_argument("--list-paused", action="store_true",
                         help="Print currently-paused strategies and exit")
+    parser.add_argument("--expectancy-gate", action="store_true",
+                        help="Sprint 2 M4: auto-pause strategies whose "
+                             "interval-scoped avg closed-outcome return < 0 "
+                             "with N >= min-sample (probation below that)")
+    parser.add_argument("--min-sample", type=int,
+                        default=EXPECTANCY_MIN_SAMPLE,
+                        help="Min closed outcomes before the expectancy gate "
+                             "can kill (below: probation, never killed)")
     args = parser.parse_args()
 
     conn = db.init_db()
@@ -551,6 +689,21 @@ def main():
                 log(f"unpaused {args.unpause}", "SUCCESS")
             else:
                 log(f"{args.unpause} was not paused", "INFO")
+            return
+
+        if args.expectancy_gate:
+            fired = auto_expectancy_pause_check(
+                conn, min_sample=args.min_sample, pause_days=args.pause_days,
+            )
+            log(f"expectancy-gate: {len(fired)} strategies newly paused",
+                "WARNING" if fired else "INFO")
+            for f in fired:
+                log(
+                    f"  [PAUSED] {f['strategy_id']}: avg_ret="
+                    f"{f['avg_return_pct']:+.4f}% n={f['n']} "
+                    f"expires_at={f['expires_at']}",
+                    "WARNING",
+                )
             return
 
         if args.auto_pause:

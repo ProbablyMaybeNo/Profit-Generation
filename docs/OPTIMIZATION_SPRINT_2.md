@@ -89,7 +89,7 @@ non-live suite green.
 
 ---
 
-## [ ] M4 (P1, Trade-logic) — expectancy kill/size gate
+## [x] M4 (P1, Trade-logic) — expectancy kill/size gate
 
 **Fix:** Auto-pause or size-down any strategy whose recent closed-outcome
 `avg_return_pct < 0` (or win_rate < configurable floor) **after a minimum-sample
