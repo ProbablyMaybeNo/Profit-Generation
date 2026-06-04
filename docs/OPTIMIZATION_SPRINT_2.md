@@ -71,7 +71,7 @@ exact command for the operator to run at the next market open.
 
 ---
 
-## [ ] M3 (P0, Trade-logic) — pause negative-expectancy intraday strategies
+## [x] M3 (P0, Trade-logic) — pause negative-expectancy intraday strategies
 
 **Problem (evidence, recent closed-outcome stats):** intraday-1m-momentum (−0.42%),
 intraday-1m-vwap-reclaim (−0.57%), intraday-1m-orb (−0.43%), intraday-orb-pivots-5m
