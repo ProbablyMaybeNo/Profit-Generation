@@ -1343,9 +1343,23 @@ def _process_exit(
     # F5 (audit 2026-06-03): on a trailing-stop exit, close the outcome HERE
     # with exit_reason='trailing_stop' (+ MFE/MAE) so the later generic 1d
     # signal-exit reconcile finds no open outcome and can't overwrite the
-    # reason as 'long_exit_signal' / strip excursion. A plain signal exit
-    # (trailing_triggered is None) is left for the reconcile as before.
-    if trailing_triggered is not None:
+    # reason as 'long_exit_signal' / strip excursion.
+    #
+    # A2 (audit 2026-06-03): a PLAIN intraday signal exit
+    # (trailing_triggered is None, bar_interval != '1d') ALSO closes its
+    # outcome here. Previously it was "left for the reconcile", but no
+    # reconcile pass ever closes intraday outcomes (the 1d EOD reconcile
+    # filters bar_interval='1d'; the intraday reconcile runs open_only) so
+    # the broker position closed while the outcome stranded OPEN forever.
+    # 1d plain exits stay owned by the EOD 1d reconcile (skipped here) to
+    # avoid double-closing.
+    _exit_interval = (sig["bar_interval"]
+                      if "bar_interval" in sig.keys() else "1d")
+    _is_intraday_exit = str(_exit_interval or "1d").lower() != "1d"
+    _close_outcome_here = (
+        trailing_triggered is not None or _is_intraday_exit
+    )
+    if _close_outcome_here:
         try:
             outcome = _open_outcome_for_pair(conn, sid, sym)
             if outcome is not None:
@@ -1371,10 +1385,10 @@ def _process_exit(
                     db.close_outcome(
                         conn, signal_id=int(outcome["signal_id"]),
                         exit_ts=exit_ts, exit_price=float(exit_price),
-                        exit_reason="trailing_stop", mfe_pct=mfe, mae_pct=mae,
+                        exit_reason=exit_reason, mfe_pct=mfe, mae_pct=mae,
                     )
         except Exception as e:
-            log(f"trailing-stop outcome close failed for {sid}/{sym} "
+            log(f"exit outcome close failed for {sid}/{sym} "
                 f"(sell still recorded): {e}", "WARNING")
     log(f"SELL {qty} {sym} order submitted: {order.id}", "SUCCESS")
     out = {"action": "SELL", "strategy_id": sid, "symbol": sym, "qty": qty,
