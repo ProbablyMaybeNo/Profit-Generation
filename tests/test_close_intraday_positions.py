@@ -108,6 +108,54 @@ def test_open_intraday_buys_excludes_already_closed(isolated_db):
     assert rows == []
 
 
+def test_open_intraday_buys_excludes_closed_disjoint_id_spaces(isolated_db):
+    """A1 regression: dedup must compare paper_trades.signal_id against the
+    sell's signal_id, NOT paper_trades.id (the PK). In production the PK
+    space (~1-707) and the signals FK space (~5453-65030) are disjoint, so
+    the old `pt.id NOT IN (... pt2.signal_id)` never excluded anything and
+    the flatten re-sold already-closed buys.
+
+    Here we force pt.id != signal_id: the signal gets a high autoincrement id
+    while the paper_trades buy keeps a low PK. The closing sell carries the
+    SAME signal_id. On the buggy `pt.id NOT IN` predicate this buy is NOT
+    excluded (pt.id 1 never matches the high signal_id), so it wrongly shows
+    up as open; on the fixed `pt.signal_id NOT IN` predicate it is excluded.
+    """
+    conn = db.init_db()
+    db.upsert_strategy(conn, {"extra": {"strategy_id": "intra-a"}})
+    # Push the signals autoincrement high so signal_id != paper_trades.id.
+    conn.execute(
+        "INSERT INTO signals (id, ts, bar_ts, bar_interval, strategy_id, "
+        " symbol, signal_type, close) "
+        "VALUES (5453, ?, ?, '15m', 'intra-a', 'SPY', 'long_entry', 100.0)",
+        ("2026-05-14T14:30:00", "2026-05-14T14:30:00"),
+    )
+    sig_id = 5453
+    # Buy row gets a low PK (1) but the high signal_id FK.
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(id, alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " filled_at, status, submitted_at) "
+        "VALUES (1, 'b1', ?, 'intra-a', 'SPY', 'buy', 3, ?, 'filled', ?)",
+        (sig_id, "2026-05-14T14:30:00", "2026-05-14T14:30:00"),
+    )
+    # Closing sell with the SAME signal_id; its own PK is unrelated.
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(id, alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " filled_at, status, submitted_at) "
+        "VALUES (2, 's1', ?, 'intra-a', 'SPY', 'sell', 3, ?, 'filled', ?)",
+        (sig_id, "2026-05-14T15:30:00", "2026-05-14T15:30:00"),
+    )
+    conn.commit()
+
+    rows = ci._open_intraday_buys(conn)
+    assert rows == [], (
+        "already-closed intraday buy must be excluded even when the "
+        "paper_trades PK and the signal_id FK occupy disjoint id spaces"
+    )
+
+
 # ---------------- close_intraday_positions ----------------
 
 def test_close_with_no_positions_returns_ok_zero(isolated_db):

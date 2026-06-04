@@ -88,11 +88,11 @@ def _open_intraday_buys(conn) -> List[dict]:
          WHERE pt.side = 'buy'
            AND pt.status IN ('filled', 'partially_filled', 'accepted', 'new')
            AND COALESCE(s.bar_interval, '1d') != '1d'
-           AND pt.id NOT IN (
+           AND pt.signal_id NOT IN (
                 SELECT pt2.signal_id FROM paper_trades pt2
                  WHERE pt2.side = 'sell'
                    AND pt2.status NOT IN ('rejected', 'canceled')
-                   AND pt2.signal_id = pt.signal_id
+                   AND pt2.signal_id IS NOT NULL
             )
         """
     ).fetchall()
