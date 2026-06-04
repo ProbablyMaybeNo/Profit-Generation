@@ -247,13 +247,61 @@ def _open_outcomes_with_symbols(conn) -> List[Dict]:
     return [dict(r) for r in rows]
 
 
-def _last_known_mark(conn, symbol: str, entry_ts) -> Optional[float]:
+def _daily_close_mark(symbol: str, daily_bars_fn: Callable) -> Optional[float]:
+    """Latest available DAILY-bar close for a symbol, via the system's
+    existing daily-bar source (monitoring.wide_bars.fetch_wide_daily_bars).
+
+    Last-resort exit mark for 1d trend orphans (donchian-breakout, ma-cross)
+    that have no recorded sell fill, no snapshot row, and no intraday bar —
+    the 175 outcomes the A3 sweep honestly skipped on its first live run.
+
+    Returns None on any failure (no bars, fetch error, malformed frame) so
+    the caller still SKIPs honestly rather than fabricating a price.
+    """
+    try:
+        frames = daily_bars_fn([symbol])
+    except Exception as e:  # noqa: BLE001
+        log(f"_daily_close_mark: daily-bar fetch failed for {symbol}: {e}",
+            "WARNING")
+        return None
+    if not frames:
+        return None
+    df = frames.get(symbol)
+    if df is None:
+        df = frames.get(str(symbol).upper())
+    if df is None or getattr(df, "empty", True):
+        return None
+    if "close" not in getattr(df, "columns", []):
+        return None
+    try:
+        closes = df["close"].dropna()
+        if closes.empty:
+            return None
+        return float(closes.iloc[-1])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _default_daily_bars_fn(symbols):
+    from monitoring.wide_bars import fetch_wide_daily_bars
+    return fetch_wide_daily_bars(symbols)
+
+
+def _last_known_mark(
+    conn,
+    symbol: str,
+    entry_ts,
+    *,
+    daily_bars_fn: Optional[Callable] = None,
+) -> Optional[float]:
     """Best honest exit mark for a symbol whose broker position is gone.
 
     Resolution order (most position-specific first):
       1. fill_price of a recorded, non-terminal SELL for this symbol;
       2. latest snapshots.close for the symbol;
-      3. latest intraday_bars.close for the symbol.
+      3. latest intraday_bars.close for the symbol;
+      4. latest DAILY-bar close (wide_bars.fetch_wide_daily_bars) — the
+         last resort for 1d trend orphans with none of the above.
     Returns None when no price is available so the caller can SKIP rather
     than fabricate an exit price.
     """
@@ -292,7 +340,9 @@ def _last_known_mark(conn, symbol: str, entry_ts) -> Optional[float]:
             return float(row["close"])
         except (TypeError, ValueError):
             pass
-    return None
+    # 4th / last resort: the system's daily-bar close. Only reached when the
+    # three position-specific sources above are all unavailable.
+    return _daily_close_mark(symbol, daily_bars_fn or _default_daily_bars_fn)
 
 
 def sweep_orphan_outcomes(
@@ -300,6 +350,7 @@ def sweep_orphan_outcomes(
     held_symbols,
     *,
     now_iso: Optional[str] = None,
+    daily_bars_fn: Optional[Callable] = None,
 ) -> Dict:
     """Close OPEN outcomes whose real broker position is already gone (A3).
 
@@ -311,16 +362,45 @@ def sweep_orphan_outcomes(
     real positions).
 
     Each orphan is closed with exit_reason='reconciled_no_position' at the
-    best last-known mark (_last_known_mark). Orphans with NO available price
-    are SKIPPED (no fabricated exit). Outcomes whose symbol IS held are left
-    untouched. Idempotent — closed outcomes drop out of the OPEN query.
-    Best-effort per row: one failure never aborts the rest.
+    best last-known mark (_last_known_mark), resolving sell-fill -> snapshot
+    -> intraday bar -> DAILY-bar close in that precedence. Orphans with NO
+    available price (not even a daily close) are SKIPPED (no fabricated exit).
+    Outcomes whose symbol IS held are left untouched. Idempotent — closed
+    outcomes drop out of the OPEN query. Best-effort per row: one failure
+    never aborts the rest.
+
+    The daily-bar fetch (wide_bars) is batched once across all not-held
+    candidate symbols, then read per-symbol from that prefetched dict, so a
+    175-symbol backlog costs one batched broker call, not 175.
 
     Returns {scanned, swept, skipped, held}.
     """
     held = {str(s).upper() for s in (held_symbols or [])}
     fallback_ts = now_iso or _utc_now_iso()
     candidates = _open_outcomes_with_symbols(conn)
+
+    # Batch-fetch daily bars once for every not-held candidate symbol so the
+    # 4th-resort daily-close lookup is a single broker call, not one per row.
+    orphan_syms = sorted({
+        str(o.get("symbol")).upper() for o in candidates
+        if o.get("symbol") is not None
+        and str(o.get("symbol")).upper() not in held
+    })
+    prefetched: Dict[str, object] = {}
+    if orphan_syms:
+        fetch = daily_bars_fn or _default_daily_bars_fn
+        try:
+            prefetched = fetch(orphan_syms) or {}
+        except Exception as e:  # noqa: BLE001
+            log(f"sweep_orphan_outcomes: batched daily-bar fetch failed "
+                f"({type(e).__name__}: {e}) — daily fallback unavailable",
+                "WARNING")
+            prefetched = {}
+
+    def _prefetched_daily(syms):
+        return {s: prefetched[s] for s in
+                (str(x).upper() for x in syms) if s in prefetched}
+
     swept = 0
     skipped = 0
     for o in candidates:
@@ -331,7 +411,8 @@ def sweep_orphan_outcomes(
         if str(sym).upper() in held:
             # The position genuinely still exists — never close it here.
             continue
-        mark = _last_known_mark(conn, sym, o.get("entry_ts"))
+        mark = _last_known_mark(conn, sym, o.get("entry_ts"),
+                                daily_bars_fn=_prefetched_daily)
         if mark is None:
             skipped += 1
             continue
@@ -364,7 +445,8 @@ def reconcile(*,
               now_fn: Optional[Callable] = None,
               alert: bool = True,
               sweep_orphans: bool = False,
-              sync_fills: bool = True) -> Dict:
+              sync_fills: bool = True,
+              daily_bars_fn: Optional[Callable] = None) -> Dict:
     """End-to-end run: backfill broker fills, pull both sides, compute drift,
     persist snapshot, alert on drift. Returns the full result dict.
 
@@ -407,6 +489,7 @@ def reconcile(*,
             try:
                 sweep_res = sweep_orphan_outcomes(
                     conn, set(alpaca_pos.keys()), now_iso=now_fn(),
+                    daily_bars_fn=daily_bars_fn,
                 )
                 if sweep_res.get("swept"):
                     log(f"reconcile: orphan sweep closed {sweep_res['swept']} "

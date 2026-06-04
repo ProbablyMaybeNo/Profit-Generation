@@ -420,6 +420,74 @@ def test_sweep_uses_snapshot_close_when_no_sell(isolated_db):
     assert o["exit_reason"] == "reconciled_no_position"
 
 
+# ---- B1: daily-close fallback for 1d trend orphans -----------------------
+#
+# The first live A3 run swept only 32 of ~189 orphans; 175 were honestly
+# skipped because no sell-fill / snapshot / intraday-bar mark was resolvable
+# (mostly 1d donchian/ma-cross outcomes for symbols outside the ~23-symbol
+# intraday universe). B1 adds the system's daily-bar close as a 4th, last-
+# resort mark so those orphans converge instead of stranding OPEN.
+
+def _daily_frame(closes):
+    import pandas as pd
+    idx = pd.date_range("2026-05-10", periods=len(closes), freq="D")
+    return pd.DataFrame({"open": closes, "high": closes, "low": closes,
+                         "close": closes, "volume": [1000] * len(closes)},
+                        index=idx)
+
+
+def test_sweep_uses_daily_close_when_no_fill_snapshot_or_bar(isolated_db):
+    """B1 acceptance: an orphan with NO sell-fill, NO snapshot, NO intraday
+    bar but WITH an available daily close is swept 'reconciled_no_position'
+    at that daily close. FAILS on pre-B1 code (skips for lack of a price)."""
+    import pandas as pd
+    conn = db.init_db()
+    orphan = _open_outcome(conn, strategy_id="trend-donchian-breakout-20",
+                           symbol="WMT", entry_price=90.0)
+    # Daily-bar source resolves a close; latest is 97.25.
+    fake_daily = lambda syms: {"WMT": _daily_frame([95.0, 96.0, 97.25])}
+
+    res = rp.sweep_orphan_outcomes(conn, set(), daily_bars_fn=fake_daily)
+    assert res["swept"] == 1
+    assert res["skipped"] == 0
+
+    o = conn.execute(
+        "SELECT status, exit_reason, exit_price FROM outcomes WHERE signal_id=?",
+        (orphan,),
+    ).fetchone()
+    assert o["status"] == "closed"
+    assert o["exit_reason"] == "reconciled_no_position"
+    assert o["exit_price"] == pytest.approx(97.25)
+
+
+def test_sweep_daily_close_is_last_resort_after_snapshot(isolated_db):
+    """Precedence preserved: a snapshot close still wins over the daily bar."""
+    conn = db.init_db()
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY")
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "SPY", "close": 488.0})
+    conn.commit()
+    fake_daily = lambda syms: {"SPY": _daily_frame([500.0, 510.0])}
+    res = rp.sweep_orphan_outcomes(conn, set(), daily_bars_fn=fake_daily)
+    assert res["swept"] == 1
+    o = conn.execute(
+        "SELECT exit_price FROM outcomes WHERE signal_id=?", (orphan,),
+    ).fetchone()
+    assert o["exit_price"] == pytest.approx(488.0)
+
+
+def test_sweep_still_skips_when_daily_close_unavailable(isolated_db):
+    """Honest skip survives B1: no fill/snapshot/bar AND no daily close."""
+    conn = db.init_db()
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE")
+    res = rp.sweep_orphan_outcomes(conn, set(), daily_bars_fn=lambda syms: {})
+    assert res["swept"] == 0
+    assert res["skipped"] == 1
+    o = conn.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (orphan,),
+    ).fetchone()
+    assert o["status"] == "open"
+
+
 def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
     """End-to-end: reconcile(sweep_orphans=True) closes the phantom outcome
     using broker truth, leaves the held one open."""
