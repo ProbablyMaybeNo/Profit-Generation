@@ -207,6 +207,23 @@ def _already_traded(conn, signal_id: int, side: str) -> bool:
     return row is not None
 
 
+def _exit_already_working_for_pair(conn, strategy_id: str, symbol: str) -> bool:
+    """M5 (Sprint 2): True if a SELL exit for (strategy, symbol) is already
+    accepted/working — a resting stop, a submitted market exit, or a partial
+    fill that hasn't fully closed. Used to suppress redundant exit attempts
+    (the 5,868 long_exit signals firing every bar) WITHOUT changing the trading
+    decision: the first genuine exit still fires; subsequent ones are no-ops
+    while the first is in flight."""
+    row = conn.execute(
+        "SELECT 1 FROM paper_trades WHERE strategy_id=? AND symbol=? "
+        "  AND side='sell' "
+        "  AND status IN ('new', 'accepted', 'partially_filled', 'pending_new', "
+        "                 'held', 'accepted_for_bidding') LIMIT 1",
+        (strategy_id, symbol),
+    ).fetchone()
+    return row is not None
+
+
 def _open_buy_for_pair(conn, strategy_id: str, symbol: str):
     """Most recent paper_trades buy for (strategy, symbol) that hasn't been closed."""
     row = conn.execute(
@@ -1296,6 +1313,17 @@ def _process_exit(
         # with 187,814 pure-noise rows. Skip the control flow (decision
         # unchanged) WITHOUT writing the DB row.
         return {"action": "SKIP_NO_POSITION", "strategy_id": sid, "symbol": sym}
+
+    # M5 (Sprint 2): an exit is already accepted/working for this pair (a
+    # resting stop or an in-flight market sell). Suppress this redundant exit
+    # signal — no duplicate order, no skip-row write — so the 5,868/day exit
+    # signals don't stack conflicting SELLs. The genuine first exit already
+    # fired; this one is a no-op until that one resolves. A forced exit
+    # (trailing/time-stop override) still proceeds, since those are deliberate.
+    if (trailing_triggered is None and exit_reason_override is None
+            and _exit_already_working_for_pair(conn, sid, sym)):
+        return {"action": "SKIP_EXIT_ALREADY_WORKING", "strategy_id": sid,
+                "symbol": sym, "signal_id": sig["id"]}
     qty = int(open_buy["qty"])
 
     exit_reason = "long_exit_signal"

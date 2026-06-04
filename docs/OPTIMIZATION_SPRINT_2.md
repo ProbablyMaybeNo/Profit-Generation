@@ -103,7 +103,7 @@ size-down, a strong strategy is untouched, and a strategy with N<20 is NOT kille
 
 ---
 
-## [ ] M5 (P1, Optimization) — exit-signal de-duplication / suppression
+## [x] M5 (P1, Optimization) — exit-signal de-duplication / suppression
 
 **Problem:** 5,868 intraday long_exit signals (momentum + vwap) — exits firing every
 bar regardless of position/order state.
