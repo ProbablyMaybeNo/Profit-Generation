@@ -106,7 +106,7 @@ def flatten_unintended_shorts(
     log(f"flatten_unintended_shorts: detected {len(shorts)} unintended short "
         f"position(s), {total_cover} total shares to cover:", "WARNING")
     for s in shorts:
-        log(f"  SHORT {s['symbol']}: qty={s['qty']} → BUY {s['cover_qty']} "
+        log(f"  SHORT {s['symbol']}: qty={s['qty']} -> BUY {s['cover_qty']} "
             f"to flatten", "WARNING")
 
     if not execute:
