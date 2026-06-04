@@ -331,3 +331,123 @@ def test_reconcile_no_alert_flag_suppresses_telegram(isolated_db, tmp_path):
         alert=False,
     )
     assert sent == []
+
+
+# ---- A3: broker-reconcile orphan-outcome sweep --------------------------
+#
+# The OPEN-outcome ledger diverged ~18x from broker reality (audit: 260 open
+# outcomes / 179 symbols vs 14 real positions). sweep_orphan_outcomes closes
+# OPEN outcomes whose symbol is NOT held at the broker with
+# exit_reason='reconciled_no_position', and MUST leave outcomes whose symbol
+# IS held untouched.
+
+def _open_outcome(conn, *, strategy_id, symbol, bar_interval="1d",
+                  entry_ts="2026-05-14", entry_price=100.0):
+    db.upsert_strategy(conn, {"extra": {"strategy_id": strategy_id}})
+    sid = db.record_signal(
+        conn, strategy_id=strategy_id, symbol=symbol,
+        bar_ts=entry_ts, signal_type="long_entry",
+        close=entry_price, bar_interval=bar_interval,
+    )
+    db.open_outcome(conn, signal_id=sid, entry_ts=entry_ts,
+                    entry_price=entry_price)
+    conn.commit()
+    return sid
+
+
+def test_sweep_closes_orphan_leaves_held_untouched(isolated_db):
+    conn = db.init_db()
+    # PHANTOM: open outcome whose symbol the broker no longer holds.
+    phantom = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                            entry_price=50.0)
+    # A recorded sell fill gives the honest last-known mark.
+    db.record_paper_trade(conn, {
+        "alpaca_order_id": "sell-zzz", "signal_id": phantom,
+        "strategy_id": "trend-a", "symbol": "ZZZ", "side": "sell",
+        "qty": 10, "order_type": "market",
+        "submitted_at": "2026-05-15T13:30:00Z", "status": "filled",
+        "fill_price": 55.0,
+    })
+    # HELD: open outcome whose symbol the broker still holds.
+    held = _open_outcome(conn, strategy_id="trend-b", symbol="NVDA",
+                         entry_price=120.0)
+    conn.commit()
+
+    res = rp.sweep_orphan_outcomes(conn, {"NVDA"})
+    assert res["swept"] == 1
+
+    o_phantom = conn.execute(
+        "SELECT status, exit_reason, exit_price FROM outcomes WHERE signal_id=?",
+        (phantom,),
+    ).fetchone()
+    assert o_phantom["status"] == "closed"
+    assert o_phantom["exit_reason"] == "reconciled_no_position"
+    assert o_phantom["exit_price"] == pytest.approx(55.0)
+
+    o_held = conn.execute(
+        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?", (held,),
+    ).fetchone()
+    assert o_held["status"] == "open", \
+        "an outcome whose position genuinely still exists must NOT be swept"
+    assert o_held["exit_reason"] is None
+
+
+def test_sweep_skips_orphan_with_no_price(isolated_db):
+    """Honest skip: no sell fill, no snapshot, no bar -> no fabricated price."""
+    conn = db.init_db()
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE")
+    res = rp.sweep_orphan_outcomes(conn, set())
+    assert res["swept"] == 0
+    assert res["skipped"] == 1
+    o = conn.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (orphan,),
+    ).fetchone()
+    assert o["status"] == "open"
+
+
+def test_sweep_uses_snapshot_close_when_no_sell(isolated_db):
+    conn = db.init_db()
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY")
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "SPY", "close": 488.0})
+    conn.commit()
+    res = rp.sweep_orphan_outcomes(conn, set())
+    assert res["swept"] == 1
+    o = conn.execute(
+        "SELECT exit_price, exit_reason FROM outcomes WHERE signal_id=?",
+        (orphan,),
+    ).fetchone()
+    assert o["exit_price"] == pytest.approx(488.0)
+    assert o["exit_reason"] == "reconciled_no_position"
+
+
+def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
+    """End-to-end: reconcile(sweep_orphans=True) closes the phantom outcome
+    using broker truth, leaves the held one open."""
+    conn = db.init_db()
+    phantom = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                            entry_price=50.0)
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
+    held = _open_outcome(conn, strategy_id="trend-b", symbol="NVDA",
+                         entry_price=120.0)
+    conn.commit()
+
+    result = rp.reconcile(
+        conn=conn,
+        alpaca_positions_fn=lambda: {"NVDA": {"qty": 5.0,
+                                              "avg_entry_price": 120.0}},
+        save_path=tmp_path / "rec.json",
+        alert=False,
+        sweep_orphans=True,
+        now_fn=lambda: "2026-05-16T21:00:00+00:00",
+    )
+    assert result["orphan_sweep"]["swept"] == 1
+
+    o_phantom = conn.execute(
+        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?", (phantom,),
+    ).fetchone()
+    assert o_phantom["status"] == "closed"
+    assert o_phantom["exit_reason"] == "reconciled_no_position"
+    o_held = conn.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (held,),
+    ).fetchone()
+    assert o_held["status"] == "open"

@@ -2548,6 +2548,25 @@ def process_signals(
         except Exception as e:
             log(f"auto_trader: order_sync skipped "
                 f"({type(e).__name__}: {e})", "WARNING")
+        # A3 (audit 2026-06-03): close OPEN outcomes whose real broker
+        # position is already gone (stop fill / manual close / missed
+        # reconcile). Runs AFTER order_sync so a just-backfilled sell gives
+        # the best last-known exit mark. Broker positions are the source of
+        # truth — an outcome whose symbol is still held is left untouched.
+        # Paper-mode gated upstream (BLOCKED_LIVE_MODE). Best-effort: a
+        # broker hiccup must never crash the trading loop.
+        try:
+            from monitoring import reconcile_positions
+            held = reconcile_positions.alpaca_open_positions(client)
+            orph = reconcile_positions.sweep_orphan_outcomes(
+                conn, set(held.keys()))
+            if orph.get("swept"):
+                log(f"auto_trader: orphan-outcome sweep closed "
+                    f"{orph['swept']} outcome(s) with no broker position "
+                    f"({orph['skipped']} skipped)", "INFO")
+        except Exception as e:
+            log(f"auto_trader: orphan-outcome sweep skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
 
     live_set = _live_strategies(settings)
     if live_client_factory is None:

@@ -227,6 +227,134 @@ def load_snapshot(*, path: Optional[Path] = None) -> Optional[Dict]:
         return None
 
 
+RECONCILED_NO_POSITION_EXIT_REASON = "reconciled_no_position"
+
+
+def _open_outcomes_with_symbols(conn) -> List[Dict]:
+    """Every OPEN outcome joined to its entry signal's symbol + interval.
+
+    One row per open outcome carrying signal_id, symbol, strategy_id,
+    bar_interval, entry_ts, entry_price. Used by the broker-reconcile sweep
+    (A3) to find outcomes whose real position is already gone.
+    """
+    rows = conn.execute(
+        "SELECT o.signal_id AS signal_id, o.entry_ts AS entry_ts, "
+        "       o.entry_price AS entry_price, s.symbol AS symbol, "
+        "       s.strategy_id AS strategy_id, s.bar_interval AS bar_interval "
+        "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
+        " WHERE o.status='open'"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _last_known_mark(conn, symbol: str, entry_ts) -> Optional[float]:
+    """Best honest exit mark for a symbol whose broker position is gone.
+
+    Resolution order (most position-specific first):
+      1. fill_price of a recorded, non-terminal SELL for this symbol;
+      2. latest snapshots.close for the symbol;
+      3. latest intraday_bars.close for the symbol.
+    Returns None when no price is available so the caller can SKIP rather
+    than fabricate an exit price.
+    """
+    row = conn.execute(
+        "SELECT fill_price FROM paper_trades "
+        " WHERE symbol=? AND side='sell' AND fill_price IS NOT NULL "
+        "   AND status NOT IN ('canceled','rejected') "
+        " ORDER BY COALESCE(filled_at, submitted_at) DESC LIMIT 1",
+        (symbol,),
+    ).fetchone()
+    if row is not None and row["fill_price"] is not None:
+        try:
+            return float(row["fill_price"])
+        except (TypeError, ValueError):
+            pass
+    row = conn.execute(
+        "SELECT close FROM snapshots WHERE symbol=? AND close IS NOT NULL "
+        " ORDER BY snapshot_date DESC LIMIT 1",
+        (symbol,),
+    ).fetchone()
+    if row is not None and row["close"] is not None:
+        try:
+            return float(row["close"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        row = conn.execute(
+            "SELECT close FROM intraday_bars WHERE symbol=? AND close IS NOT NULL "
+            " ORDER BY ts_utc DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+    except Exception:
+        row = None
+    if row is not None and row["close"] is not None:
+        try:
+            return float(row["close"])
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def sweep_orphan_outcomes(
+    conn,
+    held_symbols,
+    *,
+    now_iso: Optional[str] = None,
+) -> Dict:
+    """Close OPEN outcomes whose real broker position is already gone (A3).
+
+    `held_symbols` is the set/iterable of symbols the broker currently holds
+    (from alpaca_open_positions). An OPEN outcome is an ORPHAN when its
+    symbol is NOT in that set — the position closed (stop fill, manual close,
+    missed reconcile) but the outcome never closed, so the ledger diverged
+    18x from broker reality (audit: 260 open outcomes / 179 symbols vs 14
+    real positions).
+
+    Each orphan is closed with exit_reason='reconciled_no_position' at the
+    best last-known mark (_last_known_mark). Orphans with NO available price
+    are SKIPPED (no fabricated exit). Outcomes whose symbol IS held are left
+    untouched. Idempotent — closed outcomes drop out of the OPEN query.
+    Best-effort per row: one failure never aborts the rest.
+
+    Returns {scanned, swept, skipped, held}.
+    """
+    held = {str(s).upper() for s in (held_symbols or [])}
+    fallback_ts = now_iso or _utc_now_iso()
+    candidates = _open_outcomes_with_symbols(conn)
+    swept = 0
+    skipped = 0
+    for o in candidates:
+        sym = o.get("symbol")
+        if sym is None:
+            skipped += 1
+            continue
+        if str(sym).upper() in held:
+            # The position genuinely still exists — never close it here.
+            continue
+        mark = _last_known_mark(conn, sym, o.get("entry_ts"))
+        if mark is None:
+            skipped += 1
+            continue
+        try:
+            db.close_outcome(
+                conn, signal_id=int(o["signal_id"]),
+                exit_ts=fallback_ts, exit_price=float(mark),
+                exit_reason=RECONCILED_NO_POSITION_EXIT_REASON,
+            )
+        except Exception as e:
+            log(f"sweep_orphan_outcomes: close failed for "
+                f"{o.get('strategy_id')}/{sym} sig {o.get('signal_id')}: {e}",
+                "WARNING")
+            skipped += 1
+            continue
+        log(f"RECONCILE_NO_POSITION closed orphan outcome sig "
+            f"{o.get('signal_id')} ({o.get('strategy_id')}/{sym}) "
+            f"@ {mark} (reason={RECONCILED_NO_POSITION_EXIT_REASON})", "INFO")
+        swept += 1
+    return {"scanned": len(candidates), "swept": swept,
+            "skipped": skipped, "held": len(held)}
+
+
 def reconcile(*,
               conn=None,
               client=None,
@@ -235,6 +363,7 @@ def reconcile(*,
               save_path: Optional[Path] = None,
               now_fn: Optional[Callable] = None,
               alert: bool = True,
+              sweep_orphans: bool = False,
               sync_fills: bool = True) -> Dict:
     """End-to-end run: backfill broker fills, pull both sides, compute drift,
     persist snapshot, alert on drift. Returns the full result dict.
@@ -265,17 +394,34 @@ def reconcile(*,
                 log(f"reconcile: order_sync skipped ({type(e).__name__}: {e})",
                     "WARNING")
         db_pos = db_open_positions(conn)
+        # Pull broker truth while the conn is still open so the A3 orphan
+        # sweep can close OPEN outcomes whose real position is already gone.
+        if alpaca_positions_fn is None:
+            from config.utils import get_alpaca_client
+            client = client or get_alpaca_client()
+            alpaca_pos = alpaca_open_positions(client)
+        else:
+            alpaca_pos = alpaca_positions_fn()
+        sweep_res = None
+        if sweep_orphans:
+            try:
+                sweep_res = sweep_orphan_outcomes(
+                    conn, set(alpaca_pos.keys()), now_iso=now_fn(),
+                )
+                if sweep_res.get("swept"):
+                    log(f"reconcile: orphan sweep closed {sweep_res['swept']} "
+                        f"OPEN outcome(s) with no broker position "
+                        f"({sweep_res['skipped']} skipped)", "INFO")
+            except Exception as e:
+                log(f"reconcile: orphan sweep skipped "
+                    f"({type(e).__name__}: {e})", "WARNING")
     finally:
         if own_conn:
             conn.close()
-    if alpaca_positions_fn is None:
-        from config.utils import get_alpaca_client
-        client = client or get_alpaca_client()
-        alpaca_pos = alpaca_open_positions(client)
-    else:
-        alpaca_pos = alpaca_positions_fn()
     result = compute_drift(db_pos, alpaca_pos)
     result["as_of"] = now_fn()
+    if sweep_res is not None:
+        result["orphan_sweep"] = sweep_res
     _save_snapshot(result, path=save_path)
     if alert and result["drift_count"] > 0:
         text = format_telegram_alert(result)
