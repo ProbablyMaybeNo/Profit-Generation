@@ -1127,7 +1127,10 @@ def live_feed_status_get():
     """
     if not _is_loopback_request():
         return jsonify({"error": "loopback only"}), 403
-    from monitoring.config import TRACKED_STOCKS, TRACKED_SECTORS
+    # A4 (audit 2026-06-03): report the listener's REAL subscribed universe
+    # (DEFAULT_UNIVERSE = full intraday universe), not the stale
+    # TRACKED_STOCKS + TRACKED_SECTORS 10.
+    from monitoring.live_stream import DEFAULT_UNIVERSE
     conn = db.init_db()
     try:
         ls = _live_stream_status(conn)
@@ -1154,7 +1157,7 @@ def live_feed_status_get():
         "stale": bool(stale),
         "last_ts": ls.get("last_ts"),
         "seconds_since_last_message": seconds_ago,
-        "subscribed_symbol_count": len(TRACKED_STOCKS) + len(TRACKED_SECTORS),
+        "subscribed_symbol_count": len(DEFAULT_UNIVERSE),
         "reconnects_today": ls.get("reconnects_today") or 0,
         "last_error": ls.get("last_error"),
     })
@@ -1171,10 +1174,10 @@ def intraday_bars_latest_get():
     """
     if not _is_loopback_request():
         return jsonify({"error": "loopback only"}), 403
-    from monitoring.config import TRACKED_STOCKS, TRACKED_SECTORS
-    universe = list(dict.fromkeys(
-        [s.upper() for s in TRACKED_STOCKS + TRACKED_SECTORS]
-    ))
+    # A4 (audit 2026-06-03): the displayed universe is the listener's real
+    # subscribed set (full intraday universe), not the stale 10.
+    from monitoring.live_stream import DEFAULT_UNIVERSE
+    universe = list(dict.fromkeys([s.upper() for s in DEFAULT_UNIVERSE]))
     conn = db.init_db()
     try:
         rows = conn.execute(

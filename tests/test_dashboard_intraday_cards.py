@@ -46,8 +46,11 @@ def test_live_feed_status_returns_not_started_when_no_row(client):
     assert body["seconds_since_last_message"] is None
     assert body["reconnects_today"] == 0
     assert body["stale"] is False
-    # Universe count is TRACKED_STOCKS (3) + TRACKED_SECTORS (7) = 10.
-    assert body["subscribed_symbol_count"] == 10
+    # A4: count is the listener's real subscribed universe (full intraday
+    # universe), not the stale TRACKED_STOCKS + TRACKED_SECTORS 10.
+    from monitoring.live_stream import DEFAULT_UNIVERSE
+    assert body["subscribed_symbol_count"] == len(DEFAULT_UNIVERSE)
+    assert body["subscribed_symbol_count"] > 10
 
 
 def test_live_feed_status_returns_connected_with_recent_heartbeat(client, tmp_path):
@@ -118,8 +121,10 @@ def test_intraday_bars_latest_empty_table_lists_universe_with_no_data(client):
     body = r.get_json()
     assert body["ok"] is True
     syms = body["symbols"]
-    # 10-symbol universe, all NO_DATA.
-    assert len(syms) == 10
+    # A4: full intraday universe listed, all NO_DATA when the table is empty.
+    from monitoring.live_stream import DEFAULT_UNIVERSE
+    assert len(syms) == len(DEFAULT_UNIVERSE)
+    assert len(syms) > 10
     for entry in syms:
         assert entry["bar"] is None
         assert entry["freshness"] == "NO_DATA"

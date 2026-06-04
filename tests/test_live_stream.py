@@ -247,18 +247,34 @@ def test_live_stream_calls_subscribe_bars_on_underlying_stream(conn):
     assert fake.trade_subscriptions == [("AAA", "BBB")]
 
 
-def test_live_stream_default_universe_is_10_symbols(conn):
-    """Defaults to TRACKED_STOCKS + TRACKED_SECTORS — 10 symbols on the
-    free IEX tier."""
+def test_live_stream_default_universe_covers_full_intraday_universe(conn):
+    """A4 (audit 2026-06-03): the persisted-bar universe must equal the full
+    configured intraday strategy universe (INTRADAY_1M_UNIVERSE) so MFE/MAE
+    and the F2-SAFETY stale sweep work for ALL intraday symbols — not the
+    stale 10 (TRACKED_STOCKS + TRACKED_SECTORS) that left AAPL/NVDA/TSLA/etc.
+    with zero bars. On the old code the default was 10 symbols and the 10
+    large-caps below were absent -> this asserts the gap is closed."""
+    from monitoring.config import (
+        INTRADAY_1M_UNIVERSE, TRACKED_STOCKS, TRACKED_SECTORS,
+    )
     listener = ls.LiveStream(
         conn,
         api_key="k", secret_key="s",
         stream_factory=lambda *a, **kw: _FakeStream(),
         sleep_fn=lambda s: None,
     )
-    assert len(listener.symbols) == 10, (
-        "default universe should be 10 symbols (TRACKED_STOCKS + TRACKED_SECTORS)"
-    )
+    subscribed = set(listener.symbols)
+    # Every configured intraday-universe symbol is subscribed (no silent cap).
+    missing = set(s.upper() for s in INTRADAY_1M_UNIVERSE) - subscribed
+    assert not missing, f"intraday-universe symbols not subscribed: {missing}"
+    # And the previously-absent large-caps are now present.
+    for sym in ("AAPL", "MSFT", "NVDA", "TSLA", "META", "AMZN"):
+        assert sym in subscribed
+    # The legacy IEX 10 are still covered (union, not replacement).
+    for sym in list(TRACKED_STOCKS) + list(TRACKED_SECTORS):
+        assert sym.upper() in subscribed
+    # No duplicates from the union.
+    assert len(listener.symbols) == len(subscribed)
 
 
 # ---------------------------------------------------------------------------

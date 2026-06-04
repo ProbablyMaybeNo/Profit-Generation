@@ -39,7 +39,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config.utils import load_credentials, log  # noqa: E402
-from monitoring.config import TRACKED_STOCKS, TRACKED_SECTORS  # noqa: E402
+from monitoring.config import (  # noqa: E402
+    TRACKED_STOCKS, TRACKED_SECTORS, INTRADAY_1M_UNIVERSE,
+)
 
 
 COMPONENT = "live_stream"
@@ -49,7 +51,29 @@ HEARTBEAT_INTERVAL_SEC = 5.0
 BACKOFF_SCHEDULE = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0)
 BACKOFF_CAP_SEC = 60.0
 
-DEFAULT_UNIVERSE: List[str] = list(TRACKED_STOCKS) + list(TRACKED_SECTORS)
+
+def _dedupe_upper(*groups) -> List[str]:
+    """Union of symbol groups, upper-cased, first-seen order preserved."""
+    seen: Dict[str, None] = {}
+    for group in groups:
+        for sym in group:
+            if sym is None:
+                continue
+            key = str(sym).upper()
+            if key not in seen:
+                seen[key] = None
+    return list(seen.keys())
+
+
+# A4 (audit 2026-06-03): the bars table fed MFE/MAE and the F2-SAFETY stale
+# sweep, but only 10 of the 20-symbol intraday universe ever got bars (the
+# other 10 — AAPL, MSFT, NVDA, etc. — had ZERO rows, so their orphans never
+# auto-closed and excursion stayed NULL). The persisted universe must equal
+# the configured intraday strategy universe, so the listener subscribes to
+# the full set. IEX bar bandwidth for 20 names is trivial.
+DEFAULT_UNIVERSE: List[str] = _dedupe_upper(
+    TRACKED_STOCKS, TRACKED_SECTORS, INTRADAY_1M_UNIVERSE,
+)
 
 
 # ---------------------------------------------------------------------------
