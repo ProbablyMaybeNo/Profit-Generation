@@ -2272,6 +2272,52 @@ def _negative_sentiment_veto(
 
 
 
+def _recent_intraday_atr_pct(conn, symbol: str, price, *,
+                             period: int = 14) -> Optional[float]:
+    """Expected-move proxy for the M6 gate: ATR over the most recent intraday
+    bars for `symbol`, as a percent of `price`. None when there aren't enough
+    bars or price is invalid (caller then does NOT veto)."""
+    try:
+        rows = conn.execute(
+            "SELECT high, low, close FROM intraday_bars "
+            " WHERE symbol=? ORDER BY ts_utc DESC LIMIT ?",
+            (symbol, period + 1),
+        ).fetchall()
+    except Exception:
+        return None
+    if not rows or len(rows) < period + 1:
+        return None
+    bars = [dict(r) for r in reversed(rows)]  # chronological
+    from monitoring import stops as stops_mod
+    from monitoring import intraday_edge_gate as eg_mod
+    atr = stops_mod.compute_atr(bars, period=period)
+    return eg_mod.expected_move_pct_from_atr(atr, price)
+
+
+def _intraday_edge_veto(conn, sig, settings: dict) -> Optional[dict]:
+    """M6: veto an intraday entry whose modeled expected move doesn't clear
+    estimated friction. Returns the edge-gate descriptor (with veto=bool) or
+    None when the gate is disabled. Enabled by default with conservative
+    thresholds; set settings.intraday.edge_gate_enabled=false to disable."""
+    intraday_cfg = settings.get("intraday")
+    enabled = True
+    if isinstance(intraday_cfg, dict) and "edge_gate_enabled" in intraday_cfg:
+        enabled = bool(intraday_cfg.get("edge_gate_enabled"))
+    elif "intraday_edge_gate_enabled" in settings:
+        enabled = bool(settings.get("intraday_edge_gate_enabled"))
+    if not enabled:
+        return None
+    from monitoring import intraday_edge_gate as eg_mod
+    try:
+        price = float(sig["close"] or 0)
+    except (TypeError, ValueError, KeyError):
+        price = 0.0
+    expected_move = _recent_intraday_atr_pct(conn, sig["symbol"], price)
+    return eg_mod.evaluate_edge_gate(
+        expected_move_pct=expected_move, settings=settings,
+    )
+
+
 def _coerce_earnings_veto_days(raw) -> int:
     """Trading-day window for earnings veto. 0/negative = disabled."""
     try:
@@ -3043,6 +3089,31 @@ def process_signals(
                     **ns,
                 })
                 continue
+            # M6 (Sprint 2): intraday cost/slippage edge gate. Veto an intraday
+            # entry whose modeled expected move (ATR over recent intraday bars,
+            # as % of price) doesn't clear estimated round-trip friction
+            # (spread + slippage) plus a buffer. Addresses the negative-avg-
+            # return-despite-decent-win-rate strategies whose edge is eaten by
+            # cost. EOD (1d) entries are out of scope. A missing estimate never
+            # vetoes.
+            _eg_bar_interval = (sig["bar_interval"]
+                                if "bar_interval" in sig.keys() else "1d")
+            if (_eg_bar_interval or "1d") != "1d":
+                eg = _intraday_edge_veto(conn, sig, settings)
+                if eg is not None and eg.get("veto"):
+                    _record_skip(
+                        conn, sig=sig, gate="intraday_edge_gate",
+                        reason_detail=eg.get("reason"),
+                        source=sig_src,
+                    )
+                    actions.append({
+                        "action": "SKIP_INTRADAY_EDGE_GATE",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sym,
+                        "signal_id": sig["id"],
+                        **eg,
+                    })
+                    continue
             sid = sig["strategy_id"]
             if sid not in cool_down_cache:
                 cool_down_cache[sid] = _cool_down_state(

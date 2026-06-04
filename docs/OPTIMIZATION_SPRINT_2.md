@@ -118,7 +118,7 @@ still fires.
 
 ---
 
-## [ ] M6 (P1, Optimization) — intraday cost/slippage edge gate
+## [x] M6 (P1, Optimization) — intraday cost/slippage edge gate
 
 **Fix:** Add a "don't trade if expected edge < estimated friction" gate for intraday
 entries: minimum expected-move threshold + spread/slippage estimate; veto entries whose
