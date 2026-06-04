@@ -1325,12 +1325,35 @@ def _process_exit(
             out["trailing"] = trailing_triggered
         return out
 
+    # M1 (Sprint 2): route every exit through the single per-symbol
+    # reservation layer. It cancels any conflicting resting SELL (wash-trade
+    # guard), re-reads the broker's net-available qty, and caps the sell so we
+    # never oversell a position that another strategy/stop already exited
+    # (the unintended-short root cause). A 0-available result is a clean SKIP,
+    # not an error — the position is already flat or fully reserved.
+    from monitoring import position_manager as pm_mod
     try:
-        order = _submit_market_order(client, symbol=sym, qty=qty, side="sell")
+        res = pm_mod.safe_submit_sell(
+            client, symbol=sym, requested_qty=qty,
+            submit_fn=_submit_market_order,
+        )
     except Exception as e:
         log(f"order submit failed for {sid}/{sym}: {e}", "ERROR")
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
                 "error": str(e)[:200]}
+    if res is None or res.get("action") != "SUBMITTED":
+        log(f"exit suppressed for {sid}/{sym}: no broker-available qty "
+            f"(requested {qty})", "INFO")
+        try:
+            from monitoring import trailing_stops as ts_mod
+            ts_mod.clear_stop(conn, strategy_id=sid, symbol=sym)
+        except Exception:
+            pass
+        return {"action": "SKIP_NO_AVAILABLE_QTY", "strategy_id": sid,
+                "symbol": sym, "signal_id": sig["id"], "requested_qty": qty,
+                "available": (res or {}).get("available", 0)}
+    order = res["order"]
+    qty = res["qty"]
 
     db.record_paper_trade(conn, {
         "alpaca_order_id": str(getattr(order, "id", "")),
@@ -2502,6 +2525,20 @@ def _maybe_attach_stop(
     if dry_run:
         info["status"] = "dry_run"
         return info
+    # M1 (Sprint 2): cap the protective-stop qty to the broker's net-available
+    # for a long so we never place a SELL STOP reserving more shares than the
+    # position holds (held_for_orders > qty → later flatten "insufficient qty").
+    # Only applies to long positions (sell-side stops); short-cover stops are
+    # left to the existing path. A 0-available read leaves qty untouched so a
+    # freshly-filled entry whose position isn't visible yet still gets a stop.
+    if side != "short":
+        try:
+            from monitoring import position_manager as pm_mod
+            avail = pm_mod.available_to_sell(client, sig["symbol"])
+            if avail is not None and avail >= 1:
+                qty = pm_mod.cap_sell_qty(qty, avail)
+        except Exception:
+            pass
     try:
         stop_order = stops_mod.submit_atr_stop(
             client, symbol=sig["symbol"], qty=qty,

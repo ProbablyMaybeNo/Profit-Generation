@@ -26,7 +26,7 @@ that fails on current code.
 
 ---
 
-## [ ] M1 (P0, Bug) — single per-symbol position/order manager
+## [x] M1 (P0, Bug) — single per-symbol position/order manager
 
 **Problem:** No single owner per symbol. Multiple strategies (e.g. NVDA under
 intraday-orb-pivots-5m + intraday-orbo-5m + intraday-1m-orb) each submit exits/stops

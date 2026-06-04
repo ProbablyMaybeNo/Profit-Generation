@@ -371,8 +371,19 @@ def close_intraday_positions(
                 })
                 continue
 
+            # M1 (Sprint 2): flatten through the single per-symbol reservation
+            # layer so a symbol owned by multiple intraday strategies is sold
+            # only down to broker-available (never past flat into a short) and
+            # the second strategy's flatten for the same symbol is a clean SKIP
+            # rather than an oversell / wash-trade reject. The symbol-wide
+            # cancel sweep above already cleared resting stops; reconcile=False
+            # here avoids a redundant per-symbol cancel pass.
+            from monitoring import position_manager as pm_mod
             try:
-                order = submitter(client, symbol=sym, qty=qty, side="sell")
+                res = pm_mod.safe_submit_sell(
+                    client, symbol=sym, requested_qty=qty,
+                    submit_fn=submitter, reconcile=False,
+                )
             except Exception as e:
                 log(f"close_intraday_positions: SELL failed for {sid}/{sym}: {e}",
                     "ERROR")
@@ -382,6 +393,16 @@ def close_intraday_positions(
                     "buy_order_id": pos.get("alpaca_order_id"),
                 })
                 continue
+            if res is None or res.get("action") != "SUBMITTED":
+                skipped.append({
+                    "reason": "no_available_qty",
+                    "strategy_id": sid, "symbol": sym,
+                    "buy_order_id": pos.get("alpaca_order_id"),
+                    "available": (res or {}).get("available", 0),
+                })
+                continue
+            order = res["order"]
+            qty = res["qty"]
 
             exit_ts = str(getattr(order, "filled_at", None)
                           or getattr(order, "submitted_at", None)

@@ -1,0 +1,391 @@
+"""
+position_manager.py — single per-symbol order/position reservation layer.
+
+Sprint 2 / M1. Root cause of the unintended-short bug: multiple intraday
+strategies own the same broker symbol (e.g. NVDA under intraday-orb-pivots-5m
++ intraday-orbo-5m + intraday-1m-orb) and each fires its own exit / stop /
+flatten against the SAME shared broker position. With no single owner, the
+SELLs stack: shares already reserved by a resting stop (held_for_orders) get
+sold again, the position is oversold past flat into a SHORT, and Alpaca rejects
+the conflicting orders (40310000 "potential wash trade") or fails the flatten
+("insufficient qty available, held_for_orders=N").
+
+This module is the ONE place that decides how many shares may be sold for a
+symbol RIGHT NOW, given the live broker state:
+
+    available = long_position_qty - shares_reserved_by_open_sell_orders
+
+Every sell / stop / flatten path routes its quantity through here so no path
+can oversell past flat or fight another path's resting exit. It also
+reconciles (cancels) incompatible resting exit orders before a new exit so the
+broker never sees two opposite-or-stacked exits at once.
+
+Long-only invariant: a SELL is never allowed to cross through zero into a short.
+`cap_sell_qty` clamps to the available long quantity; if the position is already
+flat or short, the capped quantity is 0 (nothing to sell).
+
+Design notes:
+  * Pure helpers (cap_sell_qty) are I/O-free and trivially testable.
+  * Broker reads (broker_position, open_sell_orders) normalise alpaca-py models
+    AND plain dicts/Mocks so tests inject fakes without the SDK.
+  * available_to_sell prefers the broker's own `qty_available` when present
+    (it already nets held_for_orders) and otherwise derives it from the open
+    SELL orders, so both real-broker and partial-fake clients work.
+  * Nothing here weakens a risk limit, the paper gate, or the kill switch — it
+    only ever REDUCES a quantity or cancels a redundant order.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from config.utils import log
+
+# Order statuses that still reserve shares against the position (held_for_orders).
+# A working SELL in any of these states is holding inventory the broker will not
+# let us sell again.
+WORKING_STATUSES = frozenset({
+    "new", "accepted", "pending_new", "accepted_for_bidding",
+    "partially_filled", "held", "pending_replace", "replaced",
+    "calculated", "done_for_day",
+})
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _strict_float(value):
+    """float(value) for real numbers/strings, else None.
+
+    Unlike _as_float this does NOT coerce non-numeric objects (e.g. a bare
+    MagicMock auto-attribute) to a default — it returns None so callers can
+    treat "broker returned junk" as UNKNOWN rather than as flat (0.0)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _attr(obj, name):
+    """Read an attribute from an alpaca model OR a dict OR a Mock."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _status_str(order) -> str:
+    raw = _attr(order, "status")
+    if raw is None:
+        return ""
+    # alpaca enums stringify as 'OrderStatus.NEW'; take the tail and lower it.
+    s = str(raw)
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    return s.strip().lower()
+
+
+def _side_str(order) -> str:
+    raw = _attr(order, "side")
+    if raw is None:
+        return ""
+    s = str(raw)
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    return s.strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Pure quantity logic
+# ---------------------------------------------------------------------------
+
+def cap_sell_qty(requested_qty, available_qty) -> int:
+    """Clamp a requested sell quantity to what may actually be sold.
+
+    Returns an int in [0, floor(available_qty)]. Never returns more than the
+    available long quantity — this is the long-only no-cross-into-short guard.
+    A negative or zero `available_qty` (already flat/short) yields 0.
+    """
+    try:
+        req = int(requested_qty)
+    except (TypeError, ValueError):
+        return 0
+    if req <= 0:
+        return 0
+    avail = int(_as_float(available_qty, 0.0))
+    if avail <= 0:
+        return 0
+    return min(req, avail)
+
+
+# ---------------------------------------------------------------------------
+# Broker reads
+# ---------------------------------------------------------------------------
+
+def can_read_positions(client) -> bool:
+    """True iff the client exposes any position-reading method.
+
+    A bare/stub client (no get_open_position / get_all_positions / list_positions)
+    cannot tell us the live broker truth. In that case the reservation layer must
+    NOT silently block a flatten (that would re-introduce the "positions never
+    close" failure) — callers fall back to the requested qty.
+    """
+    return any(getattr(client, m, None) is not None
+               for m in ("get_open_position", "get_all_positions",
+                         "list_positions"))
+
+
+def broker_position(client, symbol: str) -> Optional[Dict]:
+    """Normalised live broker position for `symbol`, or None if flat.
+
+    Returns {symbol, qty (signed float), qty_available (float, may be None)}.
+    qty<0 means the account is SHORT. Uses get_open_position(symbol) when the
+    client exposes it (cheapest), else falls back to scanning all positions.
+    A "no position" broker error (404) is treated as flat → None.
+    """
+    getter = getattr(client, "get_open_position", None)
+    pos = None
+    if getter is not None:
+        try:
+            pos = getter(symbol)
+        except Exception:
+            pos = None
+    if pos is None:
+        all_getter = (getattr(client, "get_all_positions", None)
+                      or getattr(client, "list_positions", None))
+        if all_getter is not None:
+            try:
+                for p in (all_getter() or []):
+                    if (_attr(p, "symbol") or "") == symbol:
+                        pos = p
+                        break
+            except Exception:
+                pos = None
+    if pos is None:
+        return None
+    qty = _strict_float(_attr(pos, "qty"))
+    if qty is None:
+        # Position object present but qty isn't a real number (e.g. a bare
+        # MagicMock auto-attribute). We can't trust it → signal "unknown".
+        return {"symbol": symbol, "qty": None, "qty_available": None}
+    qa_raw = _attr(pos, "qty_available")
+    qty_available = _strict_float(qa_raw) if qa_raw is not None else None
+    return {"symbol": symbol, "qty": qty, "qty_available": qty_available}
+
+
+def open_sell_orders(client, symbol: str) -> List:
+    """Working SELL orders for `symbol` that currently reserve shares.
+
+    Returns the raw order objects (filtered to side=sell and a working status).
+    Best-effort: a broker read failure yields [] so callers degrade to the
+    broker's own qty_available rather than crashing.
+    """
+    orders = _get_open_orders(client, symbol)
+    out = []
+    for o in orders:
+        if _side_str(o) != "sell":
+            continue
+        if _status_str(o) and _status_str(o) not in WORKING_STATUSES:
+            continue
+        out.append(o)
+    return out
+
+
+def _get_open_orders(client, symbol: str) -> List:
+    getter = getattr(client, "get_orders", None)
+    if getter is None:
+        return []
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        orders = getter(filter=req)
+    except Exception:
+        # Fake clients in tests may accept no args / a plain call.
+        try:
+            orders = getter()
+        except Exception as e:
+            log(f"position_manager: get_orders failed for {symbol}: {e}",
+                "WARNING")
+            return []
+    if not orders:
+        return []
+    # When we fell back to an arg-less getter, narrow to this symbol ourselves.
+    return [o for o in orders if (_attr(o, "symbol") or symbol) == symbol]
+
+
+def _reserved_by_open_sells(client, symbol: str) -> float:
+    """Shares reserved by working SELL orders (qty minus already-filled qty)."""
+    reserved = 0.0
+    for o in open_sell_orders(client, symbol):
+        qty = _as_float(_attr(o, "qty"), 0.0)
+        filled = _as_float(_attr(o, "filled_qty"), 0.0)
+        reserved += max(0.0, qty - filled)
+    return reserved
+
+
+def available_to_sell(client, symbol: str) -> Optional[int]:
+    """Net shares that may be sold for `symbol` right now without overselling.
+
+        available = long_qty - shares_reserved_by_open_sell_orders
+
+    Prefers the broker's own `qty_available` (it already nets held_for_orders)
+    when present; otherwise derives the reservation from the open SELL orders.
+    Returns 0 when flat, short, or fully reserved — never negative.
+
+    Returns None ("unknown") when the client can't report positions at all, so
+    callers fall back to the requested qty rather than blocking a flatten on a
+    stub broker. When positions ARE readable but the symbol isn't held, that's
+    a genuine flat → 0.
+    """
+    if not can_read_positions(client):
+        return None
+    pos = broker_position(client, symbol)
+    if pos is None:
+        return 0
+    long_qty = pos["qty"]
+    if long_qty is None:
+        # Broker returned an unparseable position → unknown, not flat.
+        return None
+    if long_qty <= 0:
+        # Flat or already short: nothing a long-only strategy may sell.
+        return 0
+    qa = pos.get("qty_available")
+    if qa is not None:
+        avail = qa
+    else:
+        avail = long_qty - _reserved_by_open_sells(client, symbol)
+    # Never report more than the long position, never negative.
+    avail = min(avail, long_qty)
+    return int(max(0.0, avail))
+
+
+# ---------------------------------------------------------------------------
+# Exit-order reconciliation
+# ---------------------------------------------------------------------------
+
+def reconcile_exit_orders(client, symbol: str) -> int:
+    """Cancel resting SELL orders for `symbol` so a fresh exit isn't rejected
+    for a wash trade or blocked by held shares. Returns the count cancelled.
+
+    Best-effort per order — one bad cancel never blocks the rest. This is the
+    single chokepoint that previously lived (partially) in
+    close_intraday_positions._cancel_open_orders_for_symbols.
+    """
+    cancelled = 0
+    canceller = getattr(client, "cancel_order_by_id", None)
+    if canceller is None:
+        return 0
+    for o in open_sell_orders(client, symbol):
+        oid = _attr(o, "id")
+        if oid is None:
+            continue
+        try:
+            canceller(oid)
+            cancelled += 1
+        except Exception as e:
+            log(f"position_manager: cancel failed for order {oid} "
+                f"({symbol}): {e}", "WARNING")
+    return cancelled
+
+
+# ---------------------------------------------------------------------------
+# Guarded submit entry points (the ONE place all sell paths go through)
+# ---------------------------------------------------------------------------
+
+def safe_sell_qty(client, symbol: str, requested_qty) -> int:
+    """The capped quantity a path may sell right now: min(requested, available).
+
+    Pure read + clamp; submits nothing. Sell/stop/flatten paths call this to
+    size their order so no path oversells past flat. Returns 0 when there's
+    nothing safe to sell (flat, short, or fully reserved). When the broker can't
+    report positions (unknown), falls back to the requested qty."""
+    avail = available_to_sell(client, symbol)
+    if avail is None:
+        try:
+            return max(0, int(requested_qty))
+        except (TypeError, ValueError):
+            return 0
+    return cap_sell_qty(requested_qty, avail)
+
+
+def safe_submit_sell(
+    client, *, symbol: str, requested_qty, submit_fn,
+    reconcile: bool = True, side: str = "sell",
+) -> Optional[Dict]:
+    """Submit a guarded SELL via `submit_fn(client, symbol=, qty=, side=)`.
+
+    1. (optional) reconcile/cancel conflicting resting SELLs first.
+    2. Re-read available AFTER reconcile (cancels free up held shares).
+    3. Cap the requested qty to available — never oversell past flat.
+    4. Submit only if the capped qty >= 1, else return a SKIP record.
+
+    Returns:
+      {"action": "SUBMITTED", "qty": n, "order": <order>} on submit,
+      {"action": "SKIP_NO_AVAILABLE_QTY", "qty": 0, "requested": r} otherwise.
+    `submit_fn` is the existing _submit_market_order / cover submitter so this
+    layer stays broker-agnostic and test-injectable.
+    """
+    if reconcile:
+        reconcile_exit_orders(client, symbol)
+    avail = available_to_sell(client, symbol)
+    if avail is None:
+        # Broker can't report positions (stub client / read unavailable): don't
+        # block the flatten — fall back to the requested qty. The broker itself
+        # still rejects a true oversell; this layer only ADDS safety when it has
+        # truth, never removes the prior ability to close.
+        qty = max(0, int(_as_float(requested_qty, 0)))
+    else:
+        qty = cap_sell_qty(requested_qty, avail)
+    if qty < 1:
+        log(f"position_manager: SKIP sell {symbol} requested={requested_qty} "
+            f"available={avail} (nothing safe to sell)", "INFO")
+        return {"action": "SKIP_NO_AVAILABLE_QTY", "symbol": symbol,
+                "qty": 0, "requested": int(_as_float(requested_qty, 0)),
+                "available": avail}
+    order = submit_fn(client, symbol=symbol, qty=qty, side=side)
+    return {"action": "SUBMITTED", "symbol": symbol, "qty": qty,
+            "requested": int(_as_float(requested_qty, 0)),
+            "available": avail, "order": order}
+
+
+def safe_submit_buy_to_cover(
+    client, *, symbol: str, submit_fn, reconcile: bool = True,
+) -> Optional[Dict]:
+    """Flatten an unintended SHORT by buying exactly abs(short_qty) shares.
+
+    Used by the M2 cover tool. Submits nothing unless the live broker position
+    is genuinely SHORT (qty<0). Buys exactly enough to reach flat — never more
+    (no crossing through zero into a long).
+
+    Returns:
+      {"action": "COVERED", "qty": n, "order": <order>} on submit,
+      {"action": "SKIP_NOT_SHORT", "qty": 0, "position_qty": q} otherwise.
+    """
+    pos = broker_position(client, symbol)
+    if pos is None or pos["qty"] is None or pos["qty"] >= 0:
+        return {"action": "SKIP_NOT_SHORT", "symbol": symbol, "qty": 0,
+                "position_qty": (pos["qty"] if pos else 0.0)}
+    cover_qty = int(abs(pos["qty"]))
+    if cover_qty < 1:
+        return {"action": "SKIP_NOT_SHORT", "symbol": symbol, "qty": 0,
+                "position_qty": pos["qty"]}
+    if reconcile:
+        # Clear any resting orders for the symbol so the cover buy is clean.
+        reconcile_exit_orders(client, symbol)
+    order = submit_fn(client, symbol=symbol, qty=cover_qty, side="buy")
+    return {"action": "COVERED", "symbol": symbol, "qty": cover_qty,
+            "position_qty": pos["qty"], "order": order}
