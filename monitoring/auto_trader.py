@@ -1263,6 +1263,7 @@ def _open_outcome_for_pair(conn, strategy_id: str, symbol: str):
 def _process_exit(
     conn, client, settings: dict, sig, dry_run: bool,
     *, trailing_triggered: Optional[dict] = None,
+    exit_reason_override: Optional[str] = None,
     bars_fetcher: Optional[Callable] = None,
 ) -> dict:
     sid, sym = sig["strategy_id"], sig["symbol"]
@@ -1277,9 +1278,10 @@ def _process_exit(
         )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
-    # If the caller hasn't pre-computed a trailing trip, do it now using the
+    # If the caller hasn't pre-computed a trailing trip (and isn't forcing a
+    # specific exit reason, e.g. a time-stop), check trailing now using the
     # signal's close as the proxy current price.
-    if trailing_triggered is None:
+    if trailing_triggered is None and exit_reason_override is None:
         current_price = float(sig["close"] or 0)
         if current_price > 0:
             trailing_triggered = _check_trailing_exit(
@@ -1304,6 +1306,12 @@ def _process_exit(
             f"; trailing stop hit @ ${trailing_triggered.get('stop_price')} "
             f"({trailing_triggered.get('method')})"
         )
+    elif exit_reason_override:
+        # A5 (audit 2026-06-03): the caller forces the exit reason for a
+        # bounded model exit (e.g. 'time_stop' on a 1d trend outcome that
+        # never tripped its trailing stop and never reversed).
+        exit_reason = exit_reason_override
+        notes_extra = f"; {exit_reason_override}"
 
     if dry_run:
         tag = "TRAILING_STOP " if trailing_triggered is not None else ""
@@ -1356,8 +1364,11 @@ def _process_exit(
     _exit_interval = (sig["bar_interval"]
                       if "bar_interval" in sig.keys() else "1d")
     _is_intraday_exit = str(_exit_interval or "1d").lower() != "1d"
+    # A5: a forced exit reason (e.g. time_stop) also closes the outcome here,
+    # so a bounded model exit lands on the ledger with the right reason.
     _close_outcome_here = (
         trailing_triggered is not None or _is_intraday_exit
+        or bool(exit_reason_override)
     )
     if _close_outcome_here:
         try:
@@ -1480,6 +1491,125 @@ def _check_trailing_exits_for_open_positions(
             trailing_triggered=trip, bars_fetcher=bars_fetcher,
         )
         action["synthetic_trailing_exit"] = True
+        actions.append(action)
+    return actions
+
+
+def _resolve_time_stop_config(
+    strategy_id: str,
+    settings: dict,
+    tracked_strategies: Optional[List[dict]] = None,
+) -> Optional[dict]:
+    """Per-strategy time-stop config, or None when the strategy doesn't opt in.
+
+    Resolution: per-strategy declaration `time_stop` block first, then the
+    global settings.auto_trade.time_stop block. A positive `max_days_held`
+    is required to be active.
+    """
+    cfg: dict = {}
+    decl = _resolve_strategy_declaration(strategy_id, tracked_strategies)
+    if decl is not None and isinstance(decl.get("time_stop"), dict):
+        cfg.update(decl["time_stop"])
+    global_cfg = settings.get("time_stop")
+    if isinstance(global_cfg, dict):
+        for k, v in global_cfg.items():
+            cfg.setdefault(k, v)
+    try:
+        max_days = int(cfg.get("max_days_held") or 0)
+    except (TypeError, ValueError):
+        return None
+    if max_days <= 0:
+        return None
+    cfg["max_days_held"] = max_days
+    return cfg
+
+
+def _days_held(entry_ts, asof: date) -> Optional[int]:
+    """Calendar days between an outcome's entry_ts (ISO date/datetime) and
+    asof. Returns None when entry_ts is unparseable."""
+    if entry_ts is None:
+        return None
+    try:
+        entry_date = date.fromisoformat(str(entry_ts)[:10])
+    except (ValueError, TypeError):
+        return None
+    return (asof - entry_date).days
+
+
+def _check_time_stops_for_open_positions(
+    conn, settings: dict,
+    *, client, dry_run: bool,
+    bars_fetcher: Optional[Callable] = None,
+    tracked_strategies: Optional[List[dict]] = None,
+    asof: Optional[date] = None,
+) -> List[dict]:
+    """A5 (audit 2026-06-03): bounded model exit for trend (and any
+    time_stop-declaring) strategies. For every open position whose strategy
+    declares a time_stop, close it (broker sell + outcome) with
+    exit_reason='time_stop' once it has been held > max_days_held.
+
+    Runs AFTER the trailing-exit pass so the ATR trailing stop always wins
+    when it trips first (a tripped trailing exit already closed the buy, so
+    _open_buy_for_pair returns None and this pass skips). Synthesizes a
+    long_exit routed through _process_exit with exit_reason_override so the
+    full close path (sell, stop clear, MFE/MAE, outcome close) is reused.
+
+    Idempotent: once the SELL is submitted the position drops out.
+    """
+    asof = asof or date.today()
+    rows = conn.execute(
+        "SELECT DISTINCT strategy_id, symbol FROM paper_trades "
+        " WHERE side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') "
+    ).fetchall()
+    actions: List[dict] = []
+    for r in rows:
+        sid, sym = r["strategy_id"], r["symbol"]
+        if not sid or not sym:
+            continue
+        cfg = _resolve_time_stop_config(sid, settings, tracked_strategies)
+        if cfg is None:
+            continue
+        open_buy = _open_buy_for_pair(conn, sid, sym)
+        if open_buy is None:
+            continue
+        outcome = _open_outcome_for_pair(conn, sid, sym)
+        if outcome is None:
+            continue
+        held = _days_held(outcome["entry_ts"], asof)
+        if held is None or held <= cfg["max_days_held"]:
+            continue
+        # Proxy current price for the synthetic exit: latest bar close when a
+        # fetcher is available, else the outcome entry price (close still
+        # records; MFE/MAE best-effort).
+        last_close = None
+        if bars_fetcher is not None:
+            try:
+                bars = bars_fetcher(sym)
+                if bars:
+                    last_close = float(bars[-1].get("close") or 0) or None
+            except Exception:
+                last_close = None
+        if last_close is None:
+            try:
+                last_close = float(outcome["entry_price"] or 0) or None
+            except (TypeError, ValueError):
+                last_close = None
+        if last_close is None:
+            continue
+        synthetic_sig = {
+            "id": None,
+            "strategy_id": sid, "symbol": sym,
+            "signal_type": "long_exit",
+            "bar_ts": asof.isoformat(),
+            "close": last_close,
+        }
+        action = _process_exit(
+            conn, client, settings, synthetic_sig, dry_run,
+            exit_reason_override="time_stop", bars_fetcher=bars_fetcher,
+        )
+        action["synthetic_time_stop"] = True
+        action["days_held"] = held
         actions.append(action)
     return actions
 
@@ -3159,6 +3289,19 @@ def process_signals(
         asof=asof,
     )
     actions.extend(trailing_actions)
+
+    # A5 — after trailing (which wins on a price trip), close any open
+    # position held past its strategy's time_stop with exit_reason='time_stop'
+    # so a 1d trend outcome can't sit OPEN indefinitely waiting on a rare
+    # channel/MA breakdown.
+    time_stop_actions = _check_time_stops_for_open_positions(
+        conn, settings,
+        client=client, dry_run=dry_run,
+        bars_fetcher=bars_fetcher,
+        tracked_strategies=regime_tracked,
+        asof=asof,
+    )
+    actions.extend(time_stop_actions)
 
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
            "actions": actions, "market_regime": current_regime}
