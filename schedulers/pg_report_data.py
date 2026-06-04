@@ -2,12 +2,20 @@
 """Dump today's Profit Generation system data as a plain-text block for
 injection into the Hermes cron report agents (brief + analysis). Runs under
 WSL python3 against the live Windows DB via /mnt/d. Stdlib only (sqlite3)."""
+import os
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 
-DB = "/mnt/d/AI-Workstation/Antigravity/apps/Profit Generation/data/trading.db"
-LOGDIR = "/mnt/d/AI-Workstation/Antigravity/apps/Profit Generation/logs"
+# Default to the WSL 9p mount (the cron runs under WSL python3). Fall back to a
+# Windows path / env override so the script is testable from either OS without
+# editing it. PG_TRADING_DB overrides both.
+_WSL_DB = "/mnt/d/AI-Workstation/Antigravity/apps/Profit Generation/data/trading.db"
+_WIN_DB = r"D:\AI-Workstation\Antigravity\apps\Profit Generation\data\trading.db"
+_WSL_LOG = "/mnt/d/AI-Workstation/Antigravity/apps/Profit Generation/logs"
+_WIN_LOG = r"D:\AI-Workstation\Antigravity\apps\Profit Generation\logs"
+DB = os.environ.get("PG_TRADING_DB") or (_WSL_DB if os.path.exists(_WSL_DB) else _WIN_DB)
+LOGDIR = _WSL_LOG if os.path.exists(_WSL_LOG) else _WIN_LOG
 TODAY = date.today().isoformat()
 
 out = []
@@ -68,8 +76,13 @@ if prior:
         p(f"  change vs prior close: ${d:+.2f} ({100*d/prior[0]['portfolio_value']:+.2f}%)")
 if today_snaps and today_snaps[0]["n"]:
     p(f"  today snapshots: {today_snaps[0]['n']} (range ${today_snaps[0]['lo']:.2f}-${today_snaps[0]['hi']:.2f})")
+    p("  EQUITY SNAPSHOT: present (today's P/L is trustworthy).")
 else:
-    p("  NOTE: no equity snapshot recorded today -> intraday P/L unavailable.")
+    # M8: flag loudly — a missing snapshot silently breaks every intraday-P/L
+    # and deployed-% number in this report; it must not read as "flat day".
+    p("  *** ALERT: NO EQUITY SNAPSHOT RECORDED TODAY ***")
+    p("  intraday P/L, deployed%, and change-vs-prior are UNAVAILABLE / stale; "
+      "do NOT interpret missing movement as a flat day. Check the snapshot job.")
 
 # Signals fired today
 p("\n[SIGNALS FIRED TODAY] (by strategy / interval)")
@@ -181,6 +194,80 @@ since = (date.today() - timedelta(days=2)).isoformat()
 sk = q("SELECT gate, COUNT(*) n FROM intraday_skips WHERE substr(recorded_at,1,10)>=? GROUP BY gate ORDER BY n DESC LIMIT 12", (since,))
 for r in sk:
     p(f"  {r['gate']}: {r['n']}")
+
+# M8: fresh trading activity vs reconciliation/cleanup. Outcomes closed by the
+# reconcile/orphan/stale sweeps are bookkeeping, NOT trading — counting them as
+# "trades closed today" overstates activity. Split them out explicitly.
+p("\n[FRESH ACTIVITY vs RECONCILIATION] (outcomes closed today)")
+RECONCILE_REASONS = (
+    "reconciled_no_position", "stale_intraday_flatten_missed",
+    "broker_reconcile", "orphan_sweep", "reconcile_close",
+)
+split = q("""SELECT exit_reason, COUNT(*) n FROM outcomes
+             WHERE substr(updated_at,1,10)=? AND status='closed'
+             GROUP BY exit_reason""", (TODAY,))
+fresh_n = recon_n = 0
+recon_detail = []
+for r in split:
+    reason = r["exit_reason"] or ""
+    if reason in RECONCILE_REASONS:
+        recon_n += r["n"]
+        recon_detail.append(f"{reason}={r['n']}")
+    else:
+        fresh_n += r["n"]
+p(f"  fresh trading closes: {fresh_n}")
+p(f"  reconciliation/cleanup closes: {recon_n}"
+  + (f" ({', '.join(recon_detail)})" if recon_detail else ""))
+if recon_n and not fresh_n:
+    p("  NOTE: today's closes are ALL reconciliation cleanup — not trading "
+      "activity. Do not read as a trading day.")
+
+# M8: per-strategy ownership/order health from the DB's view of state. Held qty
+# = open filled buy qty not yet offset by a working sell; available = held minus
+# qty reserved by working sells/stops; open_orders = working sells/stops.
+p("\n[STRATEGY HEALTH] (per strategy: open orders / held / available / paused)")
+WORKING = "('new','accepted','partially_filled','pending_new','held')"
+held = q(f"""
+    SELECT pt.strategy_id, pt.symbol,
+           SUM(CASE WHEN pt.side='buy'  AND pt.status IN ('filled','partially_filled') THEN pt.qty ELSE 0 END) AS buy_qty,
+           SUM(CASE WHEN pt.side='sell' AND pt.status='filled' THEN pt.qty ELSE 0 END) AS sold_qty,
+           SUM(CASE WHEN pt.side='sell' AND pt.status IN {WORKING} THEN pt.qty ELSE 0 END) AS working_sell_qty,
+           SUM(CASE WHEN pt.status IN {WORKING} THEN 1 ELSE 0 END) AS open_orders
+      FROM paper_trades pt
+     GROUP BY pt.strategy_id, pt.symbol
+    HAVING buy_qty > sold_qty
+""")
+paused_rows = q("SELECT strategy_id, reason, expires_at, source FROM paused_strategies")
+paused_map = {r["strategy_id"]: r for r in paused_rows}
+# symbol -> set of strategies holding it (duplicate-symbol ownership detector)
+sym_owners = {}
+if held:
+    for r in held:
+        sym_owners.setdefault(r["symbol"], set()).add(r["strategy_id"])
+    for r in held:
+        sid = r["strategy_id"]
+        heldq = (r["buy_qty"] or 0) - (r["sold_qty"] or 0)
+        availq = heldq - (r["working_sell_qty"] or 0)
+        pr = paused_map.get(sid)
+        pstate = "PAUSED" if pr else "active"
+        if pr and pr["expires_at"]:
+            pstate += f"(until {pr['expires_at'][:10]})"
+        dupe = " [SHARED SYMBOL]" if len(sym_owners.get(r["symbol"], set())) > 1 else ""
+        p(f"  {sid} {r['symbol']}: held={heldq} available={availq} "
+          f"open_orders={r['open_orders'] or 0} [{pstate}]{dupe}")
+else:
+    p("  no held positions in the DB view.")
+# Duplicate-symbol ownership summary (the unintended-short root cause signature).
+dupes = {s: sorted(owners) for s, owners in sym_owners.items() if len(owners) > 1}
+if dupes:
+    p("  DUPLICATE-SYMBOL OWNERSHIP (multiple strategies on one symbol):")
+    for s, owners in sorted(dupes.items()):
+        p(f"    {s}: {', '.join(owners)}")
+else:
+    p("  no symbol is owned by more than one strategy (good).")
+if paused_map:
+    p(f"  paused strategies ({len(paused_map)}): "
+      + ", ".join(sorted(paused_map.keys())))
 
 c.close()
 print("\n".join(out))

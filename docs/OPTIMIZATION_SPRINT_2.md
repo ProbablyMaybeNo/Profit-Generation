@@ -145,7 +145,7 @@ strong-trend entry passes.
 
 ---
 
-## [ ] M8 (P2, Observability) — strategy-health + KPI honesty in the daily report
+## [x] M8 (P2, Observability) — strategy-health + KPI honesty in the daily report
 
 **Fix:** Extend `schedulers/pg_report_data.py` (and re-install the copy to
 `~/.hermes/scripts/`) to emit per-strategy: open-order count, held qty, available qty,
