@@ -52,7 +52,7 @@ conflicting order; (c) a long position is never flipped short. Full non-live sui
 
 ---
 
-## [ ] M2 (P0, Risk cleanup) — unintended-short detection + guarded cover tool
+## [x] M2 (P0, Risk cleanup) — unintended-short detection + guarded cover tool
 
 **Problem:** 10 live short positions (~-$62k) that should not exist.
 
