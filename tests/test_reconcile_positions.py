@@ -488,6 +488,113 @@ def test_sweep_still_skips_when_daily_close_unavailable(isolated_db):
     assert o["status"] == "open"
 
 
+# ---- B2: guarded one-time backfill entry point ---------------------------
+#
+# main(["--sweep-orphans"]) (alias --backfill) drives reconcile(
+# sweep_orphans=True), which reuses sweep_orphan_outcomes (no parallel logic).
+# It must close resolvable orphans, leave held + no-price ones alone, and be
+# safe to re-run (already-closed outcomes are untouched).
+
+def _stub_broker_for_main(monkeypatch, held_positions, *, daily=None):
+    """Stub the broker + fill-sync seams reconcile() uses on the CLI path,
+    so main() runs end-to-end against the isolated test DB without a network."""
+    from config import utils as cfg_utils
+    from monitoring import order_sync, telegram_alerter
+    monkeypatch.setattr(cfg_utils, "get_alpaca_client", lambda: object(),
+                        raising=False)
+    monkeypatch.setattr(order_sync, "sync_order_fills",
+                        lambda conn, client: {"updated": 0, "filled": 0})
+    monkeypatch.setattr(rp, "alpaca_open_positions",
+                        lambda client: dict(held_positions))
+    monkeypatch.setattr(telegram_alerter, "send_message", lambda t: True)
+    if daily is not None:
+        monkeypatch.setattr(rp, "_default_daily_bars_fn", daily)
+
+
+def test_main_backfill_flag_closes_resolvable_leaves_held_and_noprice(
+        isolated_db, tmp_path, monkeypatch):
+    """B2 acceptance: --sweep-orphans closes a resolvable orphan, leaves a
+    held outcome open, and honest-skips a no-price orphan."""
+    conn = db.init_db()
+    # Resolvable orphan (snapshot mark), held outcome, no-price orphan.
+    resolvable = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                               entry_price=50.0)
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
+    held = _open_outcome(conn, strategy_id="trend-b", symbol="NVDA",
+                         entry_price=120.0)
+    noprice = _open_outcome(conn, strategy_id="trend-c", symbol="NOPRICE")
+    conn.commit()
+
+    monkeypatch.setattr(rp, "RECONCILE_SNAPSHOT", tmp_path / "rec.json")
+    _stub_broker_for_main(monkeypatch, {"NVDA": {"qty": 5.0}},
+                          daily=lambda syms: {})
+    # main opens its own conn against the (monkeypatched) DB_FILE.
+    with pytest.raises(SystemExit):
+        rp.main(["--sweep-orphans", "--no-alert"])
+
+    conn2 = db.init_db()
+    o_res = conn2.execute(
+        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?",
+        (resolvable,)).fetchone()
+    assert o_res["status"] == "closed"
+    assert o_res["exit_reason"] == "reconciled_no_position"
+    o_held = conn2.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (held,)).fetchone()
+    assert o_held["status"] == "open"
+    o_np = conn2.execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (noprice,)).fetchone()
+    assert o_np["status"] == "open"
+
+
+def test_main_backfill_is_idempotent(isolated_db, tmp_path, monkeypatch):
+    """Re-running the backfill leaves already-closed outcomes untouched and
+    sweeps nothing the second time."""
+    conn = db.init_db()
+    sid = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                        entry_price=50.0)
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
+    conn.commit()
+
+    monkeypatch.setattr(rp, "RECONCILE_SNAPSHOT", tmp_path / "rec.json")
+    _stub_broker_for_main(monkeypatch, {}, daily=lambda syms: {})
+
+    with pytest.raises(SystemExit):
+        rp.main(["--sweep-orphans", "--no-alert"])
+    first = db.init_db().execute(
+        "SELECT status, exit_ts FROM outcomes WHERE signal_id=?",
+        (sid,)).fetchone()
+    assert first["status"] == "closed"
+    first_exit_ts = first["exit_ts"]
+
+    # Second run: the now-closed outcome is no longer an OPEN candidate.
+    with pytest.raises(SystemExit):
+        rp.main(["--sweep-orphans", "--no-alert"])
+    second = db.init_db().execute(
+        "SELECT status, exit_ts FROM outcomes WHERE signal_id=?",
+        (sid,)).fetchone()
+    assert second["status"] == "closed"
+    assert second["exit_ts"] == first_exit_ts, \
+        "idempotent: a re-run must not re-close / re-stamp the outcome"
+
+
+def test_main_without_flag_does_not_sweep(isolated_db, tmp_path, monkeypatch):
+    """Guard: plain `python -m monitoring.reconcile_positions` (no flag) must
+    NOT sweep orphans — sweep is opt-in."""
+    conn = db.init_db()
+    sid = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                        entry_price=50.0)
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
+    conn.commit()
+
+    monkeypatch.setattr(rp, "RECONCILE_SNAPSHOT", tmp_path / "rec.json")
+    _stub_broker_for_main(monkeypatch, {}, daily=lambda syms: {})
+    with pytest.raises(SystemExit):
+        rp.main(["--no-alert"])
+    o = db.init_db().execute(
+        "SELECT status FROM outcomes WHERE signal_id=?", (sid,)).fetchone()
+    assert o["status"] == "open", "no --sweep-orphans flag => no sweep"
+
+
 def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
     """End-to-end: reconcile(sweep_orphans=True) closes the phantom outcome
     using broker truth, leaves the held one open."""

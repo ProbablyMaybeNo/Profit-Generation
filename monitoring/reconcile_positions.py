@@ -518,18 +518,30 @@ def reconcile(*,
     return result
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Position reconciliation.")
     parser.add_argument("--json", action="store_true",
                         help="emit JSON instead of formatted markdown")
     parser.add_argument("--no-alert", action="store_true",
                         help="skip Telegram alert even on drift")
-    args = parser.parse_args()
-    result = reconcile(alert=not args.no_alert)
+    parser.add_argument("--sweep-orphans", "--backfill", dest="sweep_orphans",
+                        action="store_true",
+                        help="also close OPEN outcomes whose broker position "
+                             "is gone (A3 orphan sweep). Idempotent: already-"
+                             "closed outcomes are untouched, held symbols are "
+                             "never closed. Used by the nightly Reconcile task "
+                             "and for the one-time B2 backlog backfill.")
+    args = parser.parse_args(argv)
+    result = reconcile(alert=not args.no_alert,
+                       sweep_orphans=args.sweep_orphans)
     if args.json:
         print(json.dumps(result, indent=2, default=str))
     else:
         print(format_section(result))
+        if result.get("orphan_sweep") is not None:
+            s = result["orphan_sweep"]
+            print(f"\nOrphan sweep: scanned={s['scanned']} swept={s['swept']} "
+                  f"skipped={s['skipped']} held={s['held']}")
         if result["drift_count"] > 0:
             print("\n" + format_telegram_alert(result))
     sys.exit(1 if result["drift_count"] > 0 else 0)
