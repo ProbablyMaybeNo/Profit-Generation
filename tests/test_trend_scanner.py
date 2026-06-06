@@ -396,10 +396,24 @@ def test_scan_persists_bar_ts_as_date_only_string(isolated_db):
 
 
 def test_scan_records_long_exit_when_signal_fires(isolated_db):
-    """Sanity check: build bars that produce both an entry and a later exit."""
+    """Sanity check: build bars that produce both an entry and a later exit.
+
+    M4 (Sprint 3): an exit is only RECORDED when the strategy OWNS the symbol
+    (holds an open buy). Seed that owned position so the legitimate exit lands —
+    a positionless scan would (correctly) record no exit.
+    """
     _seed_strategies(["trend-donchian-breakout-20"])
     conn = db.init_db()
     try:
+        # M4 — the strategy must own ROUNDTRIP for its exit to be recordable.
+        conn.execute(
+            "INSERT INTO paper_trades "
+            "(alpaca_order_id, strategy_id, symbol, side, qty, status, "
+            " submitted_at) VALUES "
+            "('b-rt', 'trend-donchian-breakout-20', 'ROUNDTRIP', 'buy', 10, "
+            " 'filled', '2026-01-01T00:00:00')"
+        )
+        conn.commit()
         # 80 bars: flat -> spike -> crash so Donchian fires entry then exit
         idx = pd.date_range("2026-01-01", periods=80, freq="B")
         closes = np.concatenate([

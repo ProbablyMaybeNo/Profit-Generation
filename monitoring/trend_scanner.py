@@ -41,6 +41,7 @@ from monitoring.config import TRACKED_STRATEGIES  # noqa: E402
 from monitoring.liquidity import filter_by_dollar_volume  # noqa: E402
 from monitoring.strategy_fires import _resolve_compute_fn  # noqa: E402
 from monitoring.universe import load_trend_universe  # noqa: E402
+from monitoring import position_manager as pm_owner  # noqa: E402
 
 DEFAULT_LOOKBACK_BARS = 100
 DEFAULT_BAR_INTERVAL = "1d"
@@ -188,7 +189,13 @@ def scan_trend_universe(
                         "signal_type": "long_entry", "close": close,
                         "signal_id": sig_id,
                     })
-                if bool(last.get("long_exit", False)):
+                # M4 (Sprint 3) — gate exit-signal recording to an owned holding
+                # (per M1/M2). The wide-universe trend scanner sweeps hundreds of
+                # symbols; recording a long_exit for any symbol the strategy
+                # doesn't actually hold is pure spam and hands a non-owner a SELL
+                # signal. Only record the exit when THIS strategy owns the symbol.
+                if bool(last.get("long_exit", False)) and \
+                        pm_owner.owns_symbol(conn, sid, symbol):
                     sig_id = db.record_signal(
                         conn,
                         strategy_id=sid, symbol=symbol,

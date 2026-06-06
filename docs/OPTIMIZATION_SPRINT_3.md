@@ -118,10 +118,26 @@ Real path; fails on current code.
     SELL STOPs: `assert 2 == 1`). New code cancels the resting stop and leaves exactly
     one; a stop is never armed for more than the long qty.
 
-### [ ] M4 — exit-signal gating to real owned holdings
+### [x] M4 — exit-signal gating to real owned holdings
 Only emit/record `long_exit` when the strategy has a live OWNED position (per M1/M2).
 Kills the thousands-of-exits spam. **Acceptance:** positionless/paused strategy emits 0
 exits; a real holding emits its single exit. Real signal path.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Root cause closed:** the scanners recorded a `long_exit` on EVERY bar in the
+    scan window where the rule was true, for EVERY (strategy, symbol) — even ones the
+    strategy never held → thousands of phantom exit signals/run + a SELL signal handed
+    to non-owners.
+  - **Wired into (real signal-record paths):** `intraday_fires.check_intraday_fires`
+    (intraday_fires.py:194) and `trend_scanner.scan_trend_universe`
+    (trend_scanner.py:191) now gate `db.record_signal(... long_exit)` on
+    `position_manager.owns_symbol(conn, sid, symbol)`. A positionless/paused/non-owner
+    strategy records zero exits. (`_process_exit` already enforces the same on the
+    submit side via M1/M2.)
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_exit_gating_m4.py`
+    drives REAL `check_intraday_fires`. Proven RED on pre-M4 code (positionless +
+    non-owner each recorded 1 phantom exit). New code records 0; an owned holding
+    records exactly its single exit. Updated `test_trend_scanner`'s exit sanity test
+    to seed the owned position M4 now requires.
 
 ### [ ] M5 — paused-strategy position policy
 Define + enforce: paused = no new entries AND no silent holding. On pause, flatten

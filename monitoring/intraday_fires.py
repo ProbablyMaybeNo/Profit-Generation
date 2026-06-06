@@ -28,6 +28,7 @@ from backtest.data import load_intraday_bars
 from data import db
 from monitoring.config import TRACKED_CRYPTO, TRACKED_STRATEGIES
 from monitoring.strategy_fires import _resolve_compute_fn
+from monitoring import position_manager as pm_owner
 
 DEFAULT_LOOKBACK_BARS = 200
 
@@ -191,7 +192,18 @@ def check_intraday_fires(
                                 "signal_type": "long_entry",
                                 "close": close, "signal_id": sig_id,
                             })
-                        if bool(row.get("long_exit", False)):
+                        # M4 (Sprint 3) — gate exit-signal RECORDING to a real
+                        # owned holding. The scanner emits a long_exit on every
+                        # bar in the window where the rule is true, for every
+                        # (strategy, symbol) — even ones the strategy never held.
+                        # That recorded thousands of phantom long_exit signals
+                        # per run (the exit spam) and gave non-owners a signal to
+                        # fire a SELL against a position they don't own. Only
+                        # record the exit when THIS strategy is the live OWNER of
+                        # the symbol (per M1/M2 — holds the position). A
+                        # positionless/paused strategy records 0 exits.
+                        if bool(row.get("long_exit", False)) and \
+                                pm_owner.owns_symbol(conn, sid, symbol):
                             sig_id = db.record_signal(
                                 conn,
                                 strategy_id=sid, symbol=symbol,
