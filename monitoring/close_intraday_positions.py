@@ -299,6 +299,12 @@ def close_intraday_positions(
     if dry_run is None:
         dry_run = not is_paper_mode()
 
+    # M1 (Sprint 3): start the flatten pass from the broker's settled truth so
+    # the per-symbol in-run sell-reservation ledger nets THIS pass's flattens
+    # (two strategies flattening the same shared symbol can't oversell it).
+    from monitoring import position_manager as _pm_reset
+    _pm_reset.reset_run_reservations()
+
     own_conn = conn is None
     if own_conn:
         conn = db.init_db()

@@ -37,9 +37,64 @@ Design notes:
 
 from __future__ import annotations
 
+import threading
 from typing import Dict, List, Optional
 
 from config.utils import log
+
+# ---------------------------------------------------------------------------
+# In-run sell-reservation ledger (Sprint 3 / M1)
+# ---------------------------------------------------------------------------
+# The broker is the single source of truth for how many shares a symbol holds.
+# But within ONE trading pass, strategy A can submit a market SELL that the
+# broker has not yet reflected in qty/qty_available (an 'accepted', not-yet-
+# 'filled' order) when strategy B's exit reads the position microseconds later.
+# Reading the broker alone then lets B oversell the same shares A is already
+# selling — the multi-strategy shared-symbol oversell that grew the account to
+# −$101k of unintended shorts despite Sprint 2's broker reads being on the path.
+#
+# This ledger records every share quantity THIS process has committed to sell
+# per symbol (net of any cancel/release) so available_to_sell can subtract it
+# from the broker's long qty. It NEVER inflates a quantity — only reduces it —
+# so it cannot weaken a risk limit, the paper gate, or the kill switch. It is
+# in-memory and per-process; a fresh process (or an explicit reset at the top
+# of a trading pass) starts from zero, after which the broker's own settled
+# qty already reflects prior sells.
+_RESERVE_LOCK = threading.Lock()
+_RUN_SELL_RESERVED: Dict[str, float] = {}
+
+
+def reset_run_reservations() -> None:
+    """Clear the in-run sell-reservation ledger.
+
+    Call once at the very top of a trading pass (process_signals /
+    close_intraday_positions) so each run starts from the broker's settled
+    truth. Safe to call repeatedly; never raises.
+    """
+    with _RESERVE_LOCK:
+        _RUN_SELL_RESERVED.clear()
+
+
+def run_reserved_for(symbol: str) -> float:
+    with _RESERVE_LOCK:
+        return float(_RUN_SELL_RESERVED.get(symbol, 0.0))
+
+
+def _reserve_run_sell(symbol: str, qty) -> None:
+    q = _as_float(qty, 0.0)
+    if q <= 0:
+        return
+    with _RESERVE_LOCK:
+        _RUN_SELL_RESERVED[symbol] = _RUN_SELL_RESERVED.get(symbol, 0.0) + q
+
+
+def _release_run_sell(symbol: str, qty) -> None:
+    q = _as_float(qty, 0.0)
+    if q <= 0:
+        return
+    with _RESERVE_LOCK:
+        cur = _RUN_SELL_RESERVED.get(symbol, 0.0)
+        _RUN_SELL_RESERVED[symbol] = max(0.0, cur - q)
 
 # Order statuses that still reserve shares against the position (held_for_orders).
 # A working SELL in any of these states is holding inventory the broker will not
@@ -237,14 +292,25 @@ def _reserved_by_open_sells(client, symbol: str) -> float:
     return reserved
 
 
-def available_to_sell(client, symbol: str) -> Optional[int]:
+def available_to_sell(
+    client, symbol: str, *, include_run_reservations: bool = False,
+) -> Optional[int]:
     """Net shares that may be sold for `symbol` right now without overselling.
 
         available = long_qty - shares_reserved_by_open_sell_orders
+                            - shares_this_run_already_committed_to_sell
 
     Prefers the broker's own `qty_available` (it already nets held_for_orders)
     when present; otherwise derives the reservation from the open SELL orders.
     Returns 0 when flat, short, or fully reserved — never negative.
+
+    When `include_run_reservations` is True (the guarded submit path), also
+    subtracts the in-run sell-reservation ledger — shares THIS process has
+    already submitted to sell this pass but the broker may not yet reflect.
+    This is the M1 fix for the multi-strategy shared-symbol oversell: strategy
+    B's exit cannot re-sell the shares strategy A's exit already committed,
+    even before A's order settles at the broker. Pure broker reads default to
+    False so isolated reads are unaffected.
 
     Returns None ("unknown") when the client can't report positions at all, so
     callers fall back to the requested qty rather than blocking a flatten on a
@@ -270,6 +336,11 @@ def available_to_sell(client, symbol: str) -> Optional[int]:
         avail = long_qty - _reserved_by_open_sells(client, symbol)
     # Never report more than the long position, never negative.
     avail = min(avail, long_qty)
+    if include_run_reservations:
+        # Subtract what this process already committed to sell this run but the
+        # broker may not yet have reflected. This is bounded by the long_qty
+        # cap above, so it can only ever REDUCE available, never go negative.
+        avail = avail - run_reserved_for(symbol)
     return int(max(0.0, avail))
 
 
@@ -329,9 +400,14 @@ def safe_submit_sell(
     """Submit a guarded SELL via `submit_fn(client, symbol=, qty=, side=)`.
 
     1. (optional) reconcile/cancel conflicting resting SELLs first.
-    2. Re-read available AFTER reconcile (cancels free up held shares).
-    3. Cap the requested qty to available — never oversell past flat.
-    4. Submit only if the capped qty >= 1, else return a SKIP record.
+    2. Read available from the BROKER, netting both the broker's own held
+       shares AND the in-run sell-reservation ledger (shares this process has
+       already committed to sell this pass but the broker may not yet reflect).
+    3. Cap the requested qty to available — never oversell past flat, and never
+       let a second strategy re-sell shares a first strategy already committed.
+    4. Submit only if the capped qty >= 1, then reserve those shares in the run
+       ledger so the next caller this pass sees them as already gone. Else
+       return a SKIP record.
 
     Returns:
       {"action": "SUBMITTED", "qty": n, "order": <order>} on submit,
@@ -341,7 +417,7 @@ def safe_submit_sell(
     """
     if reconcile:
         reconcile_exit_orders(client, symbol)
-    avail = available_to_sell(client, symbol)
+    avail = available_to_sell(client, symbol, include_run_reservations=True)
     if avail is None:
         # Broker can't report positions (stub client / read unavailable): don't
         # block the flatten — fall back to the requested qty. The broker itself
@@ -357,6 +433,9 @@ def safe_submit_sell(
                 "qty": 0, "requested": int(_as_float(requested_qty, 0)),
                 "available": avail}
     order = submit_fn(client, symbol=symbol, qty=qty, side=side)
+    # Record the committed sell so a later exit/flatten THIS run nets it out and
+    # can't re-sell the same shares before the broker settles the fill.
+    _reserve_run_sell(symbol, qty)
     return {"action": "SUBMITTED", "symbol": symbol, "qty": qty,
             "requested": int(_as_float(requested_qty, 0)),
             "available": avail, "order": order}

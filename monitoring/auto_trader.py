@@ -2749,6 +2749,11 @@ def process_signals(
 
     asof = asof or date.today()
     dry_run = bool(settings.get("dry_run", True))
+    # M1 (Sprint 3): start each pass from the broker's settled truth — clear the
+    # in-run sell-reservation ledger so this pass's exits/flattens net against a
+    # fresh slate (prior passes' sells are already reflected in broker qty).
+    from monitoring import position_manager as _pm_reset
+    _pm_reset.reset_run_reservations()
     built_own_client = client is None and not dry_run
     if built_own_client:
         client = client_factory()

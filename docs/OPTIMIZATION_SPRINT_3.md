@@ -36,7 +36,7 @@ make safely.
 
 ## PHASE 1 — the execution core (build now, in order)
 
-### [ ] M1 — broker-state reconciler: broker position is the single source of truth
+### [x] M1 — broker-state reconciler: broker position is the single source of truth
 Make the broker the authority. Each cycle, derive the DB/in-memory position view FROM
 the broker's actual positions + open orders; treat strategy "ownership" as metadata, not
 an independent position claim. Every consumer (sizing, exits, stops, flatten, outcome
@@ -44,6 +44,31 @@ tracking) reads available qty from this reconciled view, never from a strategy's
 assumption. **Acceptance (prod path):** a test where the DB thinks a strategy holds qty
 the broker doesn't have proves the system trusts the broker and computes available
 correctly; wired into the real order-submit path.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Root cause closed:** Sprint 2 read broker `qty_available`, but two failure
+    modes survived on the live path: (1) a market SELL submitted this pass is
+    `accepted`, not yet `filled`, so a second strategy's exit microseconds later
+    re-read the broker and saw the full long qty again → re-sold it (oversell into
+    short); (2) `reconcile=True` cancel-then-resell re-inflated available. Fix: an
+    in-run per-symbol sell-reservation ledger in `position_manager` that
+    `available_to_sell(include_run_reservations=True)` subtracts, so a committed
+    sell is netted out before the broker settles. Ledger is reset at the top of
+    each pass.
+  - **Wired into (real submit paths):** `auto_trader._process_exit`
+    (auto_trader.py:1364, single- AND multi-strategy exits) and
+    `close_intraday_positions` (close_intraday_positions.py:389, EOD flatten) both
+    route through `position_manager.safe_submit_sell`, which now nets the run
+    ledger; `auto_trader._maybe_attach_stop` (auto_trader.py:2625) caps stop qty
+    via `available_to_sell`. Reset wired at `process_signals` (auto_trader.py:2756)
+    and `close_intraday_positions` (close_intraday_positions.py:306).
+  - **Behavioral test (fails-on-old / passes-on-new):**
+    `tests/test_broker_truth_m1.py` drives the REAL `_process_exit`. (a) DB says 10,
+    broker holds 4 → old code sold 10 (oversold 6 into short), new sells ≤4. (b) two
+    strategies share one IWM position (10 held, 20 DB-claimed) → old code sold 20
+    (the −$101k oversell), new sells ≤10. Both PROVEN red on pre-fix code.
+  - **Handoff to M2/M3:** the stop-arming path (`stops.submit_atr_stop`) caps qty
+    but does NOT yet coordinate owners or make stop submission idempotent — that is
+    the remaining `40310000` wash-trade source and is explicitly M2/M3 scope.
 
 ### [ ] M2 — single symbol-owner authority
 One active owner (or one parent risk bucket) per symbol. No strategy may submit an
