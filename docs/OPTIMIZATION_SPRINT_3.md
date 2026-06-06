@@ -93,13 +93,30 @@ coordinated, never duplicated. Real submit path.
     strategy's KRE entry submitted a BUY; a non-owner's IWM exit fired a SELL. New code
     rejects both; exactly one valid exit fires for the owner.
 
-### [ ] M3 — idempotent stop / flatten / sell
+### [x] M3 — idempotent stop / flatten / sell
 Before ANY sell/stop/flatten: query existing open orders for the symbol, compute
 `available = position_qty − held_for_orders`, cancel/replace incompatible orders, submit
 only net-available, and NEVER cross zero into a short for a long-only strategy.
 **Acceptance:** `held_for_orders` reserving shares → submits only available, never
 oversells; a duplicate flatten cancels/replaces rather than re-firing a failing SELL.
 Real path; fails on current code.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Root cause closed:** `stops.submit_atr_stop` was a raw passthrough — re-arming
+    a symbol STACKED a second SELL STOP (40310000 wash / double held_for_orders).
+    New `position_manager.safe_submit_stop` reconciles (cancels) the resting SELL
+    first (cancel/replace, not stack), caps qty to net-available (held_for_orders +
+    run ledger), and submits only ≥1. Also fixed an ownership-release bug surfaced
+    by M2: a resting protective stop (`order_type LIKE '%stop%'`, unfilled) no longer
+    counts as a position-closing sell, so a still-protected long stays OWNED.
+  - **Wired into (real submit path):** `auto_trader._maybe_attach_stop`
+    (auto_trader.py:2682) routes the long-side protective stop through
+    `safe_submit_stop`. Flatten/sell idempotency already lands via M1's
+    `safe_submit_sell` (reconcile + run-ledger net) on `_process_exit` and
+    `close_intraday_positions`.
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_idempotent_stop_m3.py`
+    drives REAL `_maybe_attach_stop`. Proven RED on pre-M3 code (re-arm stacked TWO
+    SELL STOPs: `assert 2 == 1`). New code cancels the resting stop and leaves exactly
+    one; a stop is never armed for more than the long qty.
 
 ### [ ] M4 — exit-signal gating to real owned holdings
 Only emit/record `long_exit` when the strategy has a live OWNED position (per M1/M2).

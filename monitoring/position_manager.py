@@ -502,10 +502,20 @@ def safe_submit_buy_to_cover(
 
 
 def _has_later_sell(conn, strategy_id: str, symbol: str, after_submitted_at: str) -> bool:
+    """True iff a CLOSING sell exists after the open buy.
+
+    A resting protective SELL STOP (order_type LIKE '%stop%') is NOT a realized
+    close — it holds the position, it doesn't release it. Excluding stop rows is
+    what lets a still-protected long stay OWNED; counting them would falsely free
+    the symbol the moment its stop is armed (and let a second strategy claim it).
+    Only a market/limit sell (or a filled stop) closes the position.
+    """
     row = conn.execute(
         "SELECT 1 FROM paper_trades WHERE strategy_id=? AND symbol=? "
         "  AND side='sell' AND submitted_at > ? "
-        "  AND status NOT IN ('canceled', 'rejected') LIMIT 1",
+        "  AND status NOT IN ('canceled', 'rejected') "
+        "  AND (order_type IS NULL OR order_type NOT LIKE '%stop%' "
+        "       OR status='filled') LIMIT 1",
         (strategy_id, symbol, after_submitted_at),
     ).fetchone()
     return row is not None
@@ -568,3 +578,61 @@ def entry_owner_conflict(conn, strategy_id: str, symbol: str) -> Optional[str]:
     if owner is None or owner == strategy_id:
         return None
     return owner
+
+
+# ---------------------------------------------------------------------------
+# M3 — idempotent stop / flatten / sell
+# ---------------------------------------------------------------------------
+# A protective SELL STOP reserves shares at the broker (held_for_orders). The
+# pre-M3 path (`stops.submit_atr_stop`) blindly submitted a NEW stop every time
+# it was called — so re-arming a symbol that already had a resting stop stacked
+# a SECOND SELL STOP. Alpaca then either rejected it 40310000 (potential wash
+# trade — two SELLs on a long-only position) or both stops reserved shares so
+# the later market flatten saw held_for_orders == qty and failed "insufficient
+# qty available". This is the remaining wash-trade source flagged in M1's
+# handoff. M3 makes stop submission idempotent: cancel any incompatible resting
+# SELL first (cancel/replace, not stack), then submit only the net-available
+# quantity, and never cross zero into a short.
+
+
+def safe_submit_stop(
+    client, *, symbol: str, requested_qty, stop_price, submit_fn,
+    reconcile: bool = True,
+) -> Optional[Dict]:
+    """Submit a protective SELL STOP idempotently.
+
+    1. (optional) cancel any resting SELL (incl. an existing stop) for `symbol`
+       so a re-arm REPLACES rather than STACKS — no two SELL stops on one long
+       (the 40310000 wash-trade / double-reservation source).
+    2. Read available net of held_for_orders AND the in-run sell-reservation
+       ledger; cap the stop qty so it never reserves more than the position
+       holds and never crosses zero into a short.
+    3. Submit only when capped qty >= 1, via
+       `submit_fn(client, symbol=, qty=, stop_price=)` — the existing
+       stops.submit_atr_stop, kept broker-agnostic and test-injectable.
+
+    Returns:
+      {"action": "SUBMITTED", "qty": n, "cancelled": c, "order": <order>}
+      {"action": "SKIP_NO_AVAILABLE_QTY", "qty": 0, "requested": r, ...}
+    """
+    cancelled = 0
+    if reconcile:
+        cancelled = reconcile_exit_orders(client, symbol)
+    avail = available_to_sell(client, symbol, include_run_reservations=True)
+    if avail is None:
+        # Broker can't report positions (stub/unavailable): don't block arming a
+        # stop on a freshly-filled entry whose position isn't visible yet — fall
+        # back to the requested qty. The broker still rejects a true oversell.
+        qty = max(0, int(_as_float(requested_qty, 0)))
+    else:
+        qty = cap_sell_qty(requested_qty, avail)
+    if qty < 1:
+        log(f"position_manager: SKIP stop {symbol} requested={requested_qty} "
+            f"available={avail} (nothing to protect)", "INFO")
+        return {"action": "SKIP_NO_AVAILABLE_QTY", "symbol": symbol, "qty": 0,
+                "requested": int(_as_float(requested_qty, 0)),
+                "available": avail, "cancelled": cancelled}
+    order = submit_fn(client, symbol=symbol, qty=qty, stop_price=stop_price)
+    return {"action": "SUBMITTED", "symbol": symbol, "qty": qty,
+            "requested": int(_as_float(requested_qty, 0)),
+            "available": avail, "cancelled": cancelled, "order": order}

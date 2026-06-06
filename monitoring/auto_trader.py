@@ -2646,20 +2646,6 @@ def _maybe_attach_stop(
     if dry_run:
         info["status"] = "dry_run"
         return info
-    # M1 (Sprint 2): cap the protective-stop qty to the broker's net-available
-    # for a long so we never place a SELL STOP reserving more shares than the
-    # position holds (held_for_orders > qty → later flatten "insufficient qty").
-    # Only applies to long positions (sell-side stops); short-cover stops are
-    # left to the existing path. A 0-available read leaves qty untouched so a
-    # freshly-filled entry whose position isn't visible yet still gets a stop.
-    if side != "short":
-        try:
-            from monitoring import position_manager as pm_mod
-            avail = pm_mod.available_to_sell(client, sig["symbol"])
-            if avail is not None and avail >= 1:
-                qty = pm_mod.cap_sell_qty(qty, avail)
-        except Exception:
-            pass
     # M2 (Sprint 3) — owner authority on the stop side. A long-side protective
     # stop is a SELL against the ONE shared broker position; only the symbol's
     # owner may arm it. A non-owner arming a stop is what stacked competing
@@ -2676,17 +2662,51 @@ def _maybe_attach_stop(
                 return info
         except Exception:
             pass
-    try:
-        stop_order = stops_mod.submit_atr_stop(
-            client, symbol=sig["symbol"], qty=qty,
-            stop_price=stop_price, client_order_id=stop_cid,
-        )
-    except Exception as e:
-        log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
-            "ERROR")
-        info["status"] = "submit_failed"
-        info["error"] = str(e)[:200]
-        return info
+    # M3 (Sprint 3) — idempotent stop on the long side. Route through
+    # position_manager.safe_submit_stop so re-arming a symbol that already has a
+    # resting SELL (incl. a prior stop) CANCELS/REPLACES it rather than STACKING
+    # a second SELL STOP (the 40310000 wash / double-held_for_orders source).
+    # It also caps the qty to net-available (held_for_orders + run-ledger) so the
+    # stop never reserves more than the position holds and never crosses zero
+    # into a short. Short-cover stops keep the existing raw path. A 0-available
+    # read falls back to the requested qty (freshly-filled entry not yet visible).
+    if side != "short":
+        from monitoring import position_manager as pm_stop
+
+        def _stop_submit(c, *, symbol, qty, stop_price):
+            return stops_mod.submit_atr_stop(
+                c, symbol=symbol, qty=qty, stop_price=stop_price,
+                client_order_id=stop_cid,
+            )
+        try:
+            res = pm_stop.safe_submit_stop(
+                client, symbol=sig["symbol"], requested_qty=qty,
+                stop_price=stop_price, submit_fn=_stop_submit,
+            )
+        except Exception as e:
+            log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
+                "ERROR")
+            info["status"] = "submit_failed"
+            info["error"] = str(e)[:200]
+            return info
+        if res is None or res.get("action") != "SUBMITTED":
+            info["status"] = "no_stop"
+            info["available"] = (res or {}).get("available")
+            return info
+        stop_order = res["order"]
+        qty = res["qty"]
+    else:
+        try:
+            stop_order = stops_mod.submit_atr_stop(
+                client, symbol=sig["symbol"], qty=qty,
+                stop_price=stop_price, client_order_id=stop_cid,
+            )
+        except Exception as e:
+            log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
+                "ERROR")
+            info["status"] = "submit_failed"
+            info["error"] = str(e)[:200]
+            return info
     info["order_id"] = str(getattr(stop_order, "id", ""))
     info["status"] = "submitted"
     method_label = resolved["method"] or "unknown"
