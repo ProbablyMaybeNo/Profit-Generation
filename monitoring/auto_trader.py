@@ -835,6 +835,24 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "entry_stops": stop_info["stop_method"],
         })
 
+    # M7 (Sprint 3) — post-fill stop-protection verification. A long that fills
+    # without a protective stop is a naked position: a gap-down has no floor
+    # (the ENPH/AVGO −16% tail). Verify a stop is actually attached (this run's
+    # submit OR a stop already resting at the broker); alert loudly otherwise.
+    # Only when stops are EXPECTED for this run — a strategy/config that runs
+    # without stops by design raises no false alarm. stop_info is None only when
+    # stops are globally disabled, so verification keys off that.
+    protection = None
+    if stop_info is not None:
+        from monitoring import position_manager as pm_protect
+        try:
+            protection = pm_protect.verify_fill_protected(
+                client, symbol=sym, stop_info=stop_info, stops_expected=True,
+            )
+        except Exception as e:
+            log(f"M7 stop-protection verify skipped for {sid}/{sym}: {e}",
+                "WARNING")
+
     return {"action": "BUY", "strategy_id": sid, "symbol": sym, "qty": qty,
             "order_id": str(order.id), "signal_id": sig["id"],
             "notional": round(order_notional, 2),
@@ -845,7 +863,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "limit_price": limit_price,
             "requested_order_type": requested_order_type,
             "sizing": sizing,
-            "stop": stop_info}
+            "stop": stop_info,
+            "stop_protection": protection}
 
 
 def _map_regime_for_pyramiding(market_regime: Optional[str]) -> Optional[str]:

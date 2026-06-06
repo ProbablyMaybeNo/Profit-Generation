@@ -660,3 +660,90 @@ def owned_symbols_for(conn, strategy_id: str) -> List[str]:
         if sym and owns_symbol(conn, strategy_id, sym):
             out.append(sym)
     return out
+
+
+# ---------------------------------------------------------------------------
+# M7 — post-fill stop-protection verification
+# ---------------------------------------------------------------------------
+
+def open_stop_orders(client, symbol: str) -> List:
+    """Working SELL STOP orders for `symbol` (a verified protective stop on the
+    book). A protective stop is a SELL whose type is a stop variant; this is the
+    broker-truth equivalent of "the entry has a stop attached"."""
+    out = []
+    for o in _get_open_orders(client, symbol):
+        if _side_str(o) != "sell":
+            continue
+        if _status_str(o) and _status_str(o) not in WORKING_STATUSES:
+            continue
+        otype = str(_attr(o, "order_type") or _attr(o, "type") or "").lower()
+        if "stop" in otype:
+            out.append(o)
+    return out
+
+
+def has_protective_stop(client, symbol: str) -> Optional[bool]:
+    """True iff the broker shows a working SELL STOP for `symbol`.
+
+    Returns None ("unknown") when the client can't report open orders, so the
+    caller can fall back to the in-process stop_info rather than false-alarming.
+    """
+    getter = getattr(client, "get_orders", None)
+    if getter is None:
+        return None
+    try:
+        return len(open_stop_orders(client, symbol)) > 0
+    except Exception:
+        return None
+
+
+def verify_fill_protected(
+    client, *, symbol: str, stop_info: Optional[Dict],
+    stops_expected: bool, alert_fn=None,
+) -> Dict:
+    """M7 — after a buy fill, verify a valid protective stop exists.
+
+    A fill is PROTECTED when either:
+      (a) this run's `_maybe_attach_stop` reported status=='submitted' with an
+          order id, OR
+      (b) the broker shows a working SELL STOP for the symbol (verified
+          equivalent — e.g. a stop that was already resting / replaced).
+
+    When `stops_expected` is False (the strategy/config genuinely runs without
+    stops), this is a silent no-op — we never alert on an intentionally
+    unprotected fill. Otherwise an unprotected fill fires a loud ERROR log +
+    alert (`alert_fn`, default telegram).
+
+    Returns {protected: bool, source: str, alerted: bool}.
+    """
+    info = stop_info or {}
+    in_run_ok = (info.get("status") == "submitted"
+                 and bool(info.get("order_id")))
+    if in_run_ok:
+        return {"protected": True, "source": "in_run_stop", "alerted": False}
+    broker_ok = has_protective_stop(client, symbol)
+    if broker_ok:
+        return {"protected": True, "source": "broker_stop", "alerted": False}
+    if not stops_expected:
+        # Strategy/config runs without stops by design — not an alert.
+        return {"protected": False, "source": "stops_not_expected",
+                "alerted": False}
+    status = info.get("status")
+    msg = (f"🚨 UNPROTECTED FILL: {symbol} bought with NO protective stop "
+           f"(stop status={status!r}, broker_stop={broker_ok!r}). Naked long — "
+           f"a gap down has no floor. Investigate the stop-attach path.")
+    log(msg, "ERROR")
+    sender = alert_fn
+    if sender is None:
+        try:
+            from monitoring.telegram_alerter import send_message as sender
+        except Exception:
+            sender = None
+    alerted = False
+    if sender is not None:
+        try:
+            sender(msg)
+            alerted = True
+        except Exception as e:
+            log(f"verify_fill_protected: alert send failed: {e}", "WARNING")
+    return {"protected": False, "source": "unprotected", "alerted": alerted}

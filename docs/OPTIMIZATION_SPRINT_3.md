@@ -184,10 +184,24 @@ the assertion; a clean session is silent. Real EOD path.
     silent; a non-reporting stub broker raises no false alarm. Pre-M6 had no flat
     assertion (param/function didn't exist) → tests fail on old code.
 
-### [ ] M7 — post-fill stop-protection verification
+### [x] M7 — post-fill stop-protection verification
 After every buy fill, verify a valid protective stop is attached (or a verified
 equivalent open order); alert loudly if a fill is left unprotected. **Acceptance:** a
 fill without a stop raises the alert; a protected fill passes.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Wired into (real submit path):** `auto_trader._process_entry` now calls
+    `position_manager.verify_fill_protected` right after `_maybe_attach_stop`. A fill is
+    PROTECTED when this run's stop submitted (status=='submitted' + order_id) OR the
+    broker shows a working SELL STOP for the symbol (verified equivalent via
+    `has_protective_stop`/`open_stop_orders`). An unprotected fill (stop submit failed /
+    rejected) fires a loud ERROR log + telegram alert. When stops are globally disabled
+    (`stop_info is None`) verification is skipped — no false alarm. Result surfaces as
+    `stop_protection` in the BUY action.
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_stop_protection_m7.py`
+    drives REAL `_process_entry`. A failed stop submission (naked ENPH/AVGO long) raises
+    the alert; a clean stop submit passes silently; a resting broker stop counts as
+    protected; no-stops-config raises no false alarm. Pre-M7 had no `stop_protection`
+    key / verification → tests fail on old code.
 
 ### [ ] M8 — separate performance from cleanup
 Tag `reconciled_no_position` + `stale_intraday_flatten_missed` so they NEVER enter
