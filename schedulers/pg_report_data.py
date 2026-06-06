@@ -203,8 +203,14 @@ RECONCILE_REASONS = (
     "reconciled_no_position", "stale_intraday_flatten_missed",
     "broker_reconcile", "orphan_sweep", "reconcile_close",
 )
+# M8/M9: key "closed today" on exit_ts (the trade's actual close/session date),
+# NOT updated_at (the UTC wall-clock when the row was WRITTEN). A close written
+# after 00:00 UTC — i.e. any close after ~17:00 PT, which is every EOD reconcile —
+# has an updated_at that rolls to the NEXT calendar day, so an updated_at match
+# silently dropped today's fresh-vs-cleanup split to zero. COALESCE keeps a null
+# exit_ts falling back to updated_at.
 split = q("""SELECT exit_reason, COUNT(*) n FROM outcomes
-             WHERE substr(updated_at,1,10)=? AND status='closed'
+             WHERE substr(COALESCE(exit_ts, updated_at),1,10)=? AND status='closed'
              GROUP BY exit_reason""", (TODAY,))
 fresh_n = recon_n = 0
 recon_detail = []

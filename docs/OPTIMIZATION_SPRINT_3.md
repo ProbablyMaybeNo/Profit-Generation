@@ -203,11 +203,32 @@ fill without a stop raises the alert; a protected fill passes.
     protected; no-stops-config raises no false alarm. Pre-M7 had no `stop_protection`
     key / verification → tests fail on old code.
 
-### [ ] M8 — separate performance from cleanup
+### [x] M8 — separate performance from cleanup
 Tag `reconciled_no_position` + `stale_intraday_flatten_missed` so they NEVER enter
 fresh-trading expectancy/win-rate used by `strategy_health`, the eligibility gate, or the
 report. **Acceptance:** strategy stats computed over fresh closes only; report shows a
 fresh-vs-cleanup split.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Cleanup reason set:** `strategy_health.CLEANUP_EXIT_REASONS` =
+    {reconciled_no_position, stale_intraday_flatten_missed, broker_reconcile,
+    orphan_sweep, reconcile_close} + `_fresh_only_clause()` helper. NULL exit_reason
+    treated as fresh (legacy rows).
+  - **Wired into (real stats/gate paths):** excluded from `_closed_returns_for_strategy`,
+    `closed_returns_in_class`, `_live_outcomes_for_strategy` (auto-pause divergence
+    input) in `strategy_health.py`, and from the eligibility gate
+    `auto_trader._is_eligible`. The report's `[FRESH ACTIVITY vs RECONCILIATION]`
+    section in `schedulers/pg_report_data.py` shows the split.
+  - **Report split date-boundary fix (M8/M9):** the fresh-vs-cleanup split keyed on
+    `updated_at` (UTC wall-clock when the row was WRITTEN) — any close written after
+    00:00 UTC (every EOD reconcile, ~17:00 PT) rolled to the next calendar day and
+    silently dropped today's split to zero. Switched to
+    `substr(COALESCE(exit_ts, updated_at),1,10)` (the trade's session date).
+  - **Behavioral tests (fails-on-old / passes-on-new):**
+    `tests/test_perf_cleanup_split_m8.py` drives REAL `_is_eligible` +
+    `closed_returns_in_class` + `_live_outcomes_for_strategy`; proven RED on pre-M8
+    code (10 cleanup closes inflated n 2→12, leaked 0.0% returns). The pre-existing
+    `tests/test_pg_report_data_sprint2.py::test_report_renders_new_sections` (M8/M9
+    scope) is now GREEN.
 
 ### [ ] M9 — correct exposure/accounting in the report
 Fix `schedulers/pg_report_data.py` to compute exposure from long/short market value +

@@ -40,6 +40,28 @@ DEFAULT_DEGRADATION_RATIO = 0.5
 DEGRADATION_BASELINE_SHARPE = 0.05
 ALERT_META_KEY_PREFIX = "strategy_health.alerted:"
 
+# M8 (Sprint 3) — exit reasons that are CLEANUP / BOOKKEEPING, not fresh trading.
+# An outcome closed by a reconcile/orphan/stale sweep records whatever mark was
+# last available (often a 0% flat) and does NOT reflect the strategy's edge.
+# Counting these in expectancy/win-rate/Sharpe poisons every gate that decides
+# whether a strategy keeps trading. They are excluded from all health stats here
+# and from the eligibility gate; the report (pg_report_data) shows them as a
+# separate fresh-vs-cleanup split.
+CLEANUP_EXIT_REASONS = (
+    "reconciled_no_position", "stale_intraday_flatten_missed",
+    "broker_reconcile", "orphan_sweep", "reconcile_close",
+)
+
+
+def _fresh_only_clause(alias: str = "o") -> str:
+    """SQL AND-clause excluding cleanup/reconcile closes from a stats query.
+
+    Returns e.g. "AND (o.exit_reason IS NULL OR o.exit_reason NOT IN (...))".
+    A NULL exit_reason is treated as fresh (legacy rows that predate tagging)."""
+    placeholders = ", ".join(f"'{r}'" for r in CLEANUP_EXIT_REASONS)
+    return (f"AND ({alias}.exit_reason IS NULL "
+            f"OR {alias}.exit_reason NOT IN ({placeholders}))")
+
 # Auto-pause defaults (3.3.4). If the last N LIVE outcomes mean return is
 # below `live_pause_ratio * backtest_mean`, the strategy is auto-paused.
 # Pause persists until `pause_days` elapse or manual unpause.
@@ -62,6 +84,7 @@ def _closed_returns_for_strategy(conn, strategy_id: str) -> List[float]:
         "SELECT o.return_pct "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        f"   {_fresh_only_clause()} "
         "   AND s.bar_interval='1d' AND s.strategy_id=? "
         " ORDER BY o.exit_ts ASC, o.signal_id ASC",
         (strategy_id,),
@@ -97,6 +120,7 @@ def closed_returns_in_class(conn, strategy_id: str,
         "SELECT o.return_pct "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        f"   {_fresh_only_clause()} "
         f"   AND {clause} AND s.strategy_id=? "
         " ORDER BY o.exit_ts ASC, o.signal_id ASC",
         (strategy_id,),
@@ -369,6 +393,7 @@ def _live_outcomes_for_strategy(
         "  JOIN paper_trades pt ON pt.signal_id = o.signal_id "
         "                       AND pt.side = 'buy' "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        f"   {_fresh_only_clause()} "
         "   AND s.strategy_id = ? "
         " GROUP BY o.signal_id "
         " ORDER BY o.exit_ts DESC, o.signal_id DESC "

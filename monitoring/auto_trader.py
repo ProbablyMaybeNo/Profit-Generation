@@ -163,11 +163,18 @@ def _is_eligible(conn, strategy_id: str, settings: dict,
         interval_clause = "s.bar_interval='1d'"
     else:
         interval_clause = "s.bar_interval!='1d'"
+    # M8 (Sprint 3) — judge eligibility on FRESH trading closes only. An outcome
+    # closed by a reconcile/orphan/stale sweep is cleanup bookkeeping (often a 0%
+    # flat at the last mark), not the strategy's edge; counting it poisons the
+    # mean/sharpe gate that decides whether the strategy keeps trading.
+    from monitoring.strategy_health import CLEANUP_EXIT_REASONS as _CLEANUP
+    _cleanup_ph = ", ".join("?" for _ in _CLEANUP)
     rows = conn.execute(
         "SELECT o.return_pct FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
+        f"   AND (o.exit_reason IS NULL OR o.exit_reason NOT IN ({_cleanup_ph})) "
         f"   AND {interval_clause} AND s.strategy_id=?",
-        (strategy_id,),
+        (*_CLEANUP, strategy_id),
     ).fetchall()
     rets = [r["return_pct"] for r in rows]
     n = len(rets)
