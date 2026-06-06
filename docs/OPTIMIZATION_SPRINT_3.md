@@ -70,12 +70,28 @@ correctly; wired into the real order-submit path.
     but does NOT yet coordinate owners or make stop submission idempotent — that is
     the remaining `40310000` wash-trade source and is explicitly M2/M3 scope.
 
-### [ ] M2 — single symbol-owner authority
+### [x] M2 — single symbol-owner authority
 One active owner (or one parent risk bucket) per symbol. No strategy may submit an
 exit/stop/flatten for a symbol it does not solely own; shared symbols route through one
 coordinator. **Acceptance:** with IWM/KRE/NVDA owned by multiple strategies, exactly one
 valid exit/stop stack exists per live position; a second strategy's exit is rejected/
 coordinated, never duplicated. Real submit path.
+  - **Completed:** 2026-06-05 by milestone-builder. OPTION A (one owner per symbol).
+  - **Owner registry (persisted, stateless-safe):** ownership is DERIVED from the live
+    DB each pass — the owner is the strategy with the OLDEST still-open buy in
+    `paper_trades` (same working-status set `_open_buy_for_pair` uses). No new schema /
+    migration; reconstructs deterministically across the 15-min scheduled subprocess
+    runs because `paper_trades` already persists. Helpers in `position_manager.py`:
+    `open_buy_owners`, `symbol_owner`, `owns_symbol`, `entry_owner_conflict`.
+  - **Wired into (real submit paths):** entry — `auto_trader._process_entry`
+    (auto_trader.py:553) rejects a non-owner entry as `SKIP_SYMBOL_OWNED`; exit —
+    `auto_trader._process_exit` (auto_trader.py:1345) returns `SKIP_NOT_OWNER` for a
+    non-owner; stop — `auto_trader._maybe_attach_stop` (auto_trader.py:2673) suppresses
+    a non-owner's protective stop (`status=skip_not_owner`).
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_owner_authority_m2.py`
+    drives REAL `_process_entry` / `_process_exit`. Proven RED on pre-M2 code: a second
+    strategy's KRE entry submitted a BUY; a non-owner's IWM exit fired a SELL. New code
+    rejects both; exactly one valid exit fires for the owner.
 
 ### [ ] M3 — idempotent stop / flatten / sell
 Before ANY sell/stop/flatten: query existing open orders for the symbol, compute

@@ -541,6 +541,24 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         )
         return {"action": "SKIP_DUPLICATE", "strategy_id": sid, "symbol": sym,
                 "signal_id": sig["id"]}
+    # M2 (Sprint 3) — single symbol-owner authority (OPTION A: one owner per
+    # symbol). If a DIFFERENT strategy already owns this symbol (holds the
+    # oldest open buy), reject this entry. Alpaca has ONE broker position per
+    # symbol; letting a second strategy in is what created the shared-symbol
+    # stacked-exit / wash-trade / oversell-into-short failures. The owner keeps
+    # the position; this strategy waits until the symbol is flat. A same-symbol
+    # entry by the OWNER never reaches here (process_signals routes it to the
+    # pyramid add-on branch first), so this only ever blocks a non-owner.
+    from monitoring import position_manager as pm_mod
+    owner_conflict = pm_mod.entry_owner_conflict(conn, sid, sym)
+    if owner_conflict is not None:
+        _record_skip(
+            conn, sig=sig, gate="symbol_owned_by_other",
+            reason_detail=f"{sym} already owned by {owner_conflict}",
+            source=_src,
+        )
+        return {"action": "SKIP_SYMBOL_OWNED", "strategy_id": sid, "symbol": sym,
+                "signal_id": sig["id"], "owner": owner_conflict}
     # 7.5.4 — Intraday confirmation overlay (shadow mode). Record what
     # a 1m-close-above-trigger gate would have decided for this entry.
     # Recorded BEFORE sizing/qty checks so even SKIP_PRICE entries still
@@ -1313,6 +1331,21 @@ def _process_exit(
         # with 187,814 pure-noise rows. Skip the control flow (decision
         # unchanged) WITHOUT writing the DB row.
         return {"action": "SKIP_NO_POSITION", "strategy_id": sid, "symbol": sym}
+
+    # M2 (Sprint 3) — owner authority on the exit side. Only the single owner of
+    # a symbol (the first/priority holder) may submit an exit/stop/flatten for
+    # it. A non-owner that holds a legacy shared position (multiple strategies on
+    # one symbol pre-M2) must NOT fire its own SELL against the ONE shared broker
+    # position — that is the duplicate-exit / wash-trade source. Its exit is
+    # suppressed; the owner's exit flattens the shared position. A forced exit
+    # (trailing/time-stop override) is still gated: a non-owner can't force a
+    # sell it doesn't control. New positions are single-owner by construction
+    # (M2 entry gate), so this only ever fires on legacy shared symbols.
+    from monitoring import position_manager as pm_owner
+    if not pm_owner.owns_symbol(conn, sid, sym):
+        owner = pm_owner.symbol_owner(conn, sym)
+        return {"action": "SKIP_NOT_OWNER", "strategy_id": sid, "symbol": sym,
+                "signal_id": sig["id"], "owner": owner}
 
     # M5 (Sprint 2): an exit is already accepted/working for this pair (a
     # resting stop or an in-flight market sell). Suppress this redundant exit
@@ -2625,6 +2658,22 @@ def _maybe_attach_stop(
             avail = pm_mod.available_to_sell(client, sig["symbol"])
             if avail is not None and avail >= 1:
                 qty = pm_mod.cap_sell_qty(qty, avail)
+        except Exception:
+            pass
+    # M2 (Sprint 3) — owner authority on the stop side. A long-side protective
+    # stop is a SELL against the ONE shared broker position; only the symbol's
+    # owner may arm it. A non-owner arming a stop is what stacked competing
+    # SELL-STOPs on a shared symbol (40310000 wash rejects, held_for_orders
+    # blocking the real flatten). The entry path arms its stop right after the
+    # owner's own buy, so this never blocks a legitimate first stop; it only
+    # suppresses a non-owner's stop on a legacy shared symbol.
+    if side != "short":
+        try:
+            from monitoring import position_manager as pm_owner
+            if not pm_owner.owns_symbol(conn, sig["strategy_id"], sig["symbol"]):
+                info["status"] = "skip_not_owner"
+                info["owner"] = pm_owner.symbol_owner(conn, sig["symbol"])
+                return info
         except Exception:
             pass
     try:

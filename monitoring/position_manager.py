@@ -42,6 +42,12 @@ from typing import Dict, List, Optional
 
 from config.utils import log
 
+# Order/position rows whose presence means a strategy is still holding (or
+# in-flight on) a long for a symbol. Mirrors _open_buy_for_pair's working set
+# in auto_trader so ownership derivation agrees with the live position view.
+_OPEN_BUY_STATUSES = ("filled", "partially_filled", "accepted", "new")
+_CLOSED_SELL_EXCLUDED = ("canceled", "rejected")
+
 # ---------------------------------------------------------------------------
 # In-run sell-reservation ledger (Sprint 3 / M1)
 # ---------------------------------------------------------------------------
@@ -468,3 +474,97 @@ def safe_submit_buy_to_cover(
     order = submit_fn(client, symbol=symbol, qty=cover_qty, side="buy")
     return {"action": "COVERED", "symbol": symbol, "qty": cover_qty,
             "position_qty": pos["qty"], "order": order}
+
+
+# ---------------------------------------------------------------------------
+# M2 — single symbol-owner authority (OPTION A: one owner per symbol)
+# ---------------------------------------------------------------------------
+# Alpaca sees ONE broker position per symbol; before M2, any number of
+# strategies could each open a long on the same symbol and then each fire its
+# own exit/stop/flatten against that ONE shared position -> stacked SELLs,
+# 40310000 wash rejects, overselling past flat into a short, and correlated
+# dogpiling.
+#
+# OPTION A removes the conflict by construction: the FIRST strategy to hold a
+# symbol OWNS it. While that symbol is held, any OTHER strategy's ENTRY on it is
+# REJECTED (recorded as a skip). One broker position -> one owner -> one
+# exit/stop/flatten stack. No two strategies ever touch the same symbol, so the
+# shared-symbol exit/stop conflict cannot arise.
+#
+# PERSISTENCE: ownership is DERIVED from the live DB, not held in process memory
+# (the live system is stateless 15-min scheduled subprocess runs — in-process
+# memory dies each run). The owner of a symbol is the strategy with the OLDEST
+# still-open buy in `paper_trades` (same working-status set auto_trader's
+# `_open_buy_for_pair` uses to decide a position is live). Because `paper_trades`
+# already persists across runs, ownership reconstructs deterministically every
+# pass with NO new schema and NO migration. A symbol with no open buy is
+# unowned (free to claim).
+
+
+def _has_later_sell(conn, strategy_id: str, symbol: str, after_submitted_at: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM paper_trades WHERE strategy_id=? AND symbol=? "
+        "  AND side='sell' AND submitted_at > ? "
+        "  AND status NOT IN ('canceled', 'rejected') LIMIT 1",
+        (strategy_id, symbol, after_submitted_at),
+    ).fetchone()
+    return row is not None
+
+
+def open_buy_owners(conn, symbol: str) -> List[str]:
+    """Strategy ids that currently hold an UN-closed long for `symbol`.
+
+    A strategy holds the symbol when it has a buy in a working status with no
+    later non-cancelled sell. Ordered oldest-first by the open buy's
+    submitted_at, so the head of the list is the priority/first owner. Normally
+    length 0 (flat) or 1 (owned). Length >1 only on legacy rows pre-dating M2
+    (multiple strategies already sharing a symbol) — the owner authority then
+    deterministically picks the head and treats the rest as non-owners.
+    """
+    placeholders = ",".join("?" for _ in _OPEN_BUY_STATUSES)
+    rows = conn.execute(
+        f"SELECT strategy_id, MIN(submitted_at) AS first_open "
+        f"FROM paper_trades WHERE symbol=? AND side='buy' "
+        f"  AND status IN ({placeholders}) "
+        f"GROUP BY strategy_id ORDER BY first_open ASC",
+        (symbol, *_OPEN_BUY_STATUSES),
+    ).fetchall()
+    owners: List[str] = []
+    for r in rows:
+        sid = r["strategy_id"]
+        if not sid:
+            continue
+        if _has_later_sell(conn, sid, symbol, r["first_open"]):
+            continue
+        owners.append(sid)
+    return owners
+
+
+def symbol_owner(conn, symbol: str) -> Optional[str]:
+    """The single strategy that owns `symbol` right now, or None if unowned.
+
+    The owner is the strategy holding the OLDEST open buy (first to claim).
+    """
+    owners = open_buy_owners(conn, symbol)
+    return owners[0] if owners else None
+
+
+def owns_symbol(conn, strategy_id: str, symbol: str) -> bool:
+    """True iff `strategy_id` is THE owner of `symbol` (the first/priority
+    holder). A non-owner that happens to hold a legacy shared position returns
+    False — it may not submit exits/stops/flattens for a symbol it doesn't own.
+    """
+    return symbol_owner(conn, symbol) == strategy_id
+
+
+def entry_owner_conflict(conn, strategy_id: str, symbol: str) -> Optional[str]:
+    """For an ENTRY: the id of the strategy that already owns `symbol`, when
+    that owner is someone OTHER than `strategy_id`. Returns None when the symbol
+    is unowned (free to claim) or already owned by `strategy_id` itself (a
+    pyramid add-on, handled upstream). The entry path rejects when this is
+    non-None — OPTION A: one owner per symbol.
+    """
+    owner = symbol_owner(conn, symbol)
+    if owner is None or owner == strategy_id:
+        return None
+    return owner
