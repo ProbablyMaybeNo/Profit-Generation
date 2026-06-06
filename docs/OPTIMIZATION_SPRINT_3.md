@@ -139,10 +139,26 @@ exits; a real holding emits its single exit. Real signal path.
     records exactly its single exit. Updated `test_trend_scanner`'s exit sanity test
     to seed the owned position M4 now requires.
 
-### [ ] M5 — paused-strategy position policy
+### [x] M5 — paused-strategy position policy
 Define + enforce: paused = no new entries AND no silent holding. On pause, flatten
 holdings via the owner authority (or set an explicit carried flag). **Acceptance:**
 pausing a strategy with holdings flattens them and stops new stop-arming. Real path.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Policy:** paused = no new entries (existing entry gate) AND no silent holding
+    (new). On each EOD pass, `_flatten_paused_holdings` flattens every paused
+    strategy's still-OWNED holdings via `position_manager.safe_submit_sell`
+    (reconcile + cap-to-available + run-ledger net — never oversells). Once flat the
+    symbol is unowned, so M2's owner gate also stops new stop-arming for it.
+  - **Wired into (real submit path):** `auto_trader.process_signals` runs the M5
+    pause-flatten pass BEFORE the signal loop (auto_trader.py, after `live_set`
+    resolution, EOD-only, non-dry-run), routing each flatten to the strategy's own
+    paper/live client via `_resolve_strategy_client`. New helper
+    `position_manager.owned_symbols_for`. Flatten actions surface in the run report.
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_paused_flatten_m5.py`
+    drives REAL `process_signals` (non-dry-run, injected client). Proven RED on pre-M5
+    code (paused strategy left silently holding — no SELL, still owner). New code
+    submits the flatten SELL (≤ held qty), releases ownership, and leaves live
+    strategies' holdings untouched.
 
 ### [ ] M6 — stale-flatten audit + end-of-session flat assertion
 Trace why intraday positions reach `stale_intraday_flatten_missed`; add an EOD assertion

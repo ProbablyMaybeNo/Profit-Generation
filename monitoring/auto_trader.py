@@ -1295,6 +1295,99 @@ def _open_outcome_for_pair(conn, strategy_id: str, symbol: str):
     ).fetchone()
 
 
+def _flatten_paused_holdings(
+    conn, client, *, dry_run: bool,
+    resolve_client=None,
+) -> List[dict]:
+    """M5 (Sprint 3) — enforce the paused-strategy position policy.
+
+    Pause must mean BOTH "no new entries" AND "no silent holding". The entry
+    gate already refuses entries; this closes the other half: for every PAUSED
+    strategy that still OWNS a holding, flatten it via the owner authority
+    (`safe_submit_sell` — reconciles resting orders, caps to broker-available,
+    nets the run ledger, never oversells past flat). Once flat, the symbol is no
+    longer owned, so M2's owner gate also stops any new stop-arming for it.
+
+    Runs once per pass BEFORE the signal loop so a paused strategy's stale carry
+    is cleared before anything else acts on it. Best-effort per holding — one
+    bad flatten never blocks the rest. Returns one record per holding acted on.
+
+    `resolve_client(strategy_id)` lets the live path route a flatten to the
+    same (paper/live) client the strategy trades on; defaults to `client`.
+    """
+    from monitoring import strategy_health as sh_mod
+    from monitoring import position_manager as pm_mod
+    out: List[dict] = []
+    if dry_run:
+        return out
+    resolve_client = resolve_client or (lambda _sid: client)
+    try:
+        paused = sh_mod.list_paused(conn)
+    except Exception as e:
+        log(f"_flatten_paused_holdings: list_paused failed: {e}", "WARNING")
+        return out
+    for p in paused:
+        sid = p.get("strategy_id")
+        if not sid:
+            continue
+        try:
+            symbols = pm_mod.owned_symbols_for(conn, sid)
+        except Exception as e:
+            log(f"_flatten_paused_holdings: owned_symbols_for({sid}) "
+                f"failed: {e}", "WARNING")
+            continue
+        for sym in symbols:
+            open_buy = _open_buy_for_pair(conn, sid, sym)
+            if open_buy is None:
+                continue
+            req_qty = int(open_buy["qty"] or 0)
+            if req_qty < 1:
+                continue
+            try:
+                strat_client = resolve_client(sid)
+            except Exception:
+                strat_client = client
+            try:
+                res = pm_mod.safe_submit_sell(
+                    strat_client, symbol=sym, requested_qty=req_qty,
+                    submit_fn=_submit_market_order,
+                )
+            except Exception as e:
+                log(f"_flatten_paused_holdings: flatten {sid}/{sym} "
+                    f"failed: {e}", "ERROR")
+                out.append({"action": "PAUSE_FLATTEN_ERROR",
+                            "strategy_id": sid, "symbol": sym,
+                            "error": str(e)[:200]})
+                continue
+            if res is None or res.get("action") != "SUBMITTED":
+                out.append({"action": "PAUSE_FLATTEN_SKIP",
+                            "strategy_id": sid, "symbol": sym,
+                            "requested_qty": req_qty,
+                            "available": (res or {}).get("available")})
+                continue
+            order = res["order"]
+            qty = res["qty"]
+            db.record_paper_trade(conn, {
+                "alpaca_order_id": str(getattr(order, "id", "")),
+                "strategy_id": sid, "symbol": sym, "side": "sell", "qty": qty,
+                "order_type": "market",
+                "submitted_at": str(getattr(order, "submitted_at", _utc_now())),
+                "status": str(getattr(order, "status", "submitted")),
+                "notes": f"M5 pause-flatten ({p.get('reason') or 'paused'})",
+            })
+            try:
+                from monitoring import trailing_stops as ts_mod
+                ts_mod.clear_stop(conn, strategy_id=sid, symbol=sym)
+            except Exception:
+                pass
+            log(f"M5 pause-flatten: SELL {qty} {sym} for paused {sid} "
+                f"({order.id})", "SUCCESS")
+            out.append({"action": "PAUSE_FLATTEN", "strategy_id": sid,
+                        "symbol": sym, "qty": qty,
+                        "order_id": str(order.id)})
+    return out
+
+
 def _process_exit(
     conn, client, settings: dict, sig, dry_run: bool,
     *, trailing_triggered: Optional[dict] = None,
@@ -2902,6 +2995,29 @@ def process_signals(
         live_client_factory = lambda: get_alpaca_client(live=True)
     live_cache: Dict[str, object] = {}
 
+    # M5 (Sprint 3) — paused-strategy position policy. Before evaluating any
+    # signals, flatten every PAUSED strategy's still-owned holdings via the owner
+    # authority. Pause = no new entries (entry gate) AND no silent holding (here).
+    # Routed through the same paper/live client the strategy trades on. Runs only
+    # on the EOD pass (bar_interval=='1d') so it executes once per day, not on
+    # every intraday sub-pass. Best-effort: never blocks the trading loop.
+    pause_flatten_actions: List[dict] = []
+    if not dry_run and bar_interval == "1d":
+        def _flatten_route(_sid):
+            try:
+                return _resolve_strategy_client(
+                    _sid, live_set=live_set, paper_client=client,
+                    live_client_factory=live_client_factory,
+                    live_cache=live_cache)
+            except ValueError:
+                return client
+        try:
+            pause_flatten_actions = _flatten_paused_holdings(
+                conn, client, dry_run=dry_run, resolve_client=_flatten_route)
+        except Exception as e:
+            log(f"process_signals: pause-flatten pass skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
+
     if bar_interval == "1d":
         sigs = conn.execute(
             "SELECT id, ts, bar_ts, bar_interval, strategy_id, symbol, signal_type, close "
@@ -3053,7 +3169,8 @@ def process_signals(
                   if _bp_base not in (None, "") else None)
     bp_committed_this_run = 0.0
 
-    actions: List[dict] = []
+    # Seed with M5 pause-flatten actions so they surface in the run report.
+    actions: List[dict] = list(pause_flatten_actions)
     cool_down_cache: Dict[str, Optional[dict]] = {}
     earnings_cache: Dict[str, Optional[dict]] = {}
     sentiment_cache: Dict[str, Optional[dict]] = {}

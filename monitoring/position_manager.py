@@ -636,3 +636,27 @@ def safe_submit_stop(
     return {"action": "SUBMITTED", "symbol": symbol, "qty": qty,
             "requested": int(_as_float(requested_qty, 0)),
             "available": avail, "cancelled": cancelled, "order": order}
+
+
+# ---------------------------------------------------------------------------
+# M5 — paused-strategy holdings: the symbols a strategy still owns
+# ---------------------------------------------------------------------------
+
+def owned_symbols_for(conn, strategy_id: str) -> List[str]:
+    """Symbols `strategy_id` is the live OWNER of (holds an un-closed long, and
+    is the first/priority holder). Used to flatten a paused strategy's holdings
+    so a pause means "no silent carry", not "stop entering but keep holding".
+    """
+    placeholders = ",".join("?" for _ in _OPEN_BUY_STATUSES)
+    rows = conn.execute(
+        f"SELECT DISTINCT symbol FROM paper_trades "
+        f"WHERE strategy_id=? AND side='buy' "
+        f"  AND status IN ({placeholders})",
+        (strategy_id, *_OPEN_BUY_STATUSES),
+    ).fetchall()
+    out: List[str] = []
+    for r in rows:
+        sym = r["symbol"]
+        if sym and owns_symbol(conn, strategy_id, sym):
+            out.append(sym)
+    return out
