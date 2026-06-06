@@ -103,6 +103,71 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# M6 (Sprint 3) — end-of-session flat assertion.
+# Root cause of `stale_intraday_flatten_missed`: F2 opens an intraday outcome at
+# entry and lets ONLY the EOD flatten close it; if that flatten is missed (crash,
+# restart, schedule gap) OR the broker rejected/partially-filled the closing SELL,
+# the position survives overnight and the outcome strands OPEN until a LATER
+# session's bounded sweep closes it with the stale tag. The sweep is a band-aid;
+# it never tells anyone the flatten silently failed THIS session. M6 adds the
+# missing assertion: right after the flatten pass, verify every intraday-owned
+# symbol is actually FLAT at the broker (the source of truth), and ALERT LOUDLY
+# when one isn't — turning a silent overnight carry into a same-session alarm.
+
+def assert_intraday_flat(
+    client, symbols, *, alert_fn=None, dry_run: bool = False,
+) -> dict:
+    """Assert every intraday symbol just processed is FLAT at the broker.
+
+    Reads the live broker position for each symbol (the source of truth, post
+    in-run reservations) and flags any that is still non-flat (qty != 0) — an
+    unflattened intraday carry. Fires `alert_fn(text)` once with the offenders
+    (default: telegram). A clean session is silent (no alert).
+
+    Returns {asserted, still_open: [{symbol, qty}], alerted: bool}. Skipped in
+    dry-run (nothing was actually flattened) and when the broker can't report
+    positions (no truth to assert against).
+    """
+    from monitoring import position_manager as pm_mod
+    result = {"asserted": 0, "still_open": [], "alerted": False}
+    if dry_run or not symbols:
+        return result
+    if not pm_mod.can_read_positions(client):
+        return result
+    still_open = []
+    for sym in sorted(set(symbols)):
+        result["asserted"] += 1
+        pos = pm_mod.broker_position(client, sym)
+        if pos is None:
+            continue  # genuinely flat
+        qty = pos.get("qty")
+        if qty is None:
+            continue  # broker returned junk → can't assert; don't false-alarm
+        if abs(float(qty)) >= 1e-9:
+            still_open.append({"symbol": sym, "qty": float(qty)})
+    result["still_open"] = still_open
+    if still_open:
+        detail = ", ".join(f"{o['symbol']}={o['qty']:g}" for o in still_open)
+        msg = (f"🚨 EOD intraday flat assertion FAILED: "
+               f"{len(still_open)} intraday position(s) NOT flat after close-out "
+               f"[{detail}]. Overnight gap risk + stale_intraday_flatten_missed "
+               f"will follow. Investigate the flatten path.")
+        log(msg, "ERROR")
+        sender = alert_fn
+        if sender is None:
+            try:
+                from monitoring.telegram_alerter import send_message as sender
+            except Exception:
+                sender = None
+        if sender is not None:
+            try:
+                sender(msg)
+                result["alerted"] = True
+            except Exception as e:
+                log(f"assert_intraday_flat: alert send failed: {e}", "WARNING")
+    return result
+
+
 def _open_outcome_for_signal(conn, signal_id) -> Optional[dict]:
     """The open outcome row for an entry signal_id, or None."""
     if signal_id is None:
@@ -279,6 +344,7 @@ def close_intraday_positions(
     submit_market_order_fn: Optional[Callable] = None,
     cancel_open_orders_fn: Optional[Callable] = None,
     settle_seconds: float = 2.0,
+    flat_assert_alert_fn: Optional[Callable] = None,
 ) -> dict:
     """Walk open intraday-strategy positions and submit closing sells.
 
@@ -454,8 +520,26 @@ def close_intraday_positions(
                 "outcome_closed": outcome_closed,
             })
 
+        # M6 (Sprint 3) — end-of-session flat assertion. After the flatten pass,
+        # verify every intraday symbol we just processed is actually FLAT at the
+        # broker; alert loudly on any silent overnight carry (the
+        # stale_intraday_flatten_missed precursor). Best-effort: a broker read
+        # hiccup must never abort the close-out result.
+        flat_assert = {"asserted": 0, "still_open": [], "alerted": False}
+        try:
+            if not dry_run:
+                flat_assert = assert_intraday_flat(
+                    client,
+                    [p["symbol"] for p in positions],
+                    alert_fn=flat_assert_alert_fn,
+                    dry_run=dry_run,
+                )
+        except Exception as e:
+            log(f"close_intraday_positions: flat assertion skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
         return {"status": "OK", "closed": closed, "skipped": skipped,
-                "dry_run": dry_run, "scanned": len(positions)}
+                "dry_run": dry_run, "scanned": len(positions),
+                "flat_assert": flat_assert}
     finally:
         if own_conn:
             conn.close()

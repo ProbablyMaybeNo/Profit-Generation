@@ -160,11 +160,29 @@ pausing a strategy with holdings flattens them and stops new stop-arming. Real p
     submits the flatten SELL (≤ held qty), releases ownership, and leaves live
     strategies' holdings untouched.
 
-### [ ] M6 — stale-flatten audit + end-of-session flat assertion
+### [x] M6 — stale-flatten audit + end-of-session flat assertion
 Trace why intraday positions reach `stale_intraday_flatten_missed`; add an EOD assertion
 that every intraday-owned position is flat or explicitly carried, failing/alerting
 loudly otherwise. **Acceptance:** an unflattened intraday position at session end trips
 the assertion; a clean session is silent. Real EOD path.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Audit (why positions reach the stale tag):** F2 opens an intraday outcome at
+    entry and lets ONLY the EOD flatten close it. If that flatten is MISSED (crash,
+    restart, schedule gap) OR the broker rejected/partial-filled the closing SELL, the
+    position survives overnight and the outcome strands OPEN until a LATER session's
+    bounded `sweep_stale_intraday_outcomes` closes it with
+    `stale_intraday_flatten_missed`. The sweep is a band-aid — it never flagged that
+    the flatten silently failed THIS session.
+  - **Wired into (real EOD path):** new `close_intraday_positions.assert_intraday_flat`
+    runs after the flatten loop inside `close_intraday_positions` (non-dry-run); it
+    reads the live BROKER position for every intraday symbol just processed and fires a
+    loud ERROR-log + telegram alert on any still-held (non-flat) symbol. Result surfaces
+    as `flat_assert` in the close-out return.
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_eod_flat_assert_m6.py`
+    drives REAL `close_intraday_positions`. An unflattened broker position (SELL didn't
+    actually flatten) trips the assertion and fires the alert; a clean session is
+    silent; a non-reporting stub broker raises no false alarm. Pre-M6 had no flat
+    assertion (param/function didn't exist) → tests fail on old code.
 
 ### [ ] M7 — post-fill stop-protection verification
 After every buy fill, verify a valid protective stop is attached (or a verified
