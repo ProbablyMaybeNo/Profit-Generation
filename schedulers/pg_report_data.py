@@ -60,15 +60,44 @@ p(f"=== PROFIT GENERATION SYSTEM DATA for {TODAY} (auto-extracted) ===")
 
 # Portfolio / equity
 p("\n[PORTFOLIO]")
-latest = q("SELECT recorded_at,portfolio_value,cash,buying_power FROM equity_snapshots ORDER BY recorded_at DESC LIMIT 1")
+# M9: read long/short market value so exposure is computed from real position
+# value, not the portfolio_value-cash proxy (which silently miscounts a short:
+# a short ADDS cash, so portfolio_value-cash understates true gross exposure and
+# can even read negative-deployed when net short). COALESCE keeps old snapshot
+# rows (pre-M9, NULL long/short MV) falling back to the legacy proxy.
+latest = q("SELECT recorded_at,portfolio_value,cash,buying_power,equity,"
+           "long_market_value,short_market_value "
+           "FROM equity_snapshots ORDER BY recorded_at DESC LIMIT 1")
 prior = q("SELECT recorded_at,portfolio_value FROM equity_snapshots WHERE substr(recorded_at,1,10) < ? ORDER BY recorded_at DESC LIMIT 1", (TODAY,))
 today_snaps = q("SELECT MIN(portfolio_value) lo, MAX(portfolio_value) hi, COUNT(*) n FROM equity_snapshots WHERE substr(recorded_at,1,10)=?", (TODAY,))
 if latest:
     r = latest[0]
+    keys = r.keys()
+    lmv = r["long_market_value"] if "long_market_value" in keys else None
+    smv = r["short_market_value"] if "short_market_value" in keys else None
+    eqv = (r["equity"] if "equity" in keys and r["equity"] is not None
+           else r["portfolio_value"])
     p(f"  latest snapshot: {r['recorded_at'][:19]} value=${r['portfolio_value']:.2f} cash=${(r['cash'] or 0):.2f} buying_power=${(r['buying_power'] or 0):.2f}")
-    if r["portfolio_value"]:
+    if lmv is not None or smv is not None:
+        # M9: true exposure from long/short market value + equity.
+        lmv_f = float(lmv or 0.0)
+        smv_f = float(smv or 0.0)
+        gross = lmv_f + abs(smv_f)
+        net = lmv_f + smv_f  # smv is negative for a real short
+        p(f"  long market value: ${lmv_f:.2f}; short market value: ${smv_f:.2f}")
+        if eqv:
+            p(f"  gross exposure: ${gross:.2f} ({100*gross/eqv:.1f}% of equity); "
+              f"net exposure: ${net:.2f} ({100*net/eqv:.1f}% of equity)")
+        # M9: loud alert — this is a LONG-ONLY system; a negative short market
+        # value means an unintended short slipped through (the oversell bug).
+        if smv_f < 0:
+            p("  *** ALERT: SHORT MARKET VALUE < 0 ON A LONG-ONLY SYSTEM "
+              f"(${smv_f:.2f}) — an unintended short is open. Investigate the "
+              "oversell/flatten path immediately. ***")
+    elif r["portfolio_value"]:
+        # Legacy fallback (pre-M9 snapshot with no long/short MV captured).
         deployed = (r["portfolio_value"] - (r["cash"] or 0))
-        p(f"  deployed: ${deployed:.2f} ({100*deployed/r['portfolio_value']:.1f}% of portfolio)")
+        p(f"  deployed: ${deployed:.2f} ({100*deployed/r['portfolio_value']:.1f}% of portfolio) [legacy proxy; long/short MV not captured]")
 if prior:
     p(f"  prior-day close: ${prior[0]['portfolio_value']:.2f} ({prior[0]['recorded_at'][:19]})")
     if latest and latest[0]["portfolio_value"]:

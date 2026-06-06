@@ -104,6 +104,9 @@ def get_account_summary() -> dict:
     """
     client = get_alpaca_client()
     acct = client.get_account()
+    def _opt_float(name):
+        v = getattr(acct, name, None)
+        return float(v) if v is not None else None
     return {
         "portfolio_value": float(acct.portfolio_value),
         "cash": float(acct.cash),
@@ -111,6 +114,10 @@ def get_account_summary() -> dict:
         "equity": float(acct.equity),
         "last_equity": float(getattr(acct, "last_equity", acct.equity)),
         "daytrade_count": int(acct.daytrade_count),
+        # M9 (Sprint 3) — broker long/short market value for true exposure +
+        # the long-only net-short alert.
+        "long_market_value": _opt_float("long_market_value"),
+        "short_market_value": _opt_float("short_market_value"),
     }
 
 

@@ -222,12 +222,14 @@ _DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS equity_snapshots (
-        recorded_at      TEXT NOT NULL,
-        portfolio_value  REAL NOT NULL,
-        cash             REAL,
-        equity           REAL,
-        buying_power     REAL,
-        source           TEXT,
+        recorded_at         TEXT NOT NULL,
+        portfolio_value     REAL NOT NULL,
+        cash                REAL,
+        equity              REAL,
+        buying_power        REAL,
+        long_market_value   REAL,
+        short_market_value  REAL,
+        source              TEXT,
         PRIMARY KEY(recorded_at)
     )
     """,
@@ -458,6 +460,18 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     # (atr_initial, fixed_percent, or NULL when no stop was attached).
     if "entry_stops" not in cols:
         conn.execute("ALTER TABLE paper_trades ADD COLUMN entry_stops TEXT")
+    # M9 (Sprint 3) — capture broker long/short market value so the report can
+    # compute true exposure (long_mv + short_mv) instead of portfolio_value-cash,
+    # and alert on any short_market_value < 0 for this long-only system.
+    eq_cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info(equity_snapshots)"
+    ).fetchall()}
+    if "long_market_value" not in eq_cols:
+        conn.execute(
+            "ALTER TABLE equity_snapshots ADD COLUMN long_market_value REAL")
+    if "short_market_value" not in eq_cols:
+        conn.execute(
+            "ALTER TABLE equity_snapshots ADD COLUMN short_market_value REAL")
 
 
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -1107,23 +1121,37 @@ def record_equity_snapshot(
     cash: Optional[float] = None,
     equity: Optional[float] = None,
     buying_power: Optional[float] = None,
+    long_market_value: Optional[float] = None,
+    short_market_value: Optional[float] = None,
     source: str = "auto_trader",
     recorded_at: Optional[str] = None,
 ) -> None:
-    """Append (or replace by timestamp) one equity snapshot row."""
+    """Append (or replace by timestamp) one equity snapshot row.
+
+    M9: long_market_value / short_market_value come from the broker account so
+    the report computes true exposure and can alert on a net short (short_mv<0).
+    """
     ts = recorded_at or _utc_now_iso()
     with conn:
         conn.execute(
             "INSERT INTO equity_snapshots(recorded_at, portfolio_value, cash, "
-            "  equity, buying_power, source) VALUES(?, ?, ?, ?, ?, ?) "
+            "  equity, buying_power, long_market_value, short_market_value, "
+            "  source) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(recorded_at) DO UPDATE SET "
             "  portfolio_value=excluded.portfolio_value, "
             "  cash=excluded.cash, equity=excluded.equity, "
-            "  buying_power=excluded.buying_power, source=excluded.source",
+            "  buying_power=excluded.buying_power, "
+            "  long_market_value=excluded.long_market_value, "
+            "  short_market_value=excluded.short_market_value, "
+            "  source=excluded.source",
             (ts, float(portfolio_value),
              cash if cash is None else float(cash),
              equity if equity is None else float(equity),
              buying_power if buying_power is None else float(buying_power),
+             long_market_value if long_market_value is None
+                 else float(long_market_value),
+             short_market_value if short_market_value is None
+                 else float(short_market_value),
              source),
         )
 

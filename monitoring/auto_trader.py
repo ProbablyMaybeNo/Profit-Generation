@@ -3108,6 +3108,10 @@ def process_signals(
                 equity=account_summary.get("equity") if account_summary else None,
                 buying_power=(account_summary.get("buying_power")
                               if account_summary else None),
+                long_market_value=(account_summary.get("long_market_value")
+                                   if account_summary else None),
+                short_market_value=(account_summary.get("short_market_value")
+                                    if account_summary else None),
                 source="auto_trader",
             )
         except Exception as e:

@@ -230,12 +230,32 @@ fresh-vs-cleanup split.
     `tests/test_pg_report_data_sprint2.py::test_report_renders_new_sections` (M8/M9
     scope) is now GREEN.
 
-### [ ] M9 — correct exposure/accounting in the report
+### [x] M9 — correct exposure/accounting in the report
 Fix `schedulers/pg_report_data.py` to compute exposure from long/short market value +
 equity (not `portfolio_value − cash`), and alert loudly on any `short_market_value < 0`
 for this long-only system. Re-install note for the `~/.hermes/scripts/` copy
 (`tr -d '\r'`) — do not touch the WSL copy. **Acceptance:** correct long/short exposure
 reported; net-short alert fires; runs against the live DB.
+  - **Completed:** 2026-06-05 by milestone-builder.
+  - **Schema (additive, low-risk):** added nullable `long_market_value` /
+    `short_market_value` columns to `equity_snapshots` (DDL + idempotent
+    `_ensure_columns` ALTER; old rows stay NULL). `db.record_equity_snapshot` +
+    `config.utils.get_account_summary` now capture them from the Alpaca account;
+    `auto_trader.process_signals` passes them into the snapshot.
+  - **Report (real path):** `[PORTFOLIO]` now reports long MV, short MV, and gross/net
+    exposure as a % of equity, and fires `*** ALERT: SHORT MARKET VALUE < 0 ON A
+    LONG-ONLY SYSTEM ***` on any negative short MV (the oversell-into-short signature).
+    Pre-M9 snapshots (NULL MV) fall back to the legacy `portfolio_value−cash` proxy
+    (labelled), so the report never crashes on old data.
+  - **Behavioral test (fails-on-old / passes-on-new):** `tests/test_report_exposure_m9.py`
+    drives REAL `pg_report_data.py` + the recorder. A negative short MV trips the loud
+    alert; a clean long-only book reports gross exposure and is silent; the recorder
+    persists long/short MV; a legacy row uses the proxy. Pre-M9 lacked the capability
+    (recorder rejected the kwargs, report had no exposure/alert) → tests fail on old.
+  - **RE-INSTALL NOTE (manual, not done here):** `schedulers/pg_report_data.py` changed.
+    The Hermes cron runs the `~/.hermes/scripts/` copy. Refresh it with a CRLF strip:
+    `tr -d '\r' < schedulers/pg_report_data.py > ~/.hermes/scripts/pg_report_data.py`.
+    Do NOT touch the WSL copy.
 
 ---
 
