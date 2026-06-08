@@ -261,9 +261,45 @@ reported; net-short alert fires; runs against the live DB.
 
 ## PHASE 2 — risk hardening + disciplined reintroduction (after Phase 1 is prod-verified)
 
-### [ ] M10 — trend loser cap (applies to the live Donchian book now)
+### [x] M10 — trend loser cap (applies to the live Donchian book now)
 Per-position max-loss / tighter stop so single-name blowups are capped (ENPH −16%,
 AVGO −16% this week). Keep Donchian active; cap the tail only.
+  - **Completed:** 2026-06-08 by milestone-builder.
+  - **What:** a HARD per-position max-loss floor for the trend book. The ATR
+    trailing stop only ratchets DOWN from the running high, so a name that
+    gaps/bleeds straight off entry never engages it and bled past any sane
+    single-name loss. M10 force-closes an open trend position once its latest
+    close is at/below `entry_price × (1 − max_loss_pct/100)`. Strategies stay
+    active — only the tail is capped.
+  - **Default / config:** `-8%` (conservative: tighter than the worst observed
+    −16% blowups, looser than the ~7.5% a 2.5×ATR trail implies on a 3%-ATR
+    name). Configured per-strategy in `strategies/trend/__init__.py`
+    `TREND_DECLARATIONS` (`max_loss_cap: {max_loss_pct: 8.0}` on
+    `trend-donchian-breakout-20` and `trend-ma-cross-20-50`) and globally in
+    `config/settings.json` `max_loss_cap.max_loss_pct`. Resolution mirrors
+    `time_stop`/`trailing_stop`: per-strategy wins, then the global block. Set
+    `max_loss_pct` to 0/null at either level to DISABLE.
+  - **Reuse, no parallel system:** `_check_max_loss_caps_for_open_positions`
+    synthesizes a `long_exit` and routes it through the existing `_process_exit`
+    with `exit_reason_override='max_loss_cap'` — same broker sell
+    (`position_manager.safe_submit_sell`), trailing-stop clear, MFE/MAE, and
+    outcome close as the trailing/time-stop overlays. No new risk subsystem;
+    no `risk.*` limit / paper gate / kill switch touched (this only ADDS a
+    tighter exit).
+  - **Live wiring:** `auto_trader.process_signals` calls it AFTER the trailing
+    and time-stop passes (so either of those wins when it trips first), with
+    `tracked_strategies=regime_tracked` (= `monitoring.config.TRACKED_STRATEGIES`,
+    which splats in `TREND_DECLARATIONS`). `merge_config` now also surfaces the
+    global `max_loss_cap` block to the live settings dict.
+  - **Behavioral test (fails-on-old / passes-on-new):**
+    `tests/test_auto_trader_max_loss_cap_m10.py` drives the REAL
+    `_check_max_loss_caps_for_open_positions`. A trend position down −12% from
+    entry is force-closed (a SELL is recorded AND the outcome closes with
+    `exit_reason='max_loss_cap'`); a −3% small-loser and a +15% winner are left
+    OPEN/untouched; an undeclared strategy is capped only via the global block;
+    `max_loss_pct=0` disables. Pre-M10 the function and the per-strategy config
+    didn't exist → all 7 fail on old (verified by git-stash). Full non-live
+    suite: 2481 passed.
 
 ### [ ] M11 — intraday time-stop / max-loss overlay (for when intraday returns)
 Hard per-intraday-position max-loss + max-hold-time; force-close on breach.

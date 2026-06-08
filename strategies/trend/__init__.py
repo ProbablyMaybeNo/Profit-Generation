@@ -44,6 +44,14 @@ TREND_DECLARATIONS = [
         # outcome can't sit open indefinitely. The ATR trailing stop still
         # wins whenever it trips first (checked before the time-stop pass).
         "time_stop": {"max_days_held": 90},
+        # M10 (Sprint 3): trend loser cap. A HARD per-position max-loss floor.
+        # The 2.5x ATR trailing stop only ratchets DOWN from the running high,
+        # so a name that gaps/bleeds straight off entry never engages it and
+        # bled past any sane single-name loss (ENPH -16%, AVGO -16% the week of
+        # 2026-06-03). At -8% loss from entry the position is force-closed
+        # (exit_reason='max_loss_cap'); the trailing/time stops still win when
+        # they trip first. Set max_loss_pct=0 to disable.
+        "max_loss_cap": {"max_loss_pct": 8.0},
         # 6.4.2 — observe-only SAR overlay for 30-day A/B. Records a
         # parallel paper_trades_sar_overlay row whenever SAR would have
         # fired; live exit decision is unchanged.
@@ -61,6 +69,8 @@ TREND_DECLARATIONS = [
         "active_on": ["SPY", "QQQ", "IWM"],
         "trailing_stop": {"method": "atr_trail", "multiplier": 2.5, "atr_period": 14},
         "time_stop": {"max_days_held": 90},
+        # M10 (Sprint 3): trend loser cap (active for when ma-cross is unpaused).
+        "max_loss_cap": {"max_loss_pct": 8.0},
         "sar_overlay": "shadow",
         "intraday_confirm": "shadow",
     },

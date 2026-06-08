@@ -23,6 +23,13 @@
     "min_outcomes": 30,
     "min_mean_ret_pct": 0.0,
     "min_sharpe_ish": 0.1,
+    "realized_stats_gate": {
+      "enabled": true,
+      "recent_n": 10,
+      "min_sample": 3,
+      "min_win_rate": 0.4,
+      "min_avg_return_pct": 0.0
+    },
     "max_position_usd": 10000,
     "sizing_method": "kelly_quarter",
     "max_new_entries_per_day": 25,
@@ -46,7 +53,7 @@
     "grace_period_size_multiplier": 0.5,
     "trend_scanner_enabled": true,
     "_notes_stops": "6.1.1/6.1.2 — Initial-stop policy lives under top-level `stops` (see below), not here. Legacy `stop_loss_atr_multiple` is still honored when set for backward-compat with Phase 4.6 trend strategies.",
-    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Strategies with `grace_period: true` in their TRACKED_STRATEGIES declaration bypass the min_outcomes gate while they accumulate data, and their max_position_usd is reduced by grace_period_size_multiplier (default 0.25 → quarter size). Once n >= min_outcomes the strategy graduates and normal thresholds apply. Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable. Negative-sentiment veto: when veto_negative_sentiment=true, skip entries on symbols with >= negative_sentiment_threshold negative-sentiment news items in the last negative_sentiment_window_hours hours (requires news.sentiment populated by news_fetcher). Live-strategies routing: each strategy_id listed in live_strategies submits to a separate `alpaca_live` credentials section (paper=false). Empty list (default) keeps every strategy on paper. Adding a strategy here requires an alpaca_live section in credentials.json — without it, those signals SKIP_LIVE_CREDS_MISSING and never submit. Intraday master switch (5.2.3): intraday_enabled=false → auto_trader_intraday.process_intraday short-circuits with DISABLED_INTRADAY; intraday_fires still records signals (observe-only). intraday_enabled=true → intraday signals at each interval in intraday_intervals (default ['15m']) are processed through the same eligibility/sizing/regime pipeline as EOD signals."
+    "_notes": "enabled=false → process_signals is never called. enabled=true + dry_run=true → logs would-be orders without submitting. enabled=true + dry_run=false → REAL Alpaca paper orders. Eligibility = realized_stats_gate (when enabled and enough recent fresh closes, block if recent win-rate or avg return is below thresholds) AND (closed_outcomes >= min_outcomes) AND (mean_ret_pct >= min_mean_ret_pct) AND (sharpe_ish >= min_sharpe_ish). Strategies with `grace_period: true` in their TRACKED_STRATEGIES declaration bypass the min_outcomes gate while they accumulate data, and their max_position_usd is reduced by grace_period_size_multiplier (default 0.25 → quarter size). Once n >= min_outcomes the strategy graduates and normal thresholds apply. Cool-down: when a strategy's last cool_down_losers closed outcomes were ALL losers, pause new entries for cool_down_days trading days. Set cool_down_losers=0 to disable. Earnings veto: skip entries on a symbol within earnings_veto_days trading days of its next earnings event (populated by monitoring.earnings_calendar). Set to 0 to disable. Negative-sentiment veto: when veto_negative_sentiment=true, skip entries on symbols with >= negative_sentiment_threshold negative-sentiment news items in the last negative_sentiment_window_hours hours (requires news.sentiment populated by news_fetcher). Live-strategies routing: each strategy_id listed in live_strategies submits to a separate `alpaca_live` credentials section (paper=false). Empty list (default) keeps every strategy on paper. Adding a strategy here requires an alpaca_live section in credentials.json — without it, those signals SKIP_LIVE_CREDS_MISSING and never submit. Intraday master switch (5.2.3): intraday_enabled=false → auto_trader_intraday.process_intraday short-circuits with DISABLED_INTRADAY; intraday_fires still records signals (observe-only). intraday_enabled=true → intraday signals at each interval in intraday_intervals (default ['15m']) are processed through the same eligibility/sizing/regime pipeline as EOD signals."
   },
   "stops": {
     "atr_period": 14,
@@ -90,6 +97,10 @@
   "intraday": {
     "min_position_usd": 800,
     "_notes": "Sprint-1 M4 — intraday position floor. After the intraday size multiplier (0.5) shrinks the notional, it is floored to this value so an intraday entry can afford >=1 share of liquid names (SPY ~$590-760, QQQ ~$500, NVDA ~$140). Applies to intraday entries only (bar_interval != '1d'); EOD sizing is untouched. Stays well within risk.max_position_usd ($10k) and, at risk.max_open_positions (12), caps intraday exposure far below the idle cash buffer. Set to 0 to disable the intraday-specific floor."
+  },
+  "max_loss_cap": {
+    "max_loss_pct": 8.0,
+    "_notes": "Sprint-3 M10 — trend loser cap. A HARD per-position max-loss floor for the trend book (trend-donchian-breakout-20, trend-ma-cross-20-50). When an open position's unrealised loss from ENTRY reaches max_loss_pct (default 8.0 = -8%), it is force-closed (broker sell + outcome close with exit_reason='max_loss_cap') even though the ATR trailing stop hasn't tripped — the trailing stop only ratchets DOWN from the high, so a position that gaps/bleeds straight off entry (ENPH -16%, AVGO -16% the week of 2026-06-03) never engages it and bled past any sane single-name loss. This cap bounds the tail WITHOUT touching the strategy's entry/exit logic or weakening any risk.* limit, the paper gate, or the kill switch — it only ADDS a tighter exit. Resolution mirrors time_stop/trailing_stop: a per-strategy `max_loss_cap` declaration in TREND_DECLARATIONS wins, then this global block. Runs AFTER the trailing + time-stop passes, so either of those wins when it trips first. Set max_loss_pct to 0/null (here or per-strategy) to disable. Default chosen conservatively at -8% (tighter than the worst observed -16% blowups, looser than the ~7.5% a 2.5xATR trail implies on a 3%-ATR name, so it only catches genuine tail bleed)."
   },
   "notes": "These are non-secret settings. Edit freely."
 }

@@ -43,6 +43,13 @@ DEFAULT_SETTINGS = {
     "min_outcomes": 30,
     "min_mean_ret_pct": 0.0,
     "min_sharpe_ish": 0.10,
+    "realized_stats_gate": {
+        "enabled": True,
+        "recent_n": 10,
+        "min_sample": 3,
+        "min_win_rate": 0.40,
+        "min_avg_return_pct": 0.0,
+    },
     "max_position_usd": 1000,
     "skip_intraday_signals": True,
     "entry_time_offset_min": 0,
@@ -130,7 +137,8 @@ def merge_config(raw: dict) -> dict:
     s = raw.get("auto_trade", {})
     out = dict(DEFAULT_SETTINGS)
     out.update({k: v for k, v in s.items() if not k.startswith("_")})
-    for block in ("stops", "kelly", "trailing_stop", "risk", "intraday"):
+    for block in ("stops", "kelly", "trailing_stop", "risk", "intraday",
+                  "max_loss_cap"):
         if block in raw and block not in out:
             out[block] = raw[block]
     return out
@@ -173,13 +181,19 @@ def _is_eligible(conn, strategy_id: str, settings: dict,
         "SELECT o.return_pct FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         " WHERE o.status='closed' AND o.return_pct IS NOT NULL "
         f"   AND (o.exit_reason IS NULL OR o.exit_reason NOT IN ({_cleanup_ph})) "
-        f"   AND {interval_clause} AND s.strategy_id=?",
+        f"   AND {interval_clause} AND s.strategy_id=? "
+        " ORDER BY o.exit_ts ASC, o.signal_id ASC",
         (*_CLEANUP, strategy_id),
     ).fetchall()
     rets = [r["return_pct"] for r in rows]
     n = len(rets)
     min_n = settings.get("min_outcomes", 30)
-    stats = {"n": n, "mean": 0.0, "sharpe": 0.0, "in_grace": False}
+    realized_cfg = settings.get("realized_stats_gate") or {}
+    realized_stats = {"enabled": bool(realized_cfg.get("enabled", False)),
+                      "blocked": False, "n": 0, "win_rate": 0.0,
+                      "avg_return_pct": 0.0, "reason": ""}
+    stats = {"n": n, "mean": 0.0, "sharpe": 0.0, "in_grace": False,
+             "realized_gate": realized_stats}
     if n == 0:
         if grace_period:
             stats["in_grace"] = True
@@ -190,6 +204,43 @@ def _is_eligible(conn, strategy_id: str, settings: dict,
     sharpe = (mean / sd) if sd > 0 else 0.0
     stats["mean"] = round(mean, 4)
     stats["sharpe"] = round(sharpe, 4)
+
+    if realized_stats["enabled"]:
+        recent_n = max(1, int(realized_cfg.get("recent_n", 10) or 10))
+        min_sample = max(1, int(realized_cfg.get("min_sample", 3) or 3))
+        min_win_rate = float(realized_cfg.get("min_win_rate", 0.40))
+        min_avg = float(realized_cfg.get("min_avg_return_pct", 0.0))
+        recent = rets[-recent_n:]
+        rn = len(recent)
+        ravg = (sum(recent) / rn) if rn else 0.0
+        win_rate = (sum(1 for r in recent if r > 0) / rn) if rn else 0.0
+        realized_stats.update({
+            "n": rn,
+            "recent_n": recent_n,
+            "min_sample": min_sample,
+            "win_rate": win_rate,
+            "avg_return_pct": ravg,
+            "min_win_rate": min_win_rate,
+            "min_avg_return_pct": min_avg,
+        })
+        if rn < min_sample:
+            realized_stats["reason"] = (
+                f"n={rn} < {min_sample} realized-stats min-sample"
+            )
+        elif win_rate < min_win_rate or ravg < min_avg:
+            realized_stats["blocked"] = True
+            realized_stats["reason"] = (
+                f"recent realized stats failed: win_rate={win_rate:.2%} "
+                f"(min {min_win_rate:.2%}), avg={ravg:+.4f}% "
+                f"(min {min_avg:+.4f}%)"
+            )
+            return False, stats
+        else:
+            realized_stats["reason"] = (
+                f"recent realized stats passed: win_rate={win_rate:.2%}, "
+                f"avg={ravg:+.4f}%"
+            )
+
     if n < min_n:
         if grace_period:
             # Still accumulating — let it fire but flag for size reduction.
@@ -534,7 +585,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             conn, sig=sig, gate="ineligible",
             reason_detail=(
                 f"n={stats.get('n')}, mean={stats.get('mean')}, "
-                f"sharpe={stats.get('sharpe')}"
+                f"sharpe={stats.get('sharpe')}, "
+                f"realized_gate={stats.get('realized_gate')}"
             ),
             source=_src,
         )
@@ -715,6 +767,35 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         strategy_id=sid, symbol=sym, side="buy",
         bar_ts=sig["bar_ts"], target_utc=target_utc,
     )
+
+    # Stop-required guard: if config expects an initial hard stop, prove the
+    # stop is computable before submitting the entry. Without this, an ATR data
+    # gap (or missing fallback) can open a naked paper position and only alert
+    # after the damage is done. A config with no stops enabled is the explicit
+    # exemption path and keeps the legacy no-stop behaviour.
+    if not dry_run:
+        stop_preflight = _maybe_attach_stop(
+            conn, client, settings, sig,
+            entry_fill=float(sig["close"] or 0),
+            qty=qty, client_order_id=client_order_id,
+            bars_fetcher=bars_fetcher, dry_run=True,
+            strategy_class=strategy_class,
+            market_regime=market_regime,
+        )
+        if stop_preflight is not None and stop_preflight.get("stop_price") is None:
+            _record_skip(
+                conn, sig=sig, gate="unprotected_entry",
+                reason_detail=(
+                    f"initial stop unavailable before entry "
+                    f"(status={stop_preflight.get('status')})"
+                ),
+                source=_src,
+            )
+            return {"action": "SKIP_UNPROTECTED_ENTRY", "strategy_id": sid,
+                    "symbol": sym, "signal_id": sig["id"],
+                    "reason": "initial stop unavailable before entry",
+                    "stop": stop_preflight,
+                    "sizing": sizing}
 
     requested_order_type = _normalize_order_type(settings.get("order_type"))
     limit_price: Optional[float] = None
@@ -1226,9 +1307,19 @@ def _update_trailing_stops_for_open_positions(
         sid, sym = r["strategy_id"], r["symbol"]
         if not sid or not sym:
             continue
-        # Skip pairs that have a later SELL.
-        if _open_buy_for_pair(conn, sid, sym) is None:
-            continue
+        # P8 — one broker symbol has one trailing-stop authority. Legacy state
+        # can still show multiple strategy holders for a symbol; only the
+        # first/priority owner may advance a trailing-stop row.
+        try:
+            from monitoring import position_manager as pm_owner
+            if not pm_owner.owns_symbol(conn, sid, sym):
+                owner = pm_owner.symbol_owner(conn, sym)
+                log(f"P8 trailing-stop guard: skip non-owner {sid}/{sym} "
+                    f"(owner={owner})", "WARNING")
+                continue
+        except Exception as e:
+            log(f"P8 trailing-stop owner check skipped for {sid}/{sym}: {e}",
+                "WARNING")
         cfg = _resolve_trailing_config(sid, settings, tracked_strategies)
         if cfg is None:
             continue
@@ -1813,6 +1904,127 @@ def _check_time_stops_for_open_positions(
         )
         action["synthetic_time_stop"] = True
         action["days_held"] = held
+        actions.append(action)
+    return actions
+
+
+def _resolve_max_loss_cap_config(
+    strategy_id: str,
+    settings: dict,
+    tracked_strategies: Optional[List[dict]] = None,
+) -> Optional[dict]:
+    """M10 (Sprint 3) — per-strategy hard max-loss cap config, or None when
+    the strategy doesn't opt in.
+
+    Resolution mirrors time_stop / trailing_stop: a per-strategy declaration
+    `max_loss_cap` block in TRACKED_STRATEGIES wins, then the global
+    settings.max_loss_cap block. A positive `max_loss_pct` is required to be
+    active; 0 / null / negative at either level disables the cap.
+    """
+    cfg: dict = {}
+    decl = _resolve_strategy_declaration(strategy_id, tracked_strategies)
+    if decl is not None and isinstance(decl.get("max_loss_cap"), dict):
+        cfg.update(decl["max_loss_cap"])
+    global_cfg = settings.get("max_loss_cap")
+    if isinstance(global_cfg, dict):
+        for k, v in global_cfg.items():
+            cfg.setdefault(k, v)
+    try:
+        max_loss_pct = float(cfg.get("max_loss_pct") or 0)
+    except (TypeError, ValueError):
+        return None
+    if max_loss_pct <= 0:
+        return None
+    cfg["max_loss_pct"] = max_loss_pct
+    return cfg
+
+
+def _check_max_loss_caps_for_open_positions(
+    conn, settings: dict,
+    *, client, dry_run: bool,
+    bars_fetcher: Optional[Callable] = None,
+    tracked_strategies: Optional[List[dict]] = None,
+    asof: Optional[date] = None,
+) -> List[dict]:
+    """M10 (Sprint 3) — trend loser cap. A HARD per-position max-loss floor.
+
+    For every open position whose strategy declares a max_loss_cap, if the
+    latest bar's close is at or below entry_price * (1 - max_loss_pct/100),
+    force-close it (broker sell + outcome close, exit_reason='max_loss_cap')
+    even though the ATR trailing stop hasn't tripped. The trailing stop only
+    ratchets DOWN from the running high, so a position that gaps/bleeds
+    straight off entry never engages it and can blow out far past any sane
+    single-name loss (ENPH −16%, AVGO −16% the week of 2026-06-03). This cap
+    bounds that tail.
+
+    Runs AFTER the trailing + time-stop passes so either of those wins when it
+    trips first (a position they already closed has no open buy, so this pass
+    skips it). Synthesizes a long_exit routed through _process_exit with
+    exit_reason_override='max_loss_cap', so the full close path (sell, stop
+    clear, MFE/MAE, outcome close) is reused — no parallel exit system.
+
+    A winner or a small loser ABOVE the cap is left completely untouched.
+    Requires a bars_fetcher (the live current price); without one this is a
+    no-op (it never closes on the stale entry price, since that can't breach).
+    Idempotent: once the SELL is submitted the position drops out.
+    """
+    if bars_fetcher is None:
+        return []
+    asof = asof or date.today()
+    rows = conn.execute(
+        "SELECT DISTINCT strategy_id, symbol FROM paper_trades "
+        " WHERE side='buy' "
+        "   AND status IN ('filled', 'partially_filled', 'accepted', 'new') "
+    ).fetchall()
+    actions: List[dict] = []
+    for r in rows:
+        sid, sym = r["strategy_id"], r["symbol"]
+        if not sid or not sym:
+            continue
+        cfg = _resolve_max_loss_cap_config(sid, settings, tracked_strategies)
+        if cfg is None:
+            continue
+        if _open_buy_for_pair(conn, sid, sym) is None:
+            continue
+        outcome = _open_outcome_for_pair(conn, sid, sym)
+        if outcome is None:
+            continue
+        try:
+            entry_price = float(outcome["entry_price"] or 0)
+        except (TypeError, ValueError):
+            entry_price = 0.0
+        if entry_price <= 0:
+            continue
+        try:
+            bars = bars_fetcher(sym)
+        except Exception:
+            continue
+        if not bars:
+            continue
+        try:
+            last_close = float(bars[-1].get("close") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if last_close <= 0:
+            continue
+        loss_pct = (last_close - entry_price) / entry_price * 100.0
+        if loss_pct > -cfg["max_loss_pct"]:
+            # Winner or a loser still inside the cap — leave it alone.
+            continue
+        synthetic_sig = {
+            "id": None,
+            "strategy_id": sid, "symbol": sym,
+            "signal_type": "long_exit",
+            "bar_ts": asof.isoformat(),
+            "close": last_close,
+        }
+        action = _process_exit(
+            conn, client, settings, synthetic_sig, dry_run,
+            exit_reason_override="max_loss_cap", bars_fetcher=bars_fetcher,
+        )
+        action["synthetic_max_loss_cap"] = True
+        action["loss_pct"] = round(loss_pct, 2)
+        action["max_loss_pct"] = cfg["max_loss_pct"]
         actions.append(action)
     return actions
 
@@ -3695,6 +3907,21 @@ def process_signals(
         asof=asof,
     )
     actions.extend(time_stop_actions)
+
+    # M10 (Sprint 3) — trend loser cap. After trailing + time-stop (each of
+    # which wins when it trips first), force-close any open position whose
+    # unrealised loss from ENTRY has breached its strategy's hard max_loss_pct.
+    # The ATR trail only ratchets down from the high, so a name that gaps/bleeds
+    # straight off entry (ENPH −16%, AVGO −16%) never engages it; this bounds
+    # that tail without touching entry/exit logic or any risk.* limit.
+    max_loss_cap_actions = _check_max_loss_caps_for_open_positions(
+        conn, settings,
+        client=client, dry_run=dry_run,
+        bars_fetcher=bars_fetcher,
+        tracked_strategies=regime_tracked,
+        asof=asof,
+    )
+    actions.extend(max_loss_cap_actions)
 
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
            "actions": actions, "market_regime": current_regime}
