@@ -4,6 +4,8 @@ Your ONLY tool use should be 1-3 quick web searches for today's US market close:
 
 NOTE: return_pct values in the injected data are already percentages.
 
+INTERPRETATION RULES (binding): [BROKER TRUTH - ALPACA LIVE] is authoritative for open positions and day P/L — DB-derived holdings and trailing-stop state rows marked [STALE] or [NOT AT BROKER] are bookkeeping drift, not live positions or armed stops. Respect [CURRENT POSTURE]: paused strategies are deliberate policy. Reconciliation/cleanup closes (reconciled_no_position, stale_intraday_flatten_missed, etc.) are bookkeeping of past leaks, not today's trading — report them under cleanup, never as wins/losses of the day.
+
 Write a Telegram-safe markdown report (short *bold* section headers, one-sentence bullets, NO tables, NO code blocks):
 1. Market Overview - indices with percent moves, breadth, sector standouts, the day's driver.
 2. Portfolio - today's value vs prior close (dollar and percent), cash, percent of capital deployed.

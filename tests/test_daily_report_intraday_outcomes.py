@@ -141,6 +141,14 @@ def test_intraday_pass_does_not_close_on_intraday_exit_signal(
         bar_ts="2026-05-14T14:30:00", signal_type="long_entry",
         close=100.0, bar_interval="1m",
     )
+    # require_fill: the F2 pass only opens outcomes for FILLED entries.
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " filled_at, status, submitted_at, fill_price) "
+        "VALUES ('b2', ?, 'intra-mr', 'QQQ', 'buy', 5, ?, 'filled', ?, 100.0)",
+        (entry_sig, "2026-05-14T14:30:00", "2026-05-14T14:30:00"),
+    )
     # An intraday long_exit signal exists (scanner emitted a target-hit).
     db.record_signal(
         conn, strategy_id="intra-mr", symbol="QQQ",
@@ -202,6 +210,14 @@ def test_persist_report_sweeps_prior_session_intraday_orphan_only(
         bar_ts="2026-05-13T14:30:00", signal_type="long_entry",
         close=100.0, bar_interval="1m",
     )
+    # require_fill: the F2 pass only opens outcomes for FILLED entries.
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " filled_at, status, submitted_at, fill_price) "
+        "VALUES ('b3', ?, 'intra-mr', 'QQQ', 'buy', 5, ?, 'filled', ?, 100.0)",
+        (stale_sig, "2026-05-13T14:30:00", "2026-05-13T14:30:00"),
+    )
     # Intraday bars after entry; last bar close 99 is the honest exit mark.
     # Window high 104 (+4%), low 96 (-4%).
     _seed_intraday_bar(conn, "QQQ", "2026-05-13T14:35:00", 104, 99, 102)
@@ -213,6 +229,13 @@ def test_persist_report_sweeps_prior_session_intraday_orphan_only(
         conn, strategy_id="intra-mr", symbol="SPY",
         bar_ts="2026-05-14T14:30:00", signal_type="long_entry",
         close=200.0, bar_interval="1m",
+    )
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " filled_at, status, submitted_at, fill_price) "
+        "VALUES ('b4', ?, 'intra-mr', 'SPY', 'buy', 5, ?, 'filled', ?, 200.0)",
+        (fresh_sig, "2026-05-14T14:30:00", "2026-05-14T14:30:00"),
     )
     _seed_intraday_bar(conn, "SPY", "2026-05-14T14:35:00", 205, 199, 201)
     conn.commit()

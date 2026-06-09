@@ -1,0 +1,23 @@
+Updated 2026-06-09. Edit this file whenever system posture changes — it is
+injected verbatim into the daily Hermes reports as [CURRENT POSTURE].
+
+- DONCHIAN-ONLY RESET (2026-06-05): 19 strategies are DELIBERATELY paused while
+  the execution core is rebuilt. Only trend-donchian-breakout-20 may trade.
+  Do NOT recommend unpausing, resizing, or "expanding" any paused strategy —
+  the pauses are policy, not an anomaly or threshold creep.
+- Large intraday skip-gate counts (edge_gate, paused_strategy) are this reset
+  working as designed.
+- intraday-candle-continuation-15m is Stage 3 SIGNAL-ONLY observation
+  (docs/INTRADAY_TREND_BUILD_PLAN.md): it records entry signals on
+  TSLA/TQQQ/AMD/COIN/SOXL 15m bars and is paused on purpose. It must never
+  trade until the Stage 4 flip. Its recorded signals with zero orders are
+  expected, not a bug.
+- Historical outcome stats are heavily contaminated: ~90% of all-time closed
+  outcomes are reconciliation/cleanup bookings of leaked positions, not real
+  exits. Judge strategy edge ONLY on the [STRATEGY STATS - CLEAN EXITS ONLY]
+  block; treat reconcile closes as bookkeeping.
+- Hard ATR stops only began resting on the broker book 2026-06-02 (sub-penny
+  fix); trailing stops + per-position loser cap shipped 2026-06-02..08.
+  Clean-stack performance history effectively starts 2026-06-08 — clean-exit
+  losses entered before then largely predate working stops and overlap the
+  late-May selloff.
