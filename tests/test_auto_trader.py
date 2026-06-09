@@ -82,6 +82,55 @@ def test_ineligible_low_sharpe(isolated_db, winner_settings):
     assert stats["sharpe"] < winner_settings["min_sharpe_ish"]
 
 
+def test_realized_stats_gate_blocks_weak_recent_sample(isolated_db, winner_settings):
+    conn = _seed_outcomes("loser", [1.0, -3.0, -3.31])
+    settings = {
+        **winner_settings,
+        "min_outcomes": 0,
+        "min_mean_ret_pct": -100.0,
+        "min_sharpe_ish": -100.0,
+        "realized_stats_gate": {
+            "enabled": True,
+            "recent_n": 10,
+            "min_sample": 3,
+            "min_win_rate": 0.40,
+            "min_avg_return_pct": 0.0,
+        },
+    }
+
+    ok, stats = at._is_eligible(conn, "loser", settings)
+
+    assert ok is False
+    assert stats["realized_gate"]["blocked"] is True
+    assert stats["realized_gate"]["n"] == 3
+    assert stats["realized_gate"]["win_rate"] == pytest.approx(1 / 3)
+    assert stats["realized_gate"]["avg_return_pct"] == pytest.approx(-1.77)
+
+
+def test_realized_stats_gate_allows_positive_edge_candidate(isolated_db, winner_settings):
+    conn = _seed_outcomes("winner", [1.2, -0.2, 0.8, 0.5])
+    settings = {
+        **winner_settings,
+        "min_outcomes": 0,
+        "min_mean_ret_pct": -100.0,
+        "min_sharpe_ish": -100.0,
+        "realized_stats_gate": {
+            "enabled": True,
+            "recent_n": 10,
+            "min_sample": 3,
+            "min_win_rate": 0.40,
+            "min_avg_return_pct": 0.0,
+        },
+    }
+
+    ok, stats = at._is_eligible(conn, "winner", settings)
+
+    assert ok is True
+    assert stats["realized_gate"]["blocked"] is False
+    assert stats["realized_gate"]["win_rate"] == pytest.approx(0.75)
+    assert stats["realized_gate"]["avg_return_pct"] == pytest.approx(0.575)
+
+
 def test_ineligible_no_outcomes(isolated_db, winner_settings):
     ok, stats = at._is_eligible(db.init_db(), "untested", winner_settings)
     assert ok is False

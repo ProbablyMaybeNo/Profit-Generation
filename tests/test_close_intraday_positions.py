@@ -337,6 +337,14 @@ def test_run_daily_bat_invokes_close():
     assert "monitoring.close_intraday_positions" in bat
 
 
+def test_run_daily_bat_gates_intraday_lifecycle_after_flatten():
+    """The EOD lifecycle verifier must run after the flatten, not before it."""
+    bat = (ROOT / "schedulers" / "run_daily.bat").read_text(encoding="utf-8")
+    close_idx = bat.index("monitoring.close_intraday_positions")
+    gate_idx = bat.index("scripts.verify_intraday_lifecycle --session today")
+    assert close_idx < gate_idx
+
+
 # ---------------- M1: outcome-close + MFE/MAE on intraday flatten ----------------
 
 class FakeFilledOrder:

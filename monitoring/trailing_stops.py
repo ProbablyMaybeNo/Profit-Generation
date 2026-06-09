@@ -248,6 +248,128 @@ def clear_stop(
 
 
 # ---------------------------------------------------------------------------
+# P8 — duplicate/conflicting trailing-stop detection
+# ---------------------------------------------------------------------------
+
+def _bucket_price(value: float, tolerance: float) -> int:
+    if tolerance <= 0:
+        tolerance = 0.0001
+    return int(round(float(value) / tolerance))
+
+
+def _open_buy_owners_for_symbol(conn: sqlite3.Connection, symbol: str) -> List[str]:
+    statuses = ("filled", "partially_filled", "accepted", "new")
+    placeholders = ",".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"SELECT strategy_id, MIN(submitted_at) AS first_open "
+        f"FROM paper_trades WHERE symbol=? AND side='buy' "
+        f"  AND status IN ({placeholders}) "
+        f"GROUP BY strategy_id ORDER BY first_open ASC",
+        (symbol, *statuses),
+    ).fetchall()
+    owners: List[str] = []
+    for r in rows:
+        sid = r["strategy_id"]
+        if not sid:
+            continue
+        later_sell = conn.execute(
+            "SELECT 1 FROM paper_trades WHERE strategy_id=? AND symbol=? "
+            "  AND side='sell' AND submitted_at > ? "
+            "  AND status NOT IN ('canceled', 'rejected') "
+            "  AND (order_type IS NULL OR order_type NOT LIKE '%stop%' "
+            "       OR status='filled') LIMIT 1",
+            (sid, symbol, r["first_open"]),
+        ).fetchone()
+        if later_sell is None:
+            owners.append(sid)
+    return owners
+
+
+def _symbol_owner_for_conflict_scan(conn: sqlite3.Connection, symbol: str) -> Optional[str]:
+    owners = _open_buy_owners_for_symbol(conn, symbol)
+    return owners[0] if owners else None
+
+
+def detect_trailing_stop_conflicts(
+    conn: sqlite3.Connection,
+    *,
+    stop_tolerance: float = 0.01,
+    extreme_tolerance: float = 0.01,
+) -> List[Dict]:
+    """Find symbols with multiple strategy trailing stops or owner conflicts.
+
+    One broker symbol has one net position, so multiple rows in trailing_stops
+    for the same (symbol, side) mean multiple strategies can believe they own
+    exit authority. This detector returns one conflict per ambiguous symbol.
+    """
+    rows = conn.execute(
+        "SELECT strategy_id, symbol, side, method, stop_price, extreme_price, "
+        "       updated_at "
+        "  FROM trailing_stops "
+        " ORDER BY symbol ASC, side ASC, strategy_id ASC"
+    ).fetchall()
+    grouped: Dict[Tuple[str, str], List[Dict]] = {}
+    for r in rows:
+        symbol = r["symbol"]
+        side = r["side"] or "long"
+        if not symbol:
+            continue
+        item = {
+            "strategy_id": r["strategy_id"],
+            "symbol": symbol,
+            "side": side,
+            "method": r["method"],
+            "stop_price": float(r["stop_price"]),
+            "extreme_price": float(r["extreme_price"]),
+            "updated_at": r["updated_at"],
+        }
+        grouped.setdefault((symbol, side), []).append(item)
+
+    conflicts: List[Dict] = []
+    for (symbol, side), items in grouped.items():
+        if len(items) <= 1:
+            continue
+        owner = _symbol_owner_for_conflict_scan(conn, symbol) if side == "long" else None
+        non_owner_strategies = []
+        if owner:
+            non_owner_strategies = sorted(
+                i["strategy_id"] for i in items
+                if i["strategy_id"] and i["strategy_id"] != owner
+            )
+        stop_buckets = {
+            _bucket_price(i["stop_price"], stop_tolerance) for i in items
+        }
+        extreme_buckets = {}
+        for i in items:
+            b = _bucket_price(i["extreme_price"], extreme_tolerance)
+            extreme_buckets.setdefault(b, []).append(i["strategy_id"])
+        duplicate_extreme = any(len(v) > 1 for v in extreme_buckets.values())
+        conflicting_stop_levels = len(stop_buckets) > 1
+        owner_conflict = bool(non_owner_strategies)
+        reasons = []
+        if duplicate_extreme:
+            reasons.append("duplicate_extreme")
+        if conflicting_stop_levels:
+            reasons.append("conflicting_stop_levels")
+        if owner_conflict:
+            reasons.append("owner_conflict")
+        conflicts.append({
+            "symbol": symbol,
+            "side": side,
+            "owner": owner,
+            "strategies": [i["strategy_id"] for i in items],
+            "non_owner_strategies": non_owner_strategies,
+            "duplicate_extreme": duplicate_extreme,
+            "conflicting_stop_levels": conflicting_stop_levels,
+            "owner_conflict": owner_conflict,
+            "reasons": reasons,
+            "stops": items,
+        })
+    conflicts.sort(key=lambda c: (c["symbol"], c["side"]))
+    return conflicts
+
+
+# ---------------------------------------------------------------------------
 # Bar-close advancement (the entry point auto_trader calls per bar)
 # ---------------------------------------------------------------------------
 

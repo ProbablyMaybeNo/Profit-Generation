@@ -368,3 +368,69 @@ def test_exit_predicate_short_triggers_at_or_above_stop(isolated_db):
         ) is False
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# P8 — duplicate/conflicting trailing-stop detector
+# ---------------------------------------------------------------------------
+
+def test_detect_duplicate_trailing_stop_extremes_and_owner_conflict(isolated_db):
+    """Same symbol + multiple strategy trailing rows is ambiguous.
+
+    This is the IWM/KRE failure shape: two strategies carry a trailing stop for
+    one broker symbol, often with the same extreme but different stop levels.
+    """
+    conn = db.init_db()
+    try:
+        conn.execute(
+            "INSERT INTO paper_trades "
+            "(alpaca_order_id, strategy_id, symbol, side, qty, status, submitted_at) "
+            "VALUES ('b-owner', 'trend-donchian-breakout-20', 'IWM', 'buy', 10, "
+            "'filled', '2026-06-04T20:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO paper_trades "
+            "(alpaca_order_id, strategy_id, symbol, side, qty, status, submitted_at) "
+            "VALUES ('b-other', 'intraday-orb-pivots-5m', 'IWM', 'buy', 10, "
+            "'filled', '2026-06-04T20:00:05')"
+        )
+        ts.upsert_stop(
+            conn, strategy_id="trend-donchian-breakout-20", symbol="IWM",
+            method="atr_trail", stop_price=286.25, extreme_price=292.87,
+        )
+        ts.upsert_stop(
+            conn, strategy_id="intraday-orb-pivots-5m", symbol="IWM",
+            method="atr_trail", stop_price=285.10, extreme_price=292.87,
+        )
+
+        conflicts = ts.detect_trailing_stop_conflicts(conn)
+
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["symbol"] == "IWM"
+        assert c["owner"] == "trend-donchian-breakout-20"
+        assert c["duplicate_extreme"] is True
+        assert c["conflicting_stop_levels"] is True
+        assert c["owner_conflict"] is True
+        assert c["non_owner_strategies"] == ["intraday-orb-pivots-5m"]
+    finally:
+        conn.close()
+
+
+def test_detect_trailing_stop_conflicts_ignores_single_owner(isolated_db):
+    conn = db.init_db()
+    try:
+        conn.execute(
+            "INSERT INTO paper_trades "
+            "(alpaca_order_id, strategy_id, symbol, side, qty, status, submitted_at) "
+            "VALUES ('b-owner', 'trend-donchian-breakout-20', 'KRE', 'buy', 10, "
+            "'filled', '2026-06-04T20:00:00')"
+        )
+        ts.upsert_stop(
+            conn, strategy_id="trend-donchian-breakout-20", symbol="KRE",
+            method="atr_trail", stop_price=68.20, extreme_price=71.44,
+        )
+
+        assert ts.detect_trailing_stop_conflicts(conn) == []
+    finally:
+        conn.close()

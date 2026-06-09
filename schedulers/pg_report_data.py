@@ -290,6 +290,15 @@ if held:
         dupe = " [SHARED SYMBOL]" if len(sym_owners.get(r["symbol"], set())) > 1 else ""
         p(f"  {sid} {r['symbol']}: held={heldq} available={availq} "
           f"open_orders={r['open_orders'] or 0} [{pstate}]{dupe}")
+        if pr and heldq > 0 and availq <= 0 and (r["open_orders"] or 0) > 0:
+            p("  *** ALERT: PAUSED STRATEGY LOCKED POSITION — "
+              f"{sid} {r['symbol']} is paused but still held, with "
+              f"available=0 because {r['open_orders'] or 0} working "
+              "sell/order row reserves the position. The owner/exit helpers "
+              "treat that later market sell as the closing intent, so the "
+              "paused flatten path will not retry while the DB still shows "
+              "held>0. Run order_sync/broker reconciliation or perform an "
+              "approved broker cleanup to move the order terminal. ***")
 else:
     p("  no held positions in the DB view.")
 # Duplicate-symbol ownership summary (the unintended-short root cause signature).
@@ -303,6 +312,58 @@ else:
 if paused_map:
     p(f"  paused strategies ({len(paused_map)}): "
       + ", ".join(sorted(paused_map.keys())))
+
+# P8: expose the trailing-stop conflict signature in daily reports. A symbol with
+# multiple strategy stop rows can make exits fight for one broker position; equal
+# extremes with different stops are especially suspicious because strategies are
+# sharing the same market path but reserving different exits.
+p("\n[TRAILING STOP CONFLICTS]")
+ts_rows = q("""
+    SELECT strategy_id, symbol, side, method, stop_price, extreme_price, updated_at
+      FROM trailing_stops
+     ORDER BY symbol, side, strategy_id
+""")
+owner_rows = q("""
+    SELECT symbol, strategy_id, MIN(submitted_at) first_buy
+      FROM paper_trades
+     WHERE side='buy' AND status IN ('filled','partially_filled')
+     GROUP BY symbol, strategy_id
+     ORDER BY symbol, first_buy
+""")
+owners = {}
+for r in owner_rows:
+    owners.setdefault(r["symbol"], r["strategy_id"])
+by_symbol_side = {}
+for r in ts_rows:
+    by_symbol_side.setdefault((r["symbol"], r["side"]), []).append(r)
+conflicts = []
+for (symbol, side), rows in sorted(by_symbol_side.items()):
+    if len(rows) <= 1:
+        continue
+    rounded_extremes = {round(float(r["extreme_price"]), 4) for r in rows}
+    rounded_stops = {round(float(r["stop_price"]), 4) for r in rows}
+    reasons = ["multiple_stop_owners"]
+    if len(rounded_extremes) < len(rows):
+        reasons.append("duplicate_extreme")
+    if len(rounded_stops) > 1:
+        reasons.append("conflicting_stop_levels")
+    owner = owners.get(symbol, "unknown")
+    parts = []
+    for r in rows:
+        role = "owner" if r["strategy_id"] == owner else "non_owner"
+        parts.append(
+            f"{role}={r['strategy_id']} stop={r['stop_price']:.4f} "
+            f"extreme={r['extreme_price']:.4f} method={r['method']}"
+        )
+    conflicts.append(
+        f"  {symbol} {side}: owner={owner}; reasons={','.join(reasons)}; "
+        + " | ".join(parts)
+    )
+if conflicts:
+    for line in conflicts[:20]:
+        p(line)
+else:
+    p("  no duplicate trailing-stop rows by symbol/side (good).")
 
 c.close()
 print("\n".join(out))
