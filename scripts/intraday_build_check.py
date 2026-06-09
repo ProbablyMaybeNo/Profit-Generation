@@ -15,6 +15,50 @@ import sys
 SMOKE_SYMBOLS = ["AMD", "NVDA", "TSLA"]
 REQUIRED_COLS = ("long_entry", "long_exit", "ema_fast", "ema_slow", "vwap")
 
+STAGE3_SID = "intraday-candle-continuation-15m"
+
+
+def check_stage3_signal_only() -> int:
+    """Stage 3 invariant: the candle-continuation strategy is registered for
+    the 15m intraday scan AND paused, so fires record to the signals table but
+    auto_trader can never enter. At the Stage 4 flip (unpause), update this
+    check to assert the Stage 4 invariant instead."""
+    try:
+        from data import db
+        from monitoring import strategy_health as sh
+        from monitoring.config import TRACKED_STRATEGIES
+        from monitoring.strategy_fires import _resolve_compute_fn
+    except Exception as e:
+        print(f"BUILD_CHECK: stage3 import FAILED: {type(e).__name__}: {e}")
+        return 1
+
+    entry = next((e for e in TRACKED_STRATEGIES if e["id"] == STAGE3_SID), None)
+    if entry is None:
+        print(f"BUILD_CHECK: {STAGE3_SID} NOT in TRACKED_STRATEGIES")
+        return 1
+    if entry.get("bar_interval") != "15m":
+        print(f"BUILD_CHECK: {STAGE3_SID} bar_interval "
+              f"{entry.get('bar_interval')!r} != '15m'")
+        return 1
+    try:
+        _resolve_compute_fn(entry["compute"])
+    except ValueError as e:
+        print(f"BUILD_CHECK: {STAGE3_SID} compute_fn unresolvable: {e}")
+        return 1
+
+    conn = db.init_db()
+    try:
+        if not sh.is_paused(conn, STAGE3_SID):
+            print(f"BUILD_CHECK: {STAGE3_SID} is NOT paused — signal-only "
+                  f"guarantee broken; pause it before the next session")
+            return 1
+    finally:
+        conn.close()
+
+    print(f"BUILD_CHECK: {STAGE3_SID} registered "
+          f"({len(entry['active_on'])} symbols, 15m) + paused (signal-only) OK")
+    return 0
+
 
 def main() -> int:
     try:
@@ -58,7 +102,7 @@ def main() -> int:
 
     if not got_any:
         print("BUILD_CHECK: no bars for any symbol (off-hours) - WARN, pass")
-    return 0
+    return check_stage3_signal_only()
 
 
 if __name__ == "__main__":

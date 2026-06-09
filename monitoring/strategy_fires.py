@@ -30,6 +30,7 @@ _COMPUTE_FN_MODULES = [
     "strategies.intraday.orb_1m",
     "strategies.intraday.momentum_1m",
     "strategies.intraday.vwap_reclaim_1m",
+    "strategies.intraday.candle_continuation",
     "strategies.orb.orbo_intraday",
     "strategies.orb.orb_pivots_intraday",
     "strategies.breakout.donchian_retest",
