@@ -177,6 +177,30 @@ def test_protected_fill_passes_silently(conn, monkeypatch):
     assert alerts == []
 
 
+def test_entry_is_blocked_when_required_stop_cannot_be_computed(conn, monkeypatch):
+    """If stops are configured but ATR/fallback cannot produce a hard stop,
+    the entry must not submit. No new position opens unless stops are explicitly
+    disabled/exempted by config."""
+    alerts = []
+    monkeypatch.setattr(tg, "send_message", lambda msg, **k: alerts.append(msg))
+    sid, sym = "trend-donchian-breakout-20", "GDX"
+    _make_eligible(conn, sid)
+    broker = ProtBroker(accept_stop=True)
+    sig = _entry_sig(conn, sid, sym)
+    settings = _settings()
+    settings["stops"] = {"atr_multiplier": 2.0, "atr_period": 14}
+
+    action = at._process_entry(conn, broker, settings, sig, False,
+                               portfolio_value=1_000_000.0,
+                               bars_fetcher=lambda symbol: _bars(symbol)[:5])
+
+    assert action["action"] == "SKIP_UNPROTECTED_ENTRY", action
+    assert action["stop"]["status"] == "no_stop"
+    assert broker.submitted == []
+    assert broker._held == {}
+    assert alerts == []
+
+
 def test_no_stops_configured_no_false_alarm(conn, monkeypatch):
     """Stops globally disabled (no settings.stops, no legacy multiple): the fill
     is intentionally unprotected -> stop_info is None -> no verify, no alert."""
