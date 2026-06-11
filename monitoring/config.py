@@ -143,11 +143,14 @@ INTRADAY_1M_DECLARATIONS = [
 # its fires to the signals table, while a paused_strategies row
 # (source=intraday_build_stage3) keeps auto_trader from ever entering.
 # Stage 4 flip = unpause; do NOT remove the pause row for any other reason.
-# Universe = the five 15m backtest leaders (PF: TSLA 1.58, TQQQ 1.32,
-# AMD 1.32, COIN 1.28, SOXL 1.21 — data/intraday_continuation_backtest.csv).
-# No active_in_window on purpose: the strategy's internal time mask gates
-# per-BAR (a scan at 11:05 must still record a fire on the 11:00-closing
-# bar); a declaration-level wall-clock window would drop those.
+# Stage 4 universe = TSLA, AMD, COIN — the three Tier-1 liquid SINGLES among
+# the 15m backtest leaders (PF: TSLA 1.58, AMD 1.32, COIN 1.28 —
+# data/intraday_continuation_backtest.csv). The 3x ETFs TQQQ/SOXL are held back
+# for the tiny first run (SOXL = wide ATR stop, same-day only per the plan);
+# re-add at Stage 7 (universe scale). No active_in_window on purpose: the
+# strategy's internal time mask gates per-BAR (a scan at 11:05 must still record
+# a fire on the 11:00-closing bar); a declaration-level wall-clock window would
+# drop those.
 INTRADAY_CANDLE_DECLARATIONS = [
     {
         "id": "intraday-candle-continuation-15m",
@@ -155,7 +158,7 @@ INTRADAY_CANDLE_DECLARATIONS = [
         "module": "strategies.intraday.candle_continuation",
         "strategy_class": "trend",
         "bar_interval": "15m",
-        "active_on": ["TSLA", "TQQQ", "AMD", "COIN", "SOXL"],
+        "active_on": ["TSLA", "AMD", "COIN"],
         "grace_period": True,
         "pyramidable": False,
     },

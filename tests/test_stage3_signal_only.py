@@ -84,7 +84,7 @@ def test_declaration_registered():
     assert entry is not None
     assert entry["bar_interval"] == "15m"
     assert entry["compute"] == "compute_candle_continuation"
-    assert set(entry["active_on"]) == {"TSLA", "TQQQ", "AMD", "COIN", "SOXL"}
+    assert set(entry["active_on"]) == {"TSLA", "AMD", "COIN"}
     assert entry["grace_period"] is True
     assert entry["pyramidable"] is False
     # the internal per-bar time mask must be the only time gate (a
@@ -116,8 +116,7 @@ def test_fire_recorded_to_signals(isolated_db):
     )
     entries = [f for f in fires if f["signal_type"] == "long_entry"]
     assert {f["strategy_id"] for f in entries} == {SID}
-    assert {f["symbol"] for f in entries} == {"TSLA", "TQQQ", "AMD", "COIN",
-                                              "SOXL"}
+    assert {f["symbol"] for f in entries} == {"TSLA", "AMD", "COIN"}
     assert all(f["signal_id"] is not None for f in entries)
     assert all(f["bar_interval"] == "15m" for f in entries)
 
@@ -127,7 +126,7 @@ def test_fire_recorded_to_signals(isolated_db):
         " WHERE strategy_id=?", (SID,),
     ).fetchall()
     conn.close()
-    assert len(rows) == 5
+    assert len(rows) == 3
     assert all(r["signal_type"] == "long_entry" for r in rows)
     assert all(r["bar_interval"] == "15m" for r in rows)
 

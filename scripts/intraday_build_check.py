@@ -18,18 +18,20 @@ REQUIRED_COLS = ("long_entry", "long_exit", "ema_fast", "ema_slow", "vwap")
 STAGE3_SID = "intraday-candle-continuation-15m"
 
 
-def check_stage3_signal_only() -> int:
-    """Stage 3 invariant: the candle-continuation strategy is registered for
-    the 15m intraday scan AND paused, so fires record to the signals table but
-    auto_trader can never enter. At the Stage 4 flip (unpause), update this
-    check to assert the Stage 4 invariant instead."""
+def check_stage4_live() -> int:
+    """Stage 4 invariant: the candle-continuation strategy is registered for the
+    15m intraday scan AND UNPAUSED, so auto_trader can enter (tiny size, ATR
+    stop). Until the operator runs the Stage 4 unpause it is still paused, so
+    this reports NOT READY with the exact remaining action — the only step left
+    once the prep (symbol narrowing, this check) is in. Reverse of the Stage 3
+    signal-only invariant."""
     try:
         from data import db
         from monitoring import strategy_health as sh
         from monitoring.config import TRACKED_STRATEGIES
         from monitoring.strategy_fires import _resolve_compute_fn
     except Exception as e:
-        print(f"BUILD_CHECK: stage3 import FAILED: {type(e).__name__}: {e}")
+        print(f"BUILD_CHECK: stage4 import FAILED: {type(e).__name__}: {e}")
         return 1
 
     entry = next((e for e in TRACKED_STRATEGIES if e["id"] == STAGE3_SID), None)
@@ -48,15 +50,17 @@ def check_stage3_signal_only() -> int:
 
     conn = db.init_db()
     try:
-        if not sh.is_paused(conn, STAGE3_SID):
-            print(f"BUILD_CHECK: {STAGE3_SID} is NOT paused — signal-only "
-                  f"guarantee broken; pause it before the next session")
+        if sh.is_paused(conn, STAGE3_SID):
+            print(f"BUILD_CHECK: {STAGE3_SID} registered "
+                  f"({len(entry['active_on'])} symbols, 15m) but STILL PAUSED "
+                  f"— run the Stage 4 unpause "
+                  f"(sh.unpause_strategy('{STAGE3_SID}')) to go live")
             return 1
     finally:
         conn.close()
 
     print(f"BUILD_CHECK: {STAGE3_SID} registered "
-          f"({len(entry['active_on'])} symbols, 15m) + paused (signal-only) OK")
+          f"({len(entry['active_on'])} symbols, 15m) + UNPAUSED (Stage 4 live) OK")
     return 0
 
 
@@ -102,7 +106,7 @@ def main() -> int:
 
     if not got_any:
         print("BUILD_CHECK: no bars for any symbol (off-hours) - WARN, pass")
-    return check_stage3_signal_only()
+    return check_stage4_live()
 
 
 if __name__ == "__main__":
