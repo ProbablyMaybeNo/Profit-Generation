@@ -342,7 +342,7 @@ def test_reconcile_no_alert_flag_suppresses_telegram(isolated_db, tmp_path):
 # IS held untouched.
 
 def _open_outcome(conn, *, strategy_id, symbol, bar_interval="1d",
-                  entry_ts="2026-05-14", entry_price=100.0):
+                  entry_ts="2026-05-14", entry_price=100.0, with_fill=False):
     db.upsert_strategy(conn, {"extra": {"strategy_id": strategy_id}})
     sid = db.record_signal(
         conn, strategy_id=strategy_id, symbol=symbol,
@@ -351,6 +351,15 @@ def _open_outcome(conn, *, strategy_id, symbol, bar_interval="1d",
     )
     db.open_outcome(conn, signal_id=sid, entry_ts=entry_ts,
                     entry_price=entry_price)
+    # with_fill=True ⇒ a real position existed (genuine orphan, booked at a
+    # mark). Default no-fill ⇒ phantom row (quarantined, never booked).
+    if with_fill:
+        db.record_paper_trade(conn, {
+            "alpaca_order_id": f"buy-{sid}", "signal_id": sid,
+            "strategy_id": strategy_id, "symbol": symbol, "side": "buy",
+            "qty": 10, "order_type": "market", "submitted_at": entry_ts,
+            "status": "filled", "fill_price": entry_price,
+        })
     conn.commit()
     return sid
 
@@ -393,9 +402,11 @@ def test_sweep_closes_orphan_leaves_held_untouched(isolated_db):
 
 
 def test_sweep_skips_orphan_with_no_price(isolated_db):
-    """Honest skip: no sell fill, no snapshot, no bar -> no fabricated price."""
+    """Honest skip: real orphan (had a fill), no sell fill, no snapshot, no bar
+    -> no fabricated price."""
     conn = db.init_db()
-    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE")
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE",
+                           with_fill=True)
     res = rp.sweep_orphan_outcomes(conn, set())
     assert res["swept"] == 0
     assert res["skipped"] == 1
@@ -407,7 +418,8 @@ def test_sweep_skips_orphan_with_no_price(isolated_db):
 
 def test_sweep_uses_snapshot_close_when_no_sell(isolated_db):
     conn = db.init_db()
-    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY")
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY",
+                           with_fill=True)
     db.record_snapshot_row(conn, "2026-05-15", {"symbol": "SPY", "close": 488.0})
     conn.commit()
     res = rp.sweep_orphan_outcomes(conn, set())
@@ -418,6 +430,28 @@ def test_sweep_uses_snapshot_close_when_no_sell(isolated_db):
     ).fetchone()
     assert o["exit_price"] == pytest.approx(488.0)
     assert o["exit_reason"] == "reconciled_no_position"
+
+
+def test_sweep_quarantines_phantom_no_fill_orphan(isolated_db):
+    """A no-fill orphan is a phantom ROW: quarantined as 'phantom_no_fill' with
+    NULL price/return — NEVER booked at a fabricated mark, even when one is
+    available (here a snapshot)."""
+    conn = db.init_db()
+    phantom = _open_outcome(conn, strategy_id="intraday-1m-orb", symbol="SPY",
+                            bar_interval="1m")  # no fill
+    db.record_snapshot_row(conn, "2026-05-15", {"symbol": "SPY", "close": 488.0})
+    conn.commit()
+    res = rp.sweep_orphan_outcomes(conn, set())
+    assert res["swept"] == 0
+    assert res["phantom"] == 1
+    o = conn.execute(
+        "SELECT status, exit_reason, exit_price, return_pct FROM outcomes "
+        "WHERE signal_id=?", (phantom,),
+    ).fetchone()
+    assert o["status"] == "closed"
+    assert o["exit_reason"] == "phantom_no_fill"
+    assert o["exit_price"] is None
+    assert o["return_pct"] is None
 
 
 # ---- B1: daily-close fallback for 1d trend orphans -----------------------
@@ -443,7 +477,7 @@ def test_sweep_uses_daily_close_when_no_fill_snapshot_or_bar(isolated_db):
     import pandas as pd
     conn = db.init_db()
     orphan = _open_outcome(conn, strategy_id="trend-donchian-breakout-20",
-                           symbol="WMT", entry_price=90.0)
+                           symbol="WMT", entry_price=90.0, with_fill=True)
     # Daily-bar source resolves a close; latest is 97.25.
     fake_daily = lambda syms: {"WMT": _daily_frame([95.0, 96.0, 97.25])}
 
@@ -463,7 +497,8 @@ def test_sweep_uses_daily_close_when_no_fill_snapshot_or_bar(isolated_db):
 def test_sweep_daily_close_is_last_resort_after_snapshot(isolated_db):
     """Precedence preserved: a snapshot close still wins over the daily bar."""
     conn = db.init_db()
-    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY")
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="SPY",
+                           with_fill=True)
     db.record_snapshot_row(conn, "2026-05-15", {"symbol": "SPY", "close": 488.0})
     conn.commit()
     fake_daily = lambda syms: {"SPY": _daily_frame([500.0, 510.0])}
@@ -478,7 +513,8 @@ def test_sweep_daily_close_is_last_resort_after_snapshot(isolated_db):
 def test_sweep_still_skips_when_daily_close_unavailable(isolated_db):
     """Honest skip survives B1: no fill/snapshot/bar AND no daily close."""
     conn = db.init_db()
-    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE")
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="NOPRICE",
+                           with_fill=True)
     res = rp.sweep_orphan_outcomes(conn, set(), daily_bars_fn=lambda syms: {})
     assert res["swept"] == 0
     assert res["skipped"] == 1
@@ -518,11 +554,12 @@ def test_main_backfill_flag_closes_resolvable_leaves_held_and_noprice(
     conn = db.init_db()
     # Resolvable orphan (snapshot mark), held outcome, no-price orphan.
     resolvable = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
-                               entry_price=50.0)
+                               entry_price=50.0, with_fill=True)
     db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
     held = _open_outcome(conn, strategy_id="trend-b", symbol="NVDA",
-                         entry_price=120.0)
-    noprice = _open_outcome(conn, strategy_id="trend-c", symbol="NOPRICE")
+                         entry_price=120.0, with_fill=True)
+    noprice = _open_outcome(conn, strategy_id="trend-c", symbol="NOPRICE",
+                            with_fill=True)
     conn.commit()
 
     monkeypatch.setattr(rp, "RECONCILE_SNAPSHOT", tmp_path / "rec.json")
@@ -551,7 +588,7 @@ def test_main_backfill_is_idempotent(isolated_db, tmp_path, monkeypatch):
     sweeps nothing the second time."""
     conn = db.init_db()
     sid = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
-                        entry_price=50.0)
+                        entry_price=50.0, with_fill=True)
     db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
     conn.commit()
 
@@ -630,14 +667,14 @@ def test_scheduled_main_flag_reaches_sweep_orphan_outcomes(
 
 
 def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
-    """End-to-end: reconcile(sweep_orphans=True) closes the phantom outcome
-    using broker truth, leaves the held one open."""
+    """End-to-end: reconcile(sweep_orphans=True) closes a genuine orphan (had a
+    fill, broker no longer holds it) at a mark, leaves the held one open."""
     conn = db.init_db()
-    phantom = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
-                            entry_price=50.0)
+    orphan = _open_outcome(conn, strategy_id="trend-a", symbol="ZZZ",
+                           entry_price=50.0, with_fill=True)
     db.record_snapshot_row(conn, "2026-05-15", {"symbol": "ZZZ", "close": 47.0})
     held = _open_outcome(conn, strategy_id="trend-b", symbol="NVDA",
-                         entry_price=120.0)
+                         entry_price=120.0, with_fill=True)
     conn.commit()
 
     result = rp.reconcile(
@@ -651,11 +688,11 @@ def test_reconcile_sweep_orphans_integration(isolated_db, tmp_path):
     )
     assert result["orphan_sweep"]["swept"] == 1
 
-    o_phantom = conn.execute(
-        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?", (phantom,),
+    o_orphan = conn.execute(
+        "SELECT status, exit_reason FROM outcomes WHERE signal_id=?", (orphan,),
     ).fetchone()
-    assert o_phantom["status"] == "closed"
-    assert o_phantom["exit_reason"] == "reconciled_no_position"
+    assert o_orphan["status"] == "closed"
+    assert o_orphan["exit_reason"] == "reconciled_no_position"
     o_held = conn.execute(
         "SELECT status FROM outcomes WHERE signal_id=?", (held,),
     ).fetchone()

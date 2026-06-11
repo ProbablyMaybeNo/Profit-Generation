@@ -373,7 +373,8 @@ def sweep_orphan_outcomes(
     candidate symbols, then read per-symbol from that prefetched dict, so a
     175-symbol backlog costs one batched broker call, not 175.
 
-    Returns {scanned, swept, skipped, held}.
+    Returns {scanned, swept, skipped, phantom, held}. `phantom` counts no-fill
+    rows quarantined as 'phantom_no_fill' rather than booked at a fake mark.
     """
     held = {str(s).upper() for s in (held_symbols or [])}
     fallback_ts = now_iso or _utc_now_iso()
@@ -403,6 +404,7 @@ def sweep_orphan_outcomes(
 
     swept = 0
     skipped = 0
+    phantom = 0
     for o in candidates:
         sym = o.get("symbol")
         if sym is None:
@@ -410,6 +412,20 @@ def sweep_orphan_outcomes(
             continue
         if str(sym).upper() in held:
             # The position genuinely still exists — never close it here.
+            continue
+        # An outcome with NO order at all (neither buy nor sell fill) is a
+        # phantom ROW, not an orphan POSITION — there was never a real entry to
+        # reconcile. Booking it at a last-known mark would fabricate a win/loss
+        # (the bug in docs/TICKET_PHANTOM_OUTCOMES.md), so quarantine it
+        # (exit_reason='phantom_no_fill', return NULL) instead. A sell-only
+        # orphan (position closed, buy fill unlinked) DOES have a fill here, so
+        # it still books at its last-known mark below.
+        if not db.signal_has_any_fill(conn, int(o["signal_id"])):
+            if db.mark_outcome_phantom(conn, int(o["signal_id"])):
+                phantom += 1
+                log(f"PHANTOM_NO_FILL quarantined orphan outcome sig "
+                    f"{o.get('signal_id')} ({o.get('strategy_id')}/{sym}) — "
+                    f"no backing fill, not booked", "INFO")
             continue
         mark = _last_known_mark(conn, sym, o.get("entry_ts"),
                                 daily_bars_fn=_prefetched_daily)
@@ -433,7 +449,7 @@ def sweep_orphan_outcomes(
             f"@ {mark} (reason={RECONCILED_NO_POSITION_EXIT_REASON})", "INFO")
         swept += 1
     return {"scanned": len(candidates), "swept": swept,
-            "skipped": skipped, "held": len(held)}
+            "skipped": skipped, "phantom": phantom, "held": len(held)}
 
 
 def reconcile(*,
@@ -541,7 +557,8 @@ def main(argv=None):
         if result.get("orphan_sweep") is not None:
             s = result["orphan_sweep"]
             print(f"\nOrphan sweep: scanned={s['scanned']} swept={s['swept']} "
-                  f"skipped={s['skipped']} held={s['held']}")
+                  f"skipped={s['skipped']} phantom={s.get('phantom', 0)} "
+                  f"held={s['held']}")
         if result["drift_count"] > 0:
             print("\n" + format_telegram_alert(result))
     sys.exit(1 if result["drift_count"] > 0 else 0)

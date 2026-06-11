@@ -864,6 +864,60 @@ def close_outcome(
         )
 
 
+PHANTOM_NO_FILL_REASON = "phantom_no_fill"
+
+
+def signal_has_fill(conn: sqlite3.Connection, signal_id: int) -> bool:
+    """True when a filled/partially-filled BUY exists for this signal.
+
+    The single source of truth for "did this signal become a real position?"
+    — used to tell genuine trades from signal-scoped phantom outcomes (rows
+    opened for a fire that no order ever backed). paper_trades.signal_id is
+    populated on every recorded buy, so absence here means no real entry.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM paper_trades "
+        " WHERE signal_id=? AND side='buy' "
+        "   AND status IN ('filled','partially_filled') LIMIT 1",
+        (signal_id,),
+    ).fetchone()
+    return row is not None
+
+
+def signal_has_any_fill(conn: sqlite3.Connection, signal_id: int) -> bool:
+    """True when ANY filled/partially-filled order (buy OR sell) exists for
+    this signal. A sell fill proves a position once existed — so this, not
+    signal_has_fill (buy-only), is the test for 'was there ever a real
+    position to reconcile?' The orphan sweep uses it to tell a closed-position
+    orphan (book at last mark) from a never-ordered phantom (quarantine)."""
+    row = conn.execute(
+        "SELECT 1 FROM paper_trades "
+        " WHERE signal_id=? AND status IN ('filled','partially_filled') LIMIT 1",
+        (signal_id,),
+    ).fetchone()
+    return row is not None
+
+
+def mark_outcome_phantom(conn: sqlite3.Connection, signal_id: int) -> bool:
+    """Close an outcome as a phantom (no backing fill) WITHOUT fabricating a
+    price or return. Sets exit_reason='phantom_no_fill', return_pct=NULL,
+    exit_price=NULL so it drops out of every stats/eligibility query (which
+    require return_pct IS NOT NULL and exclude CLEANUP_EXIT_REASONS) and out
+    of the lifecycle verifier. Returns True if a row was updated."""
+    with conn:
+        cur = conn.execute(
+            """
+            UPDATE outcomes
+               SET status='closed', exit_reason=?, exit_ts=?,
+                   exit_price=NULL, return_pct=NULL, mfe_pct=NULL, mae_pct=NULL,
+                   updated_at=?
+             WHERE signal_id=?
+            """,
+            (PHANTOM_NO_FILL_REASON, _utc_now_iso(), _utc_now_iso(), signal_id),
+        )
+        return cur.rowcount > 0
+
+
 def _normalize_order_status(value: Any) -> Optional[str]:
     """Coerce an alpaca-py OrderStatus enum (or str repr like
     'OrderStatus.ACCEPTED') down to the bare lowercase token ('accepted')

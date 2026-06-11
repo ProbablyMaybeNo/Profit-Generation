@@ -37,6 +37,17 @@ from typing import Dict, List, Optional
 CLEAN_EXITS = {"eod_close", "trailing_stop", "long_exit_signal"}
 BAD_EXITS = {"stale_intraday_flatten_missed", "reconciled_no_position"}
 
+# A signal-scoped outcome with no filled buy in paper_trades is a PHANTOM:
+# the strategy fired but no order ever backed it (paused/observe strategies,
+# sizing/eligibility skips). Such rows were never a real intraday position,
+# so they are excluded from the gate entirely — they can neither pass nor fail
+# it. Without this, a single signal-only (Stage 3 observe) strategy turns the
+# gate permanently RED on bookkeeping noise. See docs/TICKET_PHANTOM_OUTCOMES.md.
+_HAS_FILL_SQL = (
+    "EXISTS(SELECT 1 FROM paper_trades pt WHERE pt.signal_id = o.signal_id "
+    "       AND pt.side='buy' AND pt.status IN ('filled','partially_filled'))"
+)
+
 # bar_interval that counts as intraday: ends in a minute/hour unit.
 _INTRADAY_SQL = (
     "(s.bar_interval LIKE '%m' OR s.bar_interval LIKE '%h')"
@@ -59,7 +70,8 @@ def _fetch_intraday_outcomes(conn: sqlite3.Connection,
     sql = (
         "SELECT o.signal_id, o.status, o.entry_ts, o.exit_ts, o.entry_price, "
         "       o.exit_price, o.exit_reason, o.return_pct, o.mfe_pct, o.mae_pct, "
-        "       s.strategy_id, s.symbol, s.bar_interval "
+        "       s.strategy_id, s.symbol, s.bar_interval, "
+        f"      {_HAS_FILL_SQL} AS has_fill "
         "  FROM outcomes o JOIN signals s ON s.id = o.signal_id "
         f" WHERE {_INTRADAY_SQL}"
     )
@@ -71,11 +83,16 @@ def _fetch_intraday_outcomes(conn: sqlite3.Connection,
 
 
 def classify(row: dict) -> str:
-    """One of: open, clean, bad, other, unmeasured.
+    """One of: phantom, open, clean, bad, other, unmeasured.
 
-    `unmeasured` = a CLEAN closed exit that is missing exit_price/mfe/mae —
-    it closed for the right reason but we can't trust its excursion stats.
+    `phantom` = a signal-scoped outcome with no backing fill — not a real
+    position, excluded from the gate (checked first so it overrides every
+    other verdict). `unmeasured` = a CLEAN closed exit that is missing
+    exit_price/mfe/mae — it closed for the right reason but we can't trust
+    its excursion stats.
     """
+    if not row.get("has_fill"):
+        return "phantom"
     if (row.get("status") or "").lower() != "closed":
         return "open"
     reason = row.get("exit_reason") or ""
@@ -91,24 +108,27 @@ def classify(row: dict) -> str:
 
 def summarize(rows: List[dict]) -> Dict[str, int]:
     out = {"total": len(rows), "clean": 0, "bad": 0, "other": 0,
-           "open": 0, "unmeasured": 0}
+           "open": 0, "unmeasured": 0, "phantom": 0}
     for r in rows:
         out[classify(r)] += 1
+    # real = entries that were actually a position (exclude phantom no-fill rows)
+    out["real"] = out["total"] - out["phantom"]
     return out
 
 
 def gate_session(conn: sqlite3.Connection, session: str) -> dict:
-    """Pass/fail for ONE session. Green only when every intraday entry that
-    session closed clean AND fully measured (no open carry, no band-aids)."""
+    """Pass/fail for ONE session. Green only when every REAL intraday entry
+    that session (a filled position) closed clean AND fully measured — no open
+    carry, no band-aids. Phantom (no-fill) rows are ignored entirely."""
     rows = _fetch_intraday_outcomes(conn, session=session)
     counts = summarize(rows)
     offenders = [
         {"strategy_id": r["strategy_id"], "symbol": r["symbol"],
          "bar_interval": r["bar_interval"], "entry_ts": r["entry_ts"],
          "exit_reason": r["exit_reason"], "verdict": classify(r)}
-        for r in rows if classify(r) != "clean"
+        for r in rows if classify(r) not in ("clean", "phantom")
     ]
-    passed = counts["total"] > 0 and not offenders
+    passed = counts["real"] > 0 and not offenders
     return {"session": session, "passed": passed,
             "counts": counts, "offenders": offenders}
 
@@ -125,7 +145,7 @@ def per_session_breakdown(conn: sqlite3.Connection,
     for d in sorted(by_session, reverse=True)[:limit]:
         c = summarize(by_session[d])
         c["session"] = d
-        c["passed"] = c["total"] > 0 and c["clean"] == c["total"]
+        c["passed"] = c["real"] > 0 and c["clean"] == c["real"]
         out.append(c)
     return out
 
@@ -157,7 +177,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             res = gate_session(conn, session)
             c = res["counts"]
             print(f"=== Stage 0 gate - session {res['session']} ===")
-            print(f"  intraday entries : {c['total']}")
+            print(f"  intraday entries : {c['total']}  "
+                  f"(real {c['real']}, phantom/no-fill {c['phantom']})")
             print(f"  clean            : {c['clean']}")
             print(f"  bad (leaked)     : {c['bad']}")
             print(f"  other reason     : {c['other']}")
@@ -173,8 +194,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         all_rows = _fetch_intraday_outcomes(conn)
         c = summarize(all_rows)
         print("=== Intraday lifecycle - all-time baseline ===")
-        clean_pct = (100.0 * c["clean"] / c["total"]) if c["total"] else 0.0
-        print(f"  total {c['total']} | clean {c['clean']} ({clean_pct:.0f}%) | "
+        clean_pct = (100.0 * c["clean"] / c["real"]) if c["real"] else 0.0
+        print(f"  real {c['real']} (of {c['total']}, phantom {c['phantom']}) | "
+              f"clean {c['clean']} ({clean_pct:.0f}% of real) | "
               f"bad {c['bad']} | other {c['other']} | "
               f"unmeasured {c['unmeasured']} | open {c['open']}")
         print(f"\n=== Last {args.days} sessions ===")
@@ -183,9 +205,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("  (no intraday outcomes recorded yet)")
         for r in rows:
             flag = "GREEN" if r["passed"] else "RED"
-            print(f"  {r['session']}  entries={r['total']:<3} clean={r['clean']:<3}"
+            print(f"  {r['session']}  real={r['real']:<3} clean={r['clean']:<3}"
                   f" bad={r['bad']:<3} other={r['other']:<2} open={r['open']:<2}"
-                  f" unmeasured={r['unmeasured']:<2}  {flag}")
+                  f" unmeasured={r['unmeasured']:<2} phantom={r['phantom']:<3} {flag}")
         return 0
     finally:
         conn.close()

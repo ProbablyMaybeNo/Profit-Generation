@@ -38,6 +38,40 @@ Donchian rows and per-strategy win rates / expectancy are unusable.
   turning the Stage 0/4 lifecycle verifier RED on bookkeeping noise.
   Tests: `tests/test_outcome_tracker.py` (3 new), full suite 2503 green.
 
+## Shipped 2026-06-11
+
+- **`db.signal_has_fill` / `db.signal_has_any_fill` / `db.mark_outcome_phantom`**
+  (data/db.py) — the single source of truth for "did this signal become a real
+  position?" and a non-fabricating phantom close (exit_reason='phantom_no_fill',
+  exit_price/return/mfe/mae all NULL).
+- **Verifier hardened** (scripts/verify_intraday_lifecycle.py) — no-fill outcomes
+  classify as `phantom` and are excluded from the Stage 0/4 gate entirely
+  (counted, never pass/fail it). The gate now reports real vs phantom; a paused
+  signal-only strategy can no longer turn it RED. Item 4-adjacent.
+- **Orphan-sweep guard** (monitoring/reconcile_positions.py, item 4) —
+  `sweep_orphan_outcomes` now quarantines a no-order outcome as `phantom_no_fill`
+  instead of booking it at a fabricated last-known mark. A sell-only orphan (real
+  position, buy unlinked) still books, via `signal_has_any_fill`.
+- **`phantom_no_fill` added to `CLEANUP_EXIT_REASONS`** (strategy_health.py) so
+  quarantined rows drop out of every eligibility/health/stats query.
+- **One-time quarantine** (scripts/quarantine_phantom_outcomes.py, item 3) —
+  dry-run by default, `--intraday-only` default / `--all` opt-in. Ran
+  `--intraday-only --apply`: **256 intraday phantoms quarantined** (181 stale,
+  68 reconciled, 5 long_exit, 2 trailing) — all from paused strategies, zero live
+  impact. Intraday lifecycle now has 0 no-fill rows.
+- DB backed up first to `data/trading.db.bak_phantom_20260611_*`.
+- Tests: test_verify_intraday_lifecycle (+3), test_reconcile_positions (real-vs-
+  phantom orphan split), test_quarantine_phantom_outcomes (new, 6). Full suite
+  green except one pre-existing date-drift flake (test_macro_fetcher).
+
+**Still open (needs a decision — item 1/2):** the **2,549 `1d`/other phantoms**
+are NOT quarantined. Evidence: the Donchian 1d eligibility basis is currently
+**34 phantom rows (mean −7.3%) + 1 real fill (+2.1%)**. Quarantining them is
+*correct* (those trades never happened) but collapses Donchian's track record to
+n=1, dropping it below `min_outcomes=30` into grace/ineligible. That is an
+outcome-model decision (signal-tracking vs position-scoped) with live-sizing
+consequences — run `quarantine_phantom_outcomes --all` only after deciding.
+
 ## Remaining work
 
 1. **Decide the outcome model.** Either outcomes are position-scoped (one row

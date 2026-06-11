@@ -50,6 +50,7 @@ ALERT_META_KEY_PREFIX = "strategy_health.alerted:"
 CLEANUP_EXIT_REASONS = (
     "reconciled_no_position", "stale_intraday_flatten_missed",
     "broker_reconcile", "orphan_sweep", "reconcile_close",
+    "phantom_no_fill",
 )
 
 
