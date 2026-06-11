@@ -64,13 +64,18 @@ Donchian rows and per-strategy win rates / expectancy are unusable.
   phantom orphan split), test_quarantine_phantom_outcomes (new, 6). Full suite
   green except one pre-existing date-drift flake (test_macro_fetcher).
 
-**Still open (needs a decision — item 1/2):** the **2,549 `1d`/other phantoms**
-are NOT quarantined. Evidence: the Donchian 1d eligibility basis is currently
-**34 phantom rows (mean −7.3%) + 1 real fill (+2.1%)**. Quarantining them is
-*correct* (those trades never happened) but collapses Donchian's track record to
-n=1, dropping it below `min_outcomes=30` into grace/ineligible. That is an
-outcome-model decision (signal-tracking vs position-scoped) with live-sizing
-consequences — run `quarantine_phantom_outcomes --all` only after deciding.
+**1d/other quarantine — DONE 2026-06-11 (Ross's go).** Ran
+`quarantine_phantom_outcomes --all --apply`: **2,553 1d/other phantoms
+quarantined** (total phantom_no_fill = 2,809; 93 real filled outcomes remain as
+the honest dataset). The decision was clear once measured: the 34 phantom
+−7.3% rows were not just noise, they were **freezing Donchian out of trading** —
+its eligibility basis was n=35/−7.3% → INELIGIBLE. After quarantine it is
+n=1/+2.1% → grace (grace_period=True) → **eligible again at reduced size**. So
+the quarantine *unblocked* the one live edge rather than risking it (explains the
+single real Donchian fill ever + flat P&L). DB backed up to
+`data/trading.db.bak_1dquar_20260611_*`. Acceptance criteria below now hold:
+no unfilled signal appears as a closed trade with a non-null return; per-strategy
+stats reconcile to `paper_trades` fills.
 
 ## Remaining work
 
