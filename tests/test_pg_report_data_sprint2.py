@@ -56,6 +56,14 @@ def _seed(dbfile):
         "VALUES ('b-smh', ?, 'intraday-1m-orb', 'SMH', 'buy', 5, 'filled', ?)",
         (psig, f"{TODAY}T15:10:00"),
     )
+    conn.execute(
+        "INSERT INTO paper_trades "
+        "(alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " order_type, status, submitted_at) "
+        "VALUES ('s-smh', NULL, 'intraday-1m-orb', 'SMH', 'sell', 5, "
+        " 'market', 'accepted', ?)",
+        (f"{TODAY}T15:15:00",),
+    )
     # An equity snapshot for today (snapshot-present path).
     conn.execute(
         "INSERT INTO equity_snapshots (recorded_at, portfolio_value, cash, "
@@ -119,9 +127,12 @@ def test_report_renders_new_sections(tmp_path):
     assert "reconciliation/cleanup closes: 1" in out
     assert "reconciled_no_position=1" in out
 
-    # Paused strategy surfaced.
+    # Paused strategy surfaced, including the locked-position anomaly caused by
+    # a working sell reserving all held quantity.
     assert "PAUSED" in out
     assert "intraday-1m-orb" in out
+    assert "*** ALERT: PAUSED STRATEGY LOCKED POSITION" in out
+    assert "available=0" in out
 
 
 def test_report_flags_missing_snapshot(tmp_path):

@@ -146,6 +146,16 @@ def close_for_exit(
     return True
 
 
+def _signal_has_fill(conn: sqlite3.Connection, signal_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM paper_trades "
+        " WHERE signal_id = ? AND side = 'buy' "
+        "   AND status IN ('filled','partially_filled') LIMIT 1",
+        (signal_id,),
+    ).fetchone()
+    return row is not None
+
+
 def reconcile_signals(
     conn: sqlite3.Connection,
     *,
@@ -154,6 +164,7 @@ def reconcile_signals(
     bar_intervals=None,
     bars_fetcher=None,
     open_only: bool = False,
+    require_fill: bool = False,
 ) -> Dict[str, int]:
     """
     Walk signals in (bar_ts, id) order; open or close outcomes as needed.
@@ -170,6 +181,15 @@ def reconcile_signals(
     while the EOD flatten (`close_intraday_positions`) owns the close and
     stamps the true `exit_reason='eod_close'` with MFE/MAE — rather than an
     intraday scanner long_exit signal pre-empting it as 'long_exit_signal'.
+
+    `require_fill` (phantom-outcomes fix, 2026-06-09): when True, a
+    long_entry signal only gets an outcome if a filled/partially-filled buy
+    exists for it in paper_trades. The intraday pass needs this: an unfilled
+    intraday signal's outcome can never be closed by the EOD flatten (there
+    is no position), so it inevitably leaks until the orphan sweep books it
+    as a fabricated reconciled_no_position return — and signal-only observe
+    strategies (e.g. Stage 3 candle-continuation) would generate dozens of
+    those per day, polluting the lifecycle verifier and per-strategy stats.
 
     Pass since_iso to scope by bar_ts; default is full history.
     """
@@ -194,6 +214,9 @@ def reconcile_signals(
     counts = {"opened": 0, "closed": 0, "noop": 0}
     for row in conn.execute(sql, tuple(params)).fetchall():
         if row["signal_type"] == "long_entry":
+            if require_fill and not _signal_has_fill(conn, int(row["id"])):
+                counts["noop"] += 1
+                continue
             counts["opened" if open_for_entry(conn, row) else "noop"] += 1
         elif open_only:
             counts["noop"] += 1

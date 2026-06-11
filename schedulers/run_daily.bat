@@ -28,6 +28,13 @@ REM 5.5.3 — EOD close-out of intraday-strategy positions. Best-effort.
 REM Failures here must not poison the daily-report exit code.
 "%PY%" -m monitoring.close_intraday_positions >> "%LOGFILE%" 2>&1
 
+REM P2 — End-of-session intraday lifecycle assertion, AFTER the broker flatten.
+REM Read-only gate: RED means at least one same-session intraday entry is still
+REM open, closed via cleanup, or missing exit/MFE/MAE measurement. Keep the
+REM original report exit code; this line is an operational alarm in the log.
+REM --notify pushes the GREEN/RED gate result to Telegram (Stage 4 zero-touch).
+"%PY%" -m scripts.verify_intraday_lifecycle --session today --notify >> "%LOGFILE%" 2>&1
+
 REM Best-effort cache pruning.
 "%PY%" -c "from config.cache import cache_purge_expired; print('cache_purge_expired:', cache_purge_expired())" >> "%LOGFILE%" 2>&1
 

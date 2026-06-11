@@ -280,3 +280,47 @@ def test_reconcile_processes_intraday_intervals(conn):
     ).fetchone()
     assert row is not None
     assert row["return_pct"] == pytest.approx(1.5)
+
+
+def _record_intraday_entry(c, strat, sym, bar_ts, close, interval="15m"):
+    return db.record_signal(c, strategy_id=strat, symbol=sym, bar_ts=bar_ts,
+                            signal_type="long_entry", close=close,
+                            bar_interval=interval)
+
+
+def _fill_buy(c, signal_id, strat, sym, qty=5):
+    c.execute(
+        "INSERT INTO paper_trades "
+        "(alpaca_order_id, signal_id, strategy_id, symbol, side, qty, "
+        " status, submitted_at) "
+        "VALUES (?, ?, ?, ?, 'buy', ?, 'filled', '2026-06-09T14:00:00')",
+        (f"o-{signal_id}", signal_id, strat, sym, qty),
+    )
+
+
+def test_require_fill_skips_unfilled_signal(conn):
+    sid = _record_intraday_entry(conn, "strat-A", "TSLA",
+                                 "2026-06-09T10:00:00", 300.0)
+    counts = outcome_tracker.reconcile_signals(
+        conn, bar_intervals=["15m"], open_only=True, require_fill=True)
+    assert counts["opened"] == 0
+    assert counts["noop"] == 1
+    assert _outcome(conn, sid) is None
+
+
+def test_require_fill_opens_filled_signal(conn):
+    sid = _record_intraday_entry(conn, "strat-A", "TSLA",
+                                 "2026-06-09T10:00:00", 300.0)
+    _fill_buy(conn, sid, "strat-A", "TSLA")
+    counts = outcome_tracker.reconcile_signals(
+        conn, bar_intervals=["15m"], open_only=True, require_fill=True)
+    assert counts["opened"] == 1
+    o = _outcome(conn, sid)
+    assert o is not None and o["status"] == "open"
+
+
+def test_require_fill_default_off_preserves_legacy(conn):
+    sid = _record_entry(conn, "strat-A", "GDX", "2026-06-09", 50.0)
+    counts = outcome_tracker.reconcile_signals(conn)
+    assert counts["opened"] == 1
+    assert _outcome(conn, sid) is not None

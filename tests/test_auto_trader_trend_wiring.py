@@ -136,6 +136,48 @@ def test_resolve_trailing_config_returns_none_when_no_method(winner_settings):
     assert at._resolve_trailing_config(TREND_SID, s, []) is None
 
 
+def test_trailing_stop_update_skips_non_owner_shared_symbol(
+    isolated_db, winner_settings, trend_declarations,
+):
+    """P8 guard: legacy shared symbol may have two DB holders, but only the
+    first/priority owner may advance a trailing stop for the broker position."""
+    conn = db.init_db()
+    owner = TREND_SID
+    other = MR_SID
+    for oid, sid, submitted_at in (
+        ("b-owner", owner, "2026-05-14T20:30:00Z"),
+        ("b-other", other, "2026-05-14T20:30:05Z"),
+    ):
+        db.record_paper_trade(conn, {
+            "alpaca_order_id": oid,
+            "strategy_id": sid,
+            "symbol": "IWM",
+            "side": "buy",
+            "qty": 10,
+            "order_type": "market",
+            "fill_price": 100.0,
+            "submitted_at": submitted_at,
+            "status": "filled",
+        })
+
+    decls = [
+        {"id": owner, "compute": "x", "strategy_class": "trend",
+         "trailing_stop": {"method": "atr_trail", "multiplier": 3.0}},
+        {"id": other, "compute": "y", "strategy_class": "trend",
+         "trailing_stop": {"method": "atr_trail", "multiplier": 3.0}},
+    ]
+    updates = at._update_trailing_stops_for_open_positions(
+        conn,
+        {**winner_settings, "trailing_stop": {"method": "atr_trail", "multiplier": 3.0}},
+        bars_fetcher=lambda s: _ohlc(list(range(80, 105))),
+        tracked_strategies=decls,
+    )
+
+    assert [u["strategy_id"] for u in updates] == [owner]
+    assert ts_mod.get_stop(conn, strategy_id=owner, symbol="IWM") is not None
+    assert ts_mod.get_stop(conn, strategy_id=other, symbol="IWM") is None
+
+
 def test_trailing_stop_advances_after_entry(
     isolated_db, winner_settings, trend_declarations, stub_submit,
 ):

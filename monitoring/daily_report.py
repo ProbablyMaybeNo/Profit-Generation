@@ -388,10 +388,15 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         # Kept non-overlapping with the 1d pass (distinct bar_intervals) so
         # no 1d outcome is double-opened. Runs here on the EOD schedule so
         # the open happens before close_intraday_positions fires at 16:00 ET.
+        # require_fill: an unfilled intraday signal has no position for the
+        # flatten to close, so its outcome could only ever leak into the
+        # orphan sweep as a fabricated reconciled_no_position booking —
+        # signal-only observe strategies (Stage 3) would add dozens a day.
         intraday_counts = outcome_tracker.reconcile_signals(
             conn,
             bar_intervals=["1m", "5m", "15m", "1d-intraday"],
             open_only=True,
+            require_fill=True,
         )
         counts["opened"] += intraday_counts["opened"]
         counts["noop"] += intraday_counts["noop"]

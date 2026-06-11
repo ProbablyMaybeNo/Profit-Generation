@@ -16,7 +16,16 @@ _WSL_LOG = "/mnt/d/AI-Workstation/Antigravity/apps/Profit Generation/logs"
 _WIN_LOG = r"D:\AI-Workstation\Antigravity\apps\Profit Generation\logs"
 DB = os.environ.get("PG_TRADING_DB") or (_WSL_DB if os.path.exists(_WSL_DB) else _WIN_DB)
 LOGDIR = _WSL_LOG if os.path.exists(_WSL_LOG) else _WIN_LOG
+# Project root (for credentials.json + the posture note). Derived from the DB
+# path so a PG_TRADING_DB temp-file override (tests) degrades gracefully.
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(DB)))
 TODAY = date.today().isoformat()
+
+# Cleanup exit reasons: bookkeeping of past lifecycle leaks, NOT trading.
+RECONCILE_REASONS = (
+    "reconciled_no_position", "stale_intraday_flatten_missed",
+    "broker_reconcile", "orphan_sweep", "reconcile_close",
+)
 
 out = []
 def p(s=""): out.append(s)
@@ -57,6 +66,55 @@ def q(sql, args=()):
         return []
 
 p(f"=== PROFIT GENERATION SYSTEM DATA for {TODAY} (auto-extracted) ===")
+
+# Current posture — a maintained note explaining deliberate system state
+# (pauses, resets, observe-only strategies) so the analyst never mistakes
+# policy for malfunction. Edit schedulers/hermes_posture.txt when it changes.
+p("\n[CURRENT POSTURE]")
+_posture = os.path.join(ROOT_DIR, "schedulers", "hermes_posture.txt")
+try:
+    with open(_posture, errors="ignore") as _fh:
+        for _line in _fh.read().strip().splitlines():
+            p(f"  {_line}")
+except Exception:
+    p("  (posture note unavailable)")
+
+# Broker truth — live Alpaca account + positions. The DB ledger views further
+# down can drift (stale ownership rows, leaked outcomes); the broker is
+# authoritative for what is actually held right now.
+p("\n[BROKER TRUTH - ALPACA LIVE] (AUTHORITATIVE for open positions)")
+broker_syms = None
+try:
+    import json as _json
+    import urllib.request as _ur
+    with open(os.path.join(ROOT_DIR, "config", "credentials.json")) as _fh:
+        _al = _json.load(_fh)["alpaca"]
+    _hdr = {"APCA-API-KEY-ID": _al["api_key"],
+            "APCA-API-SECRET-KEY": _al["secret_key"]}
+    _base = _al.get("base_url", "https://paper-api.alpaca.markets")
+
+    def _get(path):
+        return _json.load(_ur.urlopen(
+            _ur.Request(_base + path, headers=_hdr), timeout=15))
+
+    _acct = _get("/v2/account")
+    _pos = _get("/v2/positions")
+    _day = float(_acct["equity"]) - float(_acct["last_equity"])
+    p(f"  account: equity=${float(_acct['equity']):.2f} "
+      f"cash=${float(_acct['cash']):.2f} day P/L=${_day:+.2f} "
+      f"(vs last_equity ${float(_acct['last_equity']):.2f})")
+    p(f"  open positions at broker: {len(_pos)} — if a DB view below claims "
+      "more holdings than this, that is LEDGER DRIFT, not locked capital.")
+    broker_syms = set()
+    for _x in _pos:
+        broker_syms.add(str(_x["symbol"]).upper())
+        p(f"    {_x['symbol']} {_x['side']} qty={_x['qty']} "
+          f"avg_entry={_x['avg_entry_price']} now={_x['current_price']} "
+          f"unrealized=${float(_x['unrealized_pl']):+.2f} "
+          f"today=${float(_x['unrealized_intraday_pl']):+.2f}")
+except Exception as _e:
+    p(f"  (broker query unavailable: {type(_e).__name__}: {_e} — DB views "
+      "below are unverified; treat position/holdings counts with caution)")
 
 # Portfolio / equity
 p("\n[PORTFOLIO]")
@@ -150,9 +208,14 @@ es = q("SELECT COUNT(*) n FROM paper_trades WHERE substr(submitted_at,1,10)=? AN
 p(f"  ATR initial stops attached today: {es[0]['n'] if es else 0}")
 ts = q("SELECT COUNT(*) n FROM trailing_stops")
 ts_ex = q("SELECT symbol,method,stop_price,extreme_price,strategy_id FROM trailing_stops ORDER BY updated_at DESC LIMIT 12")
-p(f"  trailing stops armed (total): {ts[0]['n'] if ts else 0}")
+p(f"  trailing-stop state rows (total): {ts[0]['n'] if ts else 0} — rows for "
+  "symbols NOT held at the broker are STALE state, not armed stops on live "
+  "positions.")
 for r in ts_ex:
-    p(f"    {r['symbol']} {r['method']} stop={r['stop_price']:.2f} extreme={r['extreme_price']:.2f} ({r['strategy_id']})")
+    stale = ""
+    if broker_syms is not None and str(r["symbol"]).upper() not in broker_syms:
+        stale = " [STALE - not held at broker]"
+    p(f"    {r['symbol']} {r['method']} stop={r['stop_price']:.2f} extreme={r['extreme_price']:.2f} ({r['strategy_id']}){stale}")
 pyr = q("SELECT COUNT(*) n FROM paper_trades WHERE substr(submitted_at,1,10)=? AND pyramid_tier IS NOT NULL AND pyramid_tier>0", (TODAY,))
 pyrsk = q("SELECT COUNT(*) n FROM intraday_skips WHERE substr(recorded_at,1,10)=? AND gate LIKE '%pyramid%'", (TODAY,))
 p(f"  pyramid adds today: {pyr[0]['n'] if pyr else 0}; pyramid skips today: {pyrsk[0]['n'] if pyrsk else 0}")
@@ -216,6 +279,29 @@ st = q("""SELECT s.strategy_id, COUNT(*) n,
           JOIN signals s ON s.id=o.signal_id GROUP BY s.strategy_id ORDER BY n DESC""")
 for r in st:
     p(f"  {r['strategy_id']}: n={r['n']} win_rate={r['win_rate']}% avg_ret={r['avg_ret']}%")
+p("  WARNING: the stats above mix real exits with reconciliation/cleanup "
+  "bookings of leaked positions. Judge strategy edge on the CLEAN block below.")
+
+# Clean-exit stats: real strategy exits only (trailing stop, exit signal,
+# EOD close, stop). This is the only block fit for edge judgments — the
+# all-outcomes stats are contaminated by lifecycle-leak cleanup bookings.
+p("\n[STRATEGY STATS - CLEAN EXITS ONLY] (judge strategy edge HERE)")
+_ph = ",".join("?" * len(RECONCILE_REASONS))
+stc = q(f"""SELECT s.strategy_id, COUNT(*) n,
+                  ROUND(AVG(o.return_pct),3) avg_ret,
+                  ROUND(100.0*SUM(CASE WHEN o.return_pct>0 THEN 1 ELSE 0 END)/COUNT(*),1) win_rate
+           FROM outcomes o JOIN signals s ON s.id=o.signal_id
+          WHERE o.status='closed'
+            AND (o.exit_reason IS NULL OR o.exit_reason NOT IN ({_ph}))
+          GROUP BY s.strategy_id ORDER BY n DESC""", RECONCILE_REASONS)
+if stc:
+    for r in stc:
+        p(f"  {r['strategy_id']}: n={r['n']} win_rate={r['win_rate']}% avg_ret={r['avg_ret']}%")
+else:
+    p("  no clean-exit closed outcomes yet.")
+p("  NOTE: clean-exit history before 2026-06-08 predates the working stop "
+  "stack (sub-penny stop fix 06-02; trailing stops + loser cap 06-02..08) "
+  "and overlaps a market selloff — small n since then is expected.")
 
 # Skip gate distribution (last 2 days)
 p("\n[INTRADAY SKIP GATES - last 2 days]")
@@ -228,10 +314,6 @@ for r in sk:
 # reconcile/orphan/stale sweeps are bookkeeping, NOT trading — counting them as
 # "trades closed today" overstates activity. Split them out explicitly.
 p("\n[FRESH ACTIVITY vs RECONCILIATION] (outcomes closed today)")
-RECONCILE_REASONS = (
-    "reconciled_no_position", "stale_intraday_flatten_missed",
-    "broker_reconcile", "orphan_sweep", "reconcile_close",
-)
 # M8/M9: key "closed today" on exit_ts (the trade's actual close/session date),
 # NOT updated_at (the UTC wall-clock when the row was WRITTEN). A close written
 # after 00:00 UTC — i.e. any close after ~17:00 PT, which is every EOD reconcile —
@@ -288,8 +370,20 @@ if held:
         if pr and pr["expires_at"]:
             pstate += f"(until {pr['expires_at'][:10]})"
         dupe = " [SHARED SYMBOL]" if len(sym_owners.get(r["symbol"], set())) > 1 else ""
+        drift = ""
+        if broker_syms is not None and str(r["symbol"]).upper() not in broker_syms:
+            drift = " [NOT AT BROKER - stale ledger row, no capital locked]"
         p(f"  {sid} {r['symbol']}: held={heldq} available={availq} "
-          f"open_orders={r['open_orders'] or 0} [{pstate}]{dupe}")
+          f"open_orders={r['open_orders'] or 0} [{pstate}]{dupe}{drift}")
+        if pr and heldq > 0 and availq <= 0 and (r["open_orders"] or 0) > 0:
+            p("  *** ALERT: PAUSED STRATEGY LOCKED POSITION — "
+              f"{sid} {r['symbol']} is paused but still held, with "
+              f"available=0 because {r['open_orders'] or 0} working "
+              "sell/order row reserves the position. The owner/exit helpers "
+              "treat that later market sell as the closing intent, so the "
+              "paused flatten path will not retry while the DB still shows "
+              "held>0. Run order_sync/broker reconciliation or perform an "
+              "approved broker cleanup to move the order terminal. ***")
 else:
     p("  no held positions in the DB view.")
 # Duplicate-symbol ownership summary (the unintended-short root cause signature).
@@ -303,6 +397,58 @@ else:
 if paused_map:
     p(f"  paused strategies ({len(paused_map)}): "
       + ", ".join(sorted(paused_map.keys())))
+
+# P8: expose the trailing-stop conflict signature in daily reports. A symbol with
+# multiple strategy stop rows can make exits fight for one broker position; equal
+# extremes with different stops are especially suspicious because strategies are
+# sharing the same market path but reserving different exits.
+p("\n[TRAILING STOP CONFLICTS]")
+ts_rows = q("""
+    SELECT strategy_id, symbol, side, method, stop_price, extreme_price, updated_at
+      FROM trailing_stops
+     ORDER BY symbol, side, strategy_id
+""")
+owner_rows = q("""
+    SELECT symbol, strategy_id, MIN(submitted_at) first_buy
+      FROM paper_trades
+     WHERE side='buy' AND status IN ('filled','partially_filled')
+     GROUP BY symbol, strategy_id
+     ORDER BY symbol, first_buy
+""")
+owners = {}
+for r in owner_rows:
+    owners.setdefault(r["symbol"], r["strategy_id"])
+by_symbol_side = {}
+for r in ts_rows:
+    by_symbol_side.setdefault((r["symbol"], r["side"]), []).append(r)
+conflicts = []
+for (symbol, side), rows in sorted(by_symbol_side.items()):
+    if len(rows) <= 1:
+        continue
+    rounded_extremes = {round(float(r["extreme_price"]), 4) for r in rows}
+    rounded_stops = {round(float(r["stop_price"]), 4) for r in rows}
+    reasons = ["multiple_stop_owners"]
+    if len(rounded_extremes) < len(rows):
+        reasons.append("duplicate_extreme")
+    if len(rounded_stops) > 1:
+        reasons.append("conflicting_stop_levels")
+    owner = owners.get(symbol, "unknown")
+    parts = []
+    for r in rows:
+        role = "owner" if r["strategy_id"] == owner else "non_owner"
+        parts.append(
+            f"{role}={r['strategy_id']} stop={r['stop_price']:.4f} "
+            f"extreme={r['extreme_price']:.4f} method={r['method']}"
+        )
+    conflicts.append(
+        f"  {symbol} {side}: owner={owner}; reasons={','.join(reasons)}; "
+        + " | ".join(parts)
+    )
+if conflicts:
+    for line in conflicts[:20]:
+        p(line)
+else:
+    p("  no duplicate trailing-stop rows by symbol/side (good).")
 
 c.close()
 print("\n".join(out))

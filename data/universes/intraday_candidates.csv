@@ -1,0 +1,17 @@
+symbol,avg_daily_dollar_volume_M,atr_pct,avg_daily_range_pct,intraday_rank,notes
+SOXL,9056,15.70,9.43,1,3x semiconductor ETF; extreme range but volatility decays = deep ATR stops needed; best for strong trend days only
+COIN,1966,5.80,5.62,2,High beta crypto-adjacent; excellent range for swing; lower dollar volume limits position size
+AMD,12165,6.61,4.82,3,High liquidity + high range; strong momentum character; excellent continuation candidate
+PLTR,6563,5.07,4.35,4,High beta AI name; consistent range; strong trend-following characteristics in 2025-2026
+TSLA,23526,3.62,3.52,5,Massive liquidity; reliable intraday trends; news-sensitive; primary long continuation target
+NVDA,33074,3.97,3.03,6,Highest dollar volume on list; moderate range; premier name for momentum continuation
+META,10346,3.08,2.61,7,High liquidity; moderate range; cleaner trends than NVDA intraday; less news noise
+TQQQ,5381,4.96,4.14,8,3x QQQ; good liquidity + range; useful as NVDA/META proxy with leverage built in
+SMH,4730,4.21,2.78,9,Semiconductor ETF; less decay risk than SOXL; good range for sector momentum
+AMZN,10833,2.82,2.42,10,High liquidity; range acceptable; tends to trend cleanly; lower volatility than TSLA/AMD
+AAPL,12358,1.86,1.97,11,Massive liquidity but low intraday range; marginal for this strategy; better as trend filter
+SPXL,688,2.87,2.98,12,3x S&P; low dollar volume vs peers; TQQQ preferred unless S&P specific trend trade
+IWM,9511,1.89,1.66,13,Small-cap ETF; decent liquidity; low range; marginal for momentum continuation
+XLK,2191,2.74,1.96,14,Tech sector ETF; moderate liquidity; low range; better as trend filter than trade vehicle
+QQQ,33088,1.63,1.41,15,Huge liquidity but too low range for intraday pattern triggers; use as trend filter
+SPY,46908,0.96,1.00,16,Deepest liquidity on market; range too small for pattern-based entries; pure trend filter only
