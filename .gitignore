@@ -13,3 +13,4 @@ __pycache__/
 .env
 venv/
 *.log
+data/*.db.bak_*
