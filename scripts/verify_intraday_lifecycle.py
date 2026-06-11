@@ -133,6 +133,47 @@ def gate_session(conn: sqlite3.Connection, session: str) -> dict:
             "counts": counts, "offenders": offenders}
 
 
+def format_notify(res: dict) -> str:
+    """One Telegram-friendly line+detail for the EOD gate result. `real==0`
+    is reported as 'no entries' (gate unproven, not failed) so a quiet day
+    doesn't read as a regression."""
+    c = res["counts"]
+    session = res["session"]
+    if res["passed"]:
+        head = f"\U0001F7E2 Intraday lifecycle GREEN — {session}"
+        body = (f"{c['clean']}/{c['real']} real intraday entries closed clean "
+                f"(phantom {c['phantom']} ignored). Stage 4 gate PASSED.")
+        return f"{head}\n{body}"
+    if c["real"] == 0:
+        head = f"⚪ Intraday lifecycle — {session}: no real entries"
+        body = (f"0 filled intraday positions today "
+                f"(phantom/no-fill {c['phantom']}). Stage 4 gate unproven, "
+                f"not failed — rolls to next session.")
+        return f"{head}\n{body}"
+    head = f"\U0001F534 Intraday lifecycle RED — {session}"
+    detail = (f"real {c['real']} | clean {c['clean']} | bad {c['bad']} | "
+              f"other {c['other']} | open {c['open']} | unmeasured "
+              f"{c['unmeasured']}")
+    offs = res.get("offenders") or []
+    lines = [head, detail]
+    for o in offs[:5]:
+        lines.append(f"• {o['verdict']} {o['strategy_id']}/{o['symbol']} "
+                     f"[{o['bar_interval']}] reason={o['exit_reason']}")
+    return "\n".join(lines)
+
+
+def notify_session(res: dict, *, send_fn=None) -> bool:
+    """Best-effort Telegram push of the gate result. No-op-safe: a missing
+    sender or creds returns False without raising (keeps the EOD batch green)."""
+    try:
+        if send_fn is None:
+            from monitoring import telegram_alerter
+            send_fn = telegram_alerter.send_message
+        return bool(send_fn(format_notify(res)))
+    except Exception:
+        return False
+
+
 def per_session_breakdown(conn: sqlite3.Connection,
                           limit: int = 10) -> List[dict]:
     rows = _fetch_intraday_outcomes(conn)
@@ -168,6 +209,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Gate ONE session (YYYY-MM-DD). Exit 0 if green.")
     parser.add_argument("--days", type=int, default=10,
                         help="How many recent sessions to tabulate.")
+    parser.add_argument("--notify", action="store_true",
+                        help="With --session: push the GREEN/RED gate result to "
+                             "Telegram (best-effort). Read-only otherwise.")
     args = parser.parse_args(argv)
 
     conn = _open_conn()
@@ -189,6 +233,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f" [{o['bar_interval']}] entered {o['entry_ts']}"
                       f" reason={o['exit_reason']}")
             print(f"  GATE: {'GREEN' if res['passed'] else 'RED'}")
+            if args.notify:
+                sent = notify_session(res)
+                print(f"  notify: {'sent' if sent else 'skipped (no creds/sender)'}")
             return 0 if res["passed"] else 1
 
         all_rows = _fetch_intraday_outcomes(conn)

@@ -144,6 +144,46 @@ def test_gate_green_with_phantom_noise_alongside_clean_real():
     assert res["passed"] is True
 
 
+def test_format_notify_green():
+    res = {"session": "2026-06-12", "passed": True, "offenders": [],
+           "counts": {"real": 1, "clean": 1, "phantom": 2, "bad": 0,
+                      "other": 0, "open": 0, "unmeasured": 0, "total": 3}}
+    msg = v.format_notify(res)
+    assert "GREEN" in msg and "Stage 4 gate PASSED" in msg
+
+
+def test_format_notify_no_entries_is_unproven_not_failed():
+    res = {"session": "2026-06-12", "passed": False, "offenders": [],
+           "counts": {"real": 0, "clean": 0, "phantom": 5, "bad": 0,
+                      "other": 0, "open": 0, "unmeasured": 0, "total": 5}}
+    msg = v.format_notify(res)
+    assert "no real entries" in msg
+    assert "unproven" in msg and "RED" not in msg
+
+
+def test_format_notify_red_lists_offenders():
+    res = {"session": "2026-06-12", "passed": False,
+           "offenders": [{"verdict": "bad", "strategy_id": "intraday-x",
+                          "symbol": "AMD", "bar_interval": "15m",
+                          "exit_reason": "stale_intraday_flatten_missed"}],
+           "counts": {"real": 1, "clean": 0, "phantom": 0, "bad": 1,
+                      "other": 0, "open": 0, "unmeasured": 0, "total": 1}}
+    msg = v.format_notify(res)
+    assert "RED" in msg and "intraday-x/AMD" in msg
+
+
+def test_notify_session_best_effort_on_failure():
+    def boom(_):
+        raise RuntimeError("no network")
+    res = {"session": "2026-06-12", "passed": True, "offenders": [],
+           "counts": {"real": 1, "clean": 1, "phantom": 0, "bad": 0,
+                      "other": 0, "open": 0, "unmeasured": 0, "total": 1}}
+    assert v.notify_session(res, send_fn=boom) is False
+    sent = {}
+    assert v.notify_session(res, send_fn=lambda t: sent.setdefault("t", t) or True) is True
+    assert "GREEN" in sent["t"]
+
+
 def test_resolve_session_accepts_today_keyword(monkeypatch):
     class FixedDate(date):
         @classmethod
