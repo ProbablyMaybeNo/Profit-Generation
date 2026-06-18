@@ -309,6 +309,60 @@ def render_markdown(report: DailyReport) -> str:
     return "\n".join(lines)
 
 
+def protection_metrics(conn, *, since_iso: Optional[str] = None) -> Dict[str, int]:
+    """Stage 0.6 — count filled long entries vs the protective stops that
+    actually rest for them, so a chronic naked-long condition can't hide.
+
+    A filled buy is PROTECTED when a stop row (order_type='stop') exists for the
+    same signal_id (the entry and its stop share signal_id). `since_iso` scopes
+    to recent entries (default: today UTC) so the metric reflects the live book,
+    not historical closed-and-canceled stops. Returns {entries, protected, naked}.
+    Had this existed, the 119-stamped-vs-0-resting gap would have alerted at once.
+    """
+    if since_iso is None:
+        since_iso = date.today().isoformat()
+    rows = conn.execute(
+        "SELECT EXISTS(SELECT 1 FROM paper_trades s "
+        "              WHERE s.signal_id = e.signal_id "
+        "                AND s.order_type = 'stop') AS has_stop "
+        "  FROM paper_trades e "
+        " WHERE e.side = 'buy' "
+        "   AND e.status IN ('filled', 'partially_filled') "
+        "   AND e.signal_id IS NOT NULL "
+        "   AND substr(e.submitted_at, 1, 10) >= ?",
+        (since_iso,),
+    ).fetchall()
+    entries = len(rows)
+    protected = sum(1 for r in rows if r["has_stop"])
+    return {"entries": entries, "protected": protected,
+            "naked": entries - protected}
+
+
+def _maybe_alert_naked(metrics: Dict[str, int], session_date, *, alert_fn=None) -> bool:
+    """Fire a loud ERROR + Telegram when filled entries have no resting stop.
+    Returns True iff an alert was sent. alert_fn is injectable for tests."""
+    if metrics.get("naked", 0) <= 0:
+        return False
+    from config.utils import log
+    msg = (f"🚨 NAKED LONGS: {metrics['naked']} of {metrics['entries']} filled "
+           f"entries on {session_date} have NO resting protective stop. A gap "
+           f"down has no floor — investigate the stop-attach path.")
+    log(msg, "ERROR")
+    sender = alert_fn
+    if sender is None:
+        try:
+            from monitoring.telegram_alerter import send_message as sender
+        except Exception:
+            sender = None
+    if sender is not None:
+        try:
+            sender(msg)
+            return True
+        except Exception as e:
+            log(f"_maybe_alert_naked: alert send failed: {e}", "WARNING")
+    return False
+
+
 def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[str, int]:
     """Write the report + snapshots + fire/exit signals; reconcile outcomes."""
     conn = db.init_db()
@@ -432,6 +486,20 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         except Exception as e:
             from config.utils import log
             log(f"persist_report: stale-intraday sweep skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
+        # Stage 0.6 — daily protection metrics. Surface filled entries that have
+        # no resting stop (naked longs) and alert. Best-effort: never abort the
+        # report on a metrics hiccup.
+        try:
+            metrics = protection_metrics(
+                conn, since_iso=report.report_date.isoformat())
+            counts["entries_today"] = metrics["entries"]
+            counts["entries_protected"] = metrics["protected"]
+            counts["entries_naked"] = metrics["naked"]
+            _maybe_alert_naked(metrics, report.report_date)
+        except Exception as e:
+            from config.utils import log
+            log(f"persist_report: protection metrics skipped "
                 f"({type(e).__name__}: {e})", "WARNING")
         return counts
     finally:

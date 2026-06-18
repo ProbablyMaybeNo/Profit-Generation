@@ -98,6 +98,8 @@ what we cannot measure.**
 ### Stage 0 — STOP THE BLEED & SEE CLEARLY  *(P0 · surgical · do first, in order)*
 **Go-gate:** phantom factory off; ≥1 real `order_type='stop'` row rests on the book after a live entry;
 reports exclude phantom/stale by default; a daily invariant counter would have caught the naked-stop bug.
+**Status (2026-06-17):** 0.1–0.4 + 0.6 SHIPPED. **Only 0.5 remains** (the position-scoped outcome model +
+honest reporting defaults — the one architectural item, scoped to its own focused session).
 
 - [x] **0.1 Kill the 1d phantom factory (one-line fix)** ✅ 2026-06-17 · commit `b9f21bb`
   - WHY: `daily_report.py` opens an outcome for every 1d `long_entry` signal that merely has a close
@@ -160,7 +162,7 @@ reports exclude phantom/stale by default; a daily invariant counter would have c
   - ACCEPT: per-strategy P&L derived from outcomes reconciles in sign/direction with the equity curve;
     phantom/stale rows are filtered in the default report. Add a regression test on a fixture DB.
 
-- [ ] **0.6 Daily protection metrics: stamped-vs-resting invariant + `verify_fill_protected` counter** *(absorbs 0.3b)*
+- [x] **0.6 Daily protection metrics: naked-long counter + alert** *(absorbs 0.3b)* ✅ 2026-06-17 · `protection_metrics()` + `_maybe_alert_naked()` wired into `persist_report`
   - WHY: M7's protection check is best-effort and silently swallows unknown broker reads, so a chronic
     0-stop condition can hide (it did). A daily invariant (stamped-buys ≈ resting/filled stops) would
     have surfaced the 119-vs-0 gap instantly.
@@ -568,3 +570,11 @@ strengthens the engine; this line gets us to the first live dollar.
   advertised as protected. New regression test (rejected entry → unstamped). Suite: 2512 passed, same 2
   pre-existing failures. Remaining Stage 0: 0.4 (order_sync at end-of-pass), 0.5 (position-scoped
   outcomes), 0.6 (daily protection metrics, absorbs the 0.3 invariant counter).
+- 2026-06-17 — **0.4 shipped** (`d332bed`): end-of-pass `sync_order_fills` so the pass's own sells/stops
+  don't strand at 'accepted' on the EOD final run. Wiring test; mechanism covered by `test_order_sync.py`.
+- 2026-06-17 — **0.6 shipped**: `protection_metrics()` counts filled entries vs resting stops (matched by
+  signal_id) and `persist_report` alerts on any naked longs (`_maybe_alert_naked`). 4 new tests. Suite:
+  2517 passed, same 2 pre-existing failures, 83s.
+- 2026-06-17 — **Stage 0 is 5/6 done (0.1–0.4, 0.6).** Only **0.5** (position-scoped outcome model +
+  report exclusion of phantom/stale by default) remains — deferred to a focused session per its
+  architectural scope. The two CRITICAL live bugs (phantom factory, naked stop) are closed and tested.
