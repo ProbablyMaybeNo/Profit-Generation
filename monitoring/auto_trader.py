@@ -640,7 +640,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     market_regime: Optional[str] = None,
                     tracked_strategies: Optional[List[dict]] = None,
                     remaining_bp_budget: Optional[float] = None,
-                    remaining_heat_usd: Optional[float] = None) -> dict:
+                    remaining_heat_usd: Optional[float] = None,
+                    risk_regime_scale: float = 1.0) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
@@ -776,12 +777,18 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         )
         sp = (size_stop or {}).get("stop_price")
         rps = (entry_px - sp) if (sp is not None and entry_px > 0) else None
+        # Stage 2.2 — scale the per-trade risk % by the daily risk regime
+        # (risk_on 1.0x / transitional 0.5x / risk_off 0.25x). risk_regime_scale
+        # defaults to 1.0 (no change) when the gate is disabled or unset.
+        base_risk_pct = float(settings.get(
+            "risk_per_trade_pct", sizing_mod.DEFAULT_RISK_PER_TRADE_PCT))
         atr_risk_inputs = {
             "entry_price": entry_px,
             "risk_per_share": rps if (rps is not None and rps > 0) else None,
             "atr": (size_stop or {}).get("atr"),
-            "risk_pct": float(settings.get(
-                "risk_per_trade_pct", sizing_mod.DEFAULT_RISK_PER_TRADE_PCT)),
+            "risk_pct": base_risk_pct * float(risk_regime_scale),
+            "risk_pct_base": base_risk_pct,
+            "risk_regime_scale": float(risk_regime_scale),
         }
     sizing = sizing_mod.compute_notional(
         conn, sid,
@@ -3502,6 +3509,20 @@ def process_signals(
     current_regime = rr_mod.latest_regime(conn)
     regime_tracked = _TRACKED  # captured for tests via monkeypatch
 
+    # Stage 2.2 — daily risk-environment score (risk_on/transitional/risk_off).
+    # Read once per run; feeds the class-vs-regime eligibility gate below and
+    # the per-trade risk-% scale in _process_entry. Distinct from current_regime
+    # (the trend-character axis). Gate is on by default; disable via
+    # settings.risk.regime_gate.enabled=false (sizing scale then 1.0).
+    from monitoring import regime as risk_regime_mod
+    from monitoring import event_calendar as event_cal_mod
+    risk_regime_cfg = (settings.get("risk") or {}).get("regime_gate") or {}
+    risk_regime_gate_enabled = bool(risk_regime_cfg.get("enabled", True))
+    risk_regime_score = risk_regime_mod.latest_regime_score(conn)
+    risk_regime = risk_regime_score["regime"]
+    risk_regime_scale = (float(risk_regime_score["risk_scale"])
+                         if risk_regime_gate_enabled else 1.0)
+
     # Concurrent open-position cap by strategy (3.2.3).
     max_open_per_strategy = _coerce_max_open_per_strategy(
         (settings.get("risk") or {}).get("max_open_per_strategy",
@@ -3772,6 +3793,53 @@ def process_signals(
                     **regime_skip_info,
                 })
                 continue
+            # Stage 2.2 — risk-environment gate. On a risk_off (stress) tape,
+            # block directional/momentum entries (trend/breakout/momentum);
+            # mean-reversion stays eligible (it's size-scaled instead). risk_on
+            # / transitional block nothing here — sizing carries the de-risk.
+            if risk_regime_gate_enabled:
+                _rr_class = _resolve_strategy_class(
+                    sig["strategy_id"], regime_tracked)
+                risk_regime_skip = risk_regime_mod.regime_eligibility_skip(
+                    _rr_class, regime=risk_regime)
+                if risk_regime_skip is not None:
+                    _record_skip(
+                        conn, sig=sig, gate="risk_regime_off",
+                        reason_detail=risk_regime_skip.get("reason"),
+                        source=sig_src,
+                    )
+                    actions.append({
+                        "action": "SKIP_RISK_REGIME",
+                        "strategy_id": sig["strategy_id"],
+                        "symbol": sig["symbol"],
+                        "signal_id": sig["id"],
+                        **risk_regime_skip,
+                    })
+                    continue
+            # Stage 2.3 — market-wide event quarantine (CPI / FOMC). Pure risk
+            # management off the public calendar: skip intraday entries on an
+            # event day (don't hold a fast position into the print) and de-size
+            # EOD entries (folded into local_throttle below). Per-symbol
+            # earnings veto is handled separately by _earnings_veto.
+            event_action = event_cal_mod.event_entry_action(
+                asof or date.today(),
+                bar_interval=(sig["bar_interval"]
+                              if "bar_interval" in sig.keys() else "1d"),
+                settings=settings,
+            )
+            if event_action["action"] == "skip":
+                _record_skip(
+                    conn, sig=sig, gate="market_event",
+                    reason_detail=event_action.get("reason"), source=sig_src,
+                )
+                actions.append({
+                    **event_action,
+                    "action": "SKIP_MARKET_EVENT",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                })
+                continue
             # Auto-pause from 3.3.4 — refuse entries on strategies the
             # divergence checker has flagged. Exits remain unaffected so
             # currently-open positions still close cleanly.
@@ -3988,6 +4056,11 @@ def process_signals(
             local_throttle = throttle_multiplier * float(
                 llm_action["qty_multiplier"]
             )
+            # Stage 2.3 — fold the market-event de-size (EOD entries on a
+            # CPI/FOMC day) into the notional multiplier. 'skip' was already
+            # handled above; 'allow' carries no multiplier.
+            if event_action.get("action") == "desize":
+                local_throttle *= float(event_action.get("multiplier", 1.0))
             remaining_bp = (bp_ceiling - bp_committed_this_run
                             if bp_ceiling is not None else None)
             remaining_heat = (
@@ -4004,6 +4077,7 @@ def process_signals(
                 tracked_strategies=regime_tracked,
                 remaining_bp_budget=remaining_bp,
                 remaining_heat_usd=remaining_heat,
+                risk_regime_scale=risk_regime_scale,
             )
             if llm_action["action"] == "downsize":
                 entry_action["llm_filter_downsize"] = True

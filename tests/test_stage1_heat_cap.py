@@ -100,7 +100,11 @@ def test_heat_cap_blocks_second_entry(tmp_path, monkeypatch):
         "min_outcomes": 30, "min_mean_ret_pct": 0.0, "min_sharpe_ish": 0.10,
         "max_position_usd": 100000, "sizing_method": "atr_risk",
         "risk_per_trade_pct": 0.0075,
-        "risk": {"max_portfolio_heat_pct": 0.0075},
+        # Disable the Stage 2.2 regime sizing scale so this stays a pure
+        # heat-cap test (no regime score persisted → would otherwise default
+        # to the transitional 0.5x scale and halve each entry's risk).
+        "risk": {"max_portfolio_heat_pct": 0.0075,
+                 "regime_gate": {"enabled": False}},
         "stops": {"atr_multiplier": 2.5, "atr_period": 14},
     }
     bars = [{"high": 102, "low": 98, "close": 100}] * 16
