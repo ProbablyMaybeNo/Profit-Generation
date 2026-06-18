@@ -275,7 +275,7 @@ event-quarantine filter de-sizes/skips known high-risk sessions.
 **Go-gate:** M12 reintroduction framework exists and is tested; the first MR winner is re-admitted and
 accumulating **fresh, honest** closed outcomes. **Do not unpause anything until Stage 0 + Stage 1 are green.**
 
-- [ ] **3.1 M12 — strategy reintroduction framework (the gating milestone)**
+- [x] **3.1 M12 — strategy reintroduction framework (the gating milestone)** ✅ 2026-06-18 · new `monitoring/reintroduction.py` — pure, queryable `evaluate_candidate` (decides only, never unpauses): evidence gate (≥20 fresh/honest closes + positive expectancy, R-multiple preferred), correlation gate (candidate-vs-book daily-return Pearson <0.3, fail-closed when <5 overlapping days), one-at-a-time (refuses a 2nd admit while another probation window is open). Conflict-regression on IWM/KRE/NVDA/QQQ proves no oversell/competing-flatten via single-owner authority. 15 tests. **Awaiting Ross's review before any unpause.**
   - WHY: the entire downstream plan depends on safely re-adding strategies without repeating the
     multi-owner oversell loop. Highest-leverage open item.
   - FILES: new `monitoring/reintroduction.py` (or extend `monitoring/strategy_health.py`); fixtures.
@@ -655,3 +655,17 @@ strengthens the engine; this line gets us to the first live dollar.
   ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:
   **1.2b** sector-cluster sizing (needs nasdaq100 sector backfill) and the **1.3 swing-low initial stop
   flip** (built+tested, observe before enabling). Neither blocks Stage 2.
+- 2026-06-18 — **3.1 shipped** (branch `feat/stage3-reintroduction`): M12 reintroduction framework —
+  `monitoring/reintroduction.py`. `evaluate_candidate(conn, strategy_id)` is a PURE decision function
+  (decides, never acts — never unpauses, never touches `paused_strategies`/eligibility). Three ALL-required
+  gates: (1) EVIDENCE — ≥20 fresh, honest closed outcomes (reuses `strategy_health` fresh-only clause →
+  excludes `phantom_no_fill`/`stale_intraday_flatten_missed` + all reconcile/cleanup closes) with positive
+  expectancy, R-multiple when ≥10 R-bearing rows else mean return%; (2) LOW CORRELATION — candidate vs
+  current book daily-return Pearson < 0.3 on overlapping days; <5 overlapping days → UNKNOWN → INELIGIBLE
+  (fail closed); empty book → trivially passes; (3) ONE-AT-A-TIME — refuses a 2nd admit while another
+  `meta`-recorded probation window is open (`record_admission`/`clear_admission` are operator bookkeeping,
+  also non-acting). Book membership + the conflict fixtures both lean on single-owner authority
+  (`position_manager.symbol_owner`). Conflict-regression on IWM/KRE/NVDA/QQQ proves no oversell / no
+  competing-flatten with a re-admitted strategy. 15 new tests. Suite: 2601 passed, only the allowed
+  `test_intraday_skips` (Stage 4.2) pre-existing failure remains. **HALT per scope — awaiting Ross's review
+  before unpausing anything (3.2+).**
