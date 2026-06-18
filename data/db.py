@@ -149,6 +149,7 @@ _DDL = [
         return_pct    REAL,
         mfe_pct       REAL,
         mae_pct       REAL,
+        r_multiple    REAL,
         bars_held     INTEGER,
         status        TEXT NOT NULL,
         updated_at    TEXT NOT NULL,
@@ -472,6 +473,13 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     if "short_market_value" not in eq_cols:
         conn.execute(
             "ALTER TABLE equity_snapshots ADD COLUMN short_market_value REAL")
+    # Stage 1.6 — R-multiple (realized return / initial-stop risk) per closed
+    # outcome, the substrate for honest expectancy / Kelly / pyramiding.
+    out_cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info(outcomes)"
+    ).fetchall()}
+    if "r_multiple" not in out_cols:
+        conn.execute("ALTER TABLE outcomes ADD COLUMN r_multiple REAL")
 
 
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -850,17 +858,37 @@ def close_outcome(
         return_pct = None
         if entry_price not in (None, 0):
             return_pct = (exit_price - entry_price) / entry_price * 100.0
+        # Stage 1.6 — R-multiple = realized return / initial-stop risk. The
+        # initial stop distance is the protective stop placed for this entry
+        # (paper_trades, same signal_id, earliest stop row). R is the honest
+        # unit for expectancy: +2R means the trade made twice what it risked.
+        # NULL when there's no resting stop or a non-long stop (can't size risk).
+        r_multiple = None
+        if return_pct is not None:
+            stop_row = conn.execute(
+                "SELECT stop_price FROM paper_trades "
+                " WHERE signal_id=? AND order_type='stop' "
+                "   AND stop_price IS NOT NULL "
+                " ORDER BY id ASC LIMIT 1",
+                (signal_id,),
+            ).fetchone()
+            if stop_row is not None:
+                risk_per_share = entry_price - stop_row["stop_price"]
+                if risk_per_share and risk_per_share > 0:
+                    risk_pct = risk_per_share / entry_price * 100.0
+                    if risk_pct > 0:
+                        r_multiple = return_pct / risk_pct
         conn.execute(
             """
             UPDATE outcomes
                SET exit_ts=?, exit_price=?, exit_reason=?, bars_held=?,
                    mfe_pct=COALESCE(?, mfe_pct),
                    mae_pct=COALESCE(?, mae_pct),
-                   return_pct=?, status='closed', updated_at=?
+                   return_pct=?, r_multiple=?, status='closed', updated_at=?
              WHERE signal_id=?
             """,
             (exit_ts, exit_price, exit_reason, bars_held, mfe_pct, mae_pct,
-             return_pct, _utc_now_iso(), signal_id),
+             return_pct, r_multiple, _utc_now_iso(), signal_id),
         )
 
 

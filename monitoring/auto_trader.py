@@ -309,6 +309,55 @@ def _calc_qty(price: Optional[float], max_position_usd: float) -> int:
     return int(max_position_usd // price)
 
 
+def _recent_swing_low(bars, lookback: int) -> Optional[float]:
+    """Lowest low over the last `lookback` bars — the nearest swing low used by
+    the Stage 1.3 structure-based initial stop. Handles a pandas DataFrame or a
+    list of bar dicts; returns None when no usable low is present."""
+    try:
+        if hasattr(bars, "tail"):  # pandas DataFrame
+            sub = bars.tail(max(1, int(lookback)))
+            lo = sub["low"].min()
+            return float(lo) if lo == lo else None  # NaN guard
+        lows = [b.get("low") for b in list(bars)[-int(lookback):]
+                if isinstance(b, dict) and b.get("low") is not None]
+        return float(min(lows)) if lows else None
+    except Exception:
+        return None
+
+
+def portfolio_heat_usd(conn, *, default_stop_pct: float = 0.05) -> float:
+    """Stage 1.2 — total open dollar risk across the book = Σ over open
+    positions of qty × (entry − initial stop). This is the 'heat' a correlated
+    selloff would realize at once; capping it (vs capping per-trade risk alone)
+    is what survives a tech/semi cluster gapping down together. A position with
+    no resting stop is charged `default_stop_pct` of its notional so an
+    unprotected leg can't read as zero risk.
+    """
+    rows = conn.execute(
+        """
+        SELECT o.entry_price AS entry,
+               (SELECT COALESCE(SUM(b.qty), 0) FROM paper_trades b
+                 WHERE b.signal_id = o.signal_id AND b.side = 'buy') AS qty,
+               (SELECT s.stop_price FROM paper_trades s
+                 WHERE s.signal_id = o.signal_id AND s.order_type = 'stop'
+                   AND s.stop_price IS NOT NULL
+                 ORDER BY s.id ASC LIMIT 1) AS stop
+          FROM outcomes o
+         WHERE o.status = 'open'
+        """
+    ).fetchall()
+    total = 0.0
+    for r in rows:
+        entry, qty, stop = r["entry"], r["qty"], r["stop"]
+        if not entry or not qty:
+            continue
+        if stop is not None and 0 < stop < entry:
+            total += qty * (entry - stop)
+        else:
+            total += qty * entry * default_stop_pct
+    return total
+
+
 def _coerce_offset_min(raw) -> int:
     """Read settings.entry_time_offset_min defensively. Negative → 0;
     above MAX_OFFSET_MIN → clamped + warning."""
@@ -412,6 +461,29 @@ def _submit_limit_order(
         kwargs["client_order_id"] = client_order_id
     req = LimitOrderRequest(**kwargs)
     return client.submit_order(req)
+
+
+_ENTRY_DEAD_STATUSES = {"rejected", "canceled", "cancelled", "expired"}
+
+
+def _order_status(order) -> str:
+    """Lowercased order status, tolerant of Alpaca enums and bare strings."""
+    raw = getattr(order, "status", "")
+    val = getattr(raw, "value", None)
+    s = val if val is not None else str(raw)
+    return s.split(".")[-1].lower()
+
+
+def _entry_is_live(order) -> bool:
+    """True when a just-submitted entry order is live/filling (not rejected).
+
+    Stage 0.2: a market BUY may return status='accepted' before the broker
+    surfaces the new position, so the stop-attach path reads
+    available_to_sell()==0 and would skip the protective stop — the naked-long
+    bug (0 of 409 trades had a resting stop). A live entry lets the stop arm at
+    the requested qty anyway; the broker still rejects a genuine oversell.
+    """
+    return _order_status(order) not in _ENTRY_DEAD_STATUSES
 
 
 def _get_data_client():
@@ -567,7 +639,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     throttle_multiplier: float = 1.0,
                     market_regime: Optional[str] = None,
                     tracked_strategies: Optional[List[dict]] = None,
-                    remaining_bp_budget: Optional[float] = None) -> dict:
+                    remaining_bp_budget: Optional[float] = None,
+                    remaining_heat_usd: Optional[float] = None) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
@@ -686,6 +759,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         declaration=decl,
         settings_auto_trade=settings,
     )
+    # Stage 1.1 — volatility-target sizing needs the initial-stop distance up
+    # front (risk-per-share = entry − stop). Compute the stop once here (the same
+    # dry-run path the unprotected-entry guard uses) ONLY when atr_risk is the
+    # active method, so every other sizing path is unchanged. A missing/invalid
+    # stop leaves inputs None and atr_risk falls back to the tiered method.
+    atr_risk_inputs = None
+    if sizing_mod.normalize_sizing_method(settings.get("sizing_method")) \
+            == sizing_mod.SIZING_METHOD_ATR_RISK:
+        entry_px = float(sig["close"] or 0)
+        size_stop = _maybe_attach_stop(
+            conn, client, settings, sig,
+            entry_fill=entry_px, qty=1,
+            client_order_id=None, bars_fetcher=bars_fetcher, dry_run=True,
+            strategy_class=strategy_class, market_regime=market_regime,
+        )
+        sp = (size_stop or {}).get("stop_price")
+        rps = (entry_px - sp) if (sp is not None and entry_px > 0) else None
+        atr_risk_inputs = {
+            "entry_price": entry_px,
+            "risk_per_share": rps if (rps is not None and rps > 0) else None,
+            "atr": (size_stop or {}).get("atr"),
+            "risk_pct": float(settings.get(
+                "risk_per_trade_pct", sizing_mod.DEFAULT_RISK_PER_TRADE_PCT)),
+        }
     sizing = sizing_mod.compute_notional(
         conn, sid,
         sizing_method=settings.get("sizing_method"),
@@ -697,6 +794,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         strategy_class=strategy_class,
         min_position_usd=min_position_usd,
         intraday_multiplier=intraday_multiplier,
+        atr_risk_inputs=atr_risk_inputs,
     )
     if is_crypto:
         sizing["asset_class"] = "crypto"
@@ -756,6 +854,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         return {"action": "SKIP_BUYING_POWER", "strategy_id": sid, "symbol": sym,
                 "order_notional": round(order_notional, 2),
                 "remaining_bp_budget": round(remaining_bp_budget, 2),
+                "sizing": sizing}
+
+    # Stage 1.2 — portfolio heat cap. Risk-of-ruin is bounded by TOTAL open risk,
+    # not per-trade risk: refuse the entry when it would push Σ(stop distance ×
+    # size) past the run's remaining heat budget (default cap 6% of equity). Risk
+    # for this entry is qty × stop-distance when known (atr_risk), else a
+    # notional fraction. None budget → disabled (no equity / cap not configured).
+    rps_for_heat = (atr_risk_inputs or {}).get("risk_per_share")
+    if rps_for_heat:
+        entry_risk_usd = qty * float(rps_for_heat)
+    else:
+        entry_risk_usd = order_notional * float(
+            settings.get("default_stop_pct_for_heat", 0.05))
+    if (remaining_heat_usd is not None
+            and entry_risk_usd > remaining_heat_usd + 1e-6):
+        _record_skip(
+            conn, sig=sig, gate="portfolio_heat",
+            reason_detail=(f"entry risk ${entry_risk_usd:.2f} exceeds remaining "
+                           f"heat budget ${remaining_heat_usd:.2f}"),
+            source=_src,
+        )
+        return {"action": "SKIP_HEAT_CAP", "strategy_id": sid, "symbol": sym,
+                "entry_risk_usd": round(entry_risk_usd, 2),
+                "remaining_heat_usd": round(remaining_heat_usd, 2),
                 "sizing": sizing}
 
     offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
@@ -850,6 +972,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "limit_price": limit_price,
                 "requested_order_type": requested_order_type,
                 "sizing": sizing,
+                "entry_risk_usd": round(entry_risk_usd, 2),
                 "stop": stop_info}
 
     if target_utc is not None:
@@ -878,6 +1001,11 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
                 "error": str(e)[:200]}
 
+    # Stage 0.2 — mark the entry live (not rejected) so the protective stop arms
+    # even when the broker hasn't surfaced the fresh position yet (the naked-long
+    # fill-settlement race; see _entry_is_live). Buy-status settlement is handled
+    # by order_sync.
+    entry_filled = _entry_is_live(order)
     entry_fill = float(getattr(order, "filled_avg_price", 0) or 0) or None
     db.record_paper_trade(conn, {
         "alpaca_order_id": str(getattr(order, "id", "")),
@@ -907,11 +1035,18 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         bars_fetcher=bars_fetcher,
         strategy_class=strategy_class,
         market_regime=market_regime,
+        entry_filled=entry_filled,
     )
 
     # 6.1.1 — record the stop method on the entry row so audit queries
     # like "show me every entry protected by ATR" don't need to join.
-    if stop_info and stop_info.get("stop_method"):
+    # Stage 0.3 — gate the stamp on an actually-submitted stop. Previously this
+    # keyed off stop_method (set the moment a stop PRICE was computed, before
+    # submit), so a buy whose stop was skipped/rejected was still stamped
+    # 'atr_initial' — 119 buys advertised protection that did not exist. Only
+    # stamp when the stop truly rests on the book (status=='submitted').
+    if stop_info and stop_info.get("status") == "submitted" \
+            and stop_info.get("stop_method"):
         db.record_paper_trade(conn, {
             "alpaca_order_id": str(getattr(order, "id", "")),
             "signal_id": sig["id"],
@@ -951,6 +1086,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "limit_price": limit_price,
             "requested_order_type": requested_order_type,
             "sizing": sizing,
+            "entry_risk_usd": round(entry_risk_usd, 2),
             "stop": stop_info,
             "stop_protection": protection}
 
@@ -2849,6 +2985,7 @@ def _maybe_attach_stop(
     strategy_class: Optional[str] = None,
     market_regime: Optional[str] = None,
     regime_confidence: Optional[float] = None,
+    entry_filled: bool = False,
 ) -> Optional[dict]:
     """Compute + (if not dry-run) submit an initial stop. Routes through
     sizing.resolve_initial_stop so the same path serves trend (4.6),
@@ -2947,10 +3084,18 @@ def _maybe_attach_stop(
     except (KeyError, IndexError, TypeError):
         sig_type = ""
     side = "short" if sig_type.startswith("short") else "long"
+    # Stage 1.3 — nearest swing low for the structure-based initial stop, only
+    # when that method is opted into (default atr_initial computes no swing low).
+    swing_low = None
+    if str((settings_stops or {}).get("initial_method") or "").lower() \
+            == "swing_low":
+        lookback = int((settings_stops or {}).get("swing_low_lookback", 10))
+        swing_low = _recent_swing_low(bars, lookback)
     resolved = sizing_mod.resolve_initial_stop(
         entry_price=entry_fill, atr=atr,
         strategy_id=sig["strategy_id"],
         settings_stops=settings_stops,
+        swing_low=swing_low,
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
         side=side,
         strategy_class=strategy_class,
@@ -3013,6 +3158,7 @@ def _maybe_attach_stop(
             res = pm_stop.safe_submit_stop(
                 client, symbol=sig["symbol"], requested_qty=qty,
                 stop_price=stop_price, submit_fn=_stop_submit,
+                entry_filled=entry_filled,
             )
         except Exception as e:
             log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
@@ -3410,6 +3556,17 @@ def process_signals(
     bp_ceiling = (float(_bp_base) * 0.98
                   if _bp_base not in (None, "") else None)
     bp_committed_this_run = 0.0
+
+    # Stage 1.2 — portfolio heat budget for this run: cap total open dollar-risk
+    # (Σ stop distance × size) at risk.max_portfolio_heat_pct of equity so a
+    # correlated selloff can't stop out the whole book at once. Disabled (None)
+    # when the cap is unset or equity is unknown.
+    max_heat_pct = float((settings.get("risk") or {}).get(
+        "max_portfolio_heat_pct", 0) or 0)
+    heat_cap_usd = (portfolio_value * max_heat_pct
+                    if (max_heat_pct > 0 and portfolio_value) else None)
+    heat_used_usd = portfolio_heat_usd(conn) if heat_cap_usd is not None else 0.0
+    heat_committed_this_run = 0.0
 
     # Seed with M5 pause-flatten actions so they surface in the run report.
     actions: List[dict] = list(pause_flatten_actions)
@@ -3833,6 +3990,9 @@ def process_signals(
             )
             remaining_bp = (bp_ceiling - bp_committed_this_run
                             if bp_ceiling is not None else None)
+            remaining_heat = (
+                heat_cap_usd - heat_used_usd - heat_committed_this_run
+                if heat_cap_usd is not None else None)
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
@@ -3843,6 +4003,7 @@ def process_signals(
                 market_regime=current_regime,
                 tracked_strategies=regime_tracked,
                 remaining_bp_budget=remaining_bp,
+                remaining_heat_usd=remaining_heat,
             )
             if llm_action["action"] == "downsize":
                 entry_action["llm_filter_downsize"] = True
@@ -3852,6 +4013,8 @@ def process_signals(
                 entries_submitted_this_run += 1
                 bp_committed_this_run += float(
                     entry_action.get("notional") or 0)
+                heat_committed_this_run += float(
+                    entry_action.get("entry_risk_usd") or 0)
                 if max_open_per_strategy > 0:
                     open_per_strategy[sig["strategy_id"]] = (
                         open_per_strategy.get(sig["strategy_id"], 0) + 1
@@ -3922,6 +4085,26 @@ def process_signals(
         asof=asof,
     )
     actions.extend(max_loss_cap_actions)
+
+    # Stage 0.4 — re-sync THIS pass's own orders at the END. The top-of-pass
+    # order_sync only sees the PREVIOUS run's orders; the sells/stops this pass
+    # just submitted are never re-queried, so on the EOD final run (no later
+    # pass) they strand at status='accepted'/NULL fill forever — the documented
+    # precursor to orphan reconciled_no_position outcomes (4 such sells were
+    # stuck at authoring). Re-running here backfills them. Same built_own_client
+    # guard as the top-of-pass sync. Best-effort: a broker hiccup never
+    # poisons the returned result.
+    if built_own_client:
+        try:
+            from monitoring import order_sync
+            end_sync = order_sync.sync_order_fills(conn, client)
+            if end_sync.get("updated"):
+                log(f"auto_trader: end-of-pass order_sync backfilled "
+                    f"{end_sync['updated']} row(s), {end_sync['filled']} newly "
+                    f"filled", "INFO")
+        except Exception as e:
+            log(f"auto_trader: end-of-pass order_sync skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
 
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
            "actions": actions, "market_regime": current_regime}

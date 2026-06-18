@@ -309,6 +309,86 @@ def render_markdown(report: DailyReport) -> str:
     return "\n".join(lines)
 
 
+def protection_metrics(conn, *, since_iso: Optional[str] = None) -> Dict[str, int]:
+    """Stage 0.6 — count filled long entries vs the protective stops that
+    actually rest for them, so a chronic naked-long condition can't hide.
+
+    A filled buy is PROTECTED when a stop row (order_type='stop') exists for the
+    same signal_id (the entry and its stop share signal_id). `since_iso` scopes
+    to recent entries (default: today UTC) so the metric reflects the live book,
+    not historical closed-and-canceled stops. Returns {entries, protected, naked}.
+    Had this existed, the 119-stamped-vs-0-resting gap would have alerted at once.
+    """
+    if since_iso is None:
+        since_iso = date.today().isoformat()
+    rows = conn.execute(
+        "SELECT EXISTS(SELECT 1 FROM paper_trades s "
+        "              WHERE s.signal_id = e.signal_id "
+        "                AND s.order_type = 'stop') AS has_stop "
+        "  FROM paper_trades e "
+        " WHERE e.side = 'buy' "
+        "   AND e.status IN ('filled', 'partially_filled') "
+        "   AND e.signal_id IS NOT NULL "
+        "   AND substr(e.submitted_at, 1, 10) >= ?",
+        (since_iso,),
+    ).fetchall()
+    entries = len(rows)
+    protected = sum(1 for r in rows if r["has_stop"])
+    return {"entries": entries, "protected": protected,
+            "naked": entries - protected}
+
+
+def expectancy_metrics(conn, *, since_iso: Optional[str] = None) -> Dict:
+    """Stage 1.6 — rolling expectancy in R-multiples over real closed outcomes.
+
+    Expectancy = mean R per trade (the dollar-risk-normalized edge). Excludes
+    phantom/stale noise so the number reflects honest fills. Returns
+    {n, avg_r, win_rate} (avg_r is None when there's no R-bearing sample yet).
+    """
+    sql = (
+        "SELECT r_multiple FROM outcomes "
+        " WHERE status='closed' AND r_multiple IS NOT NULL "
+        "   AND exit_reason NOT IN "
+        "       ('phantom_no_fill', 'stale_intraday_flatten_missed')"
+    )
+    params: List = []
+    if since_iso:
+        sql += " AND substr(exit_ts, 1, 10) >= ?"
+        params.append(since_iso)
+    rows = [r["r_multiple"] for r in conn.execute(sql, params).fetchall()]
+    n = len(rows)
+    if n == 0:
+        return {"n": 0, "avg_r": None, "win_rate": None}
+    wins = sum(1 for r in rows if r > 0)
+    return {"n": n, "avg_r": round(sum(rows) / n, 3),
+            "win_rate": round(wins / n, 3)}
+
+
+def _maybe_alert_naked(metrics: Dict[str, int], session_date, *, alert_fn=None) -> bool:
+    """Fire a loud ERROR + Telegram when filled entries have no resting stop.
+    Returns True iff an alert was sent. alert_fn is injectable for tests."""
+    if metrics.get("naked", 0) <= 0:
+        return False
+    from config.utils import log
+    msg = (f"🚨 NAKED LONGS: {metrics['naked']} of {metrics['entries']} filled "
+           f"entries on {session_date} have NO resting protective stop. A gap "
+           f"down has no floor — investigate the stop-attach path.")
+    log(msg, "ERROR")
+    sender = alert_fn
+    if sender is None:
+        try:
+            from monitoring.telegram_alerter import send_message as sender
+        except Exception:
+            sender = None
+    if sender is not None:
+        try:
+            sender(msg)
+            return True
+        except Exception as e:
+            log(f"_maybe_alert_naked: alert send failed: {e}", "WARNING")
+    return False
+
+
 def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[str, int]:
     """Write the report + snapshots + fire/exit signals; reconcile outcomes."""
     conn = db.init_db()
@@ -375,8 +455,17 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         # records excursion. (Stop/trailing reasons are handled in F5; the
         # intraday open/close pass is F2.)
         from monitoring.auto_trader import _build_default_bars_fetcher
+        # Stage 0.1 (master plan, 2026-06-17): require_fill on the 1d pass too.
+        # Without it this pass opened an outcome for EVERY 1d long_entry that
+        # merely had a close price — no broker fill — which the orphan sweep
+        # then quarantined as phantom_no_fill (13 manufactured-then-quarantined
+        # on 2026-06-17 alone; 2,634 of all phantoms are 1d). Mirrors the
+        # intraday pass below. require_fill gates only the OPEN path; existing
+        # open outcomes still close normally on a long_exit signal.
         counts = outcome_tracker.reconcile_signals(
-            conn, bars_fetcher=_build_default_bars_fetcher()
+            conn,
+            bars_fetcher=_build_default_bars_fetcher(),
+            require_fill=True,
         )
         # F2 (audit 2026-06-03): the 1d pass above never opens intraday
         # outcomes, so M1's EOD-flatten capture had nothing to close — 0
@@ -423,6 +512,34 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         except Exception as e:
             from config.utils import log
             log(f"persist_report: stale-intraday sweep skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
+        # Stage 0.6 — daily protection metrics. Surface filled entries that have
+        # no resting stop (naked longs) and alert. Best-effort: never abort the
+        # report on a metrics hiccup.
+        try:
+            metrics = protection_metrics(
+                conn, since_iso=report.report_date.isoformat())
+            counts["entries_today"] = metrics["entries"]
+            counts["entries_protected"] = metrics["protected"]
+            counts["entries_naked"] = metrics["naked"]
+            _maybe_alert_naked(metrics, report.report_date)
+        except Exception as e:
+            from config.utils import log
+            log(f"persist_report: protection metrics skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
+        # Stage 1.6 — rolling expectancy in R-multiples (honest closed outcomes).
+        try:
+            exp = expectancy_metrics(conn)
+            counts["expectancy_n"] = exp["n"]
+            counts["expectancy_r"] = exp["avg_r"]
+            if exp["n"]:
+                from config.utils import log
+                log(f"persist_report: expectancy {exp['avg_r']}R over "
+                    f"{exp['n']} closed trades (win rate {exp['win_rate']})",
+                    "INFO")
+        except Exception as e:
+            from config.utils import log
+            log(f"persist_report: expectancy metrics skipped "
                 f"({type(e).__name__}: {e})", "WARNING")
         return counts
     finally:

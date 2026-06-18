@@ -597,7 +597,7 @@ def entry_owner_conflict(conn, strategy_id: str, symbol: str) -> Optional[str]:
 
 def safe_submit_stop(
     client, *, symbol: str, requested_qty, stop_price, submit_fn,
-    reconcile: bool = True,
+    reconcile: bool = True, entry_filled: bool = False,
 ) -> Optional[Dict]:
     """Submit a protective SELL STOP idempotently.
 
@@ -611,6 +611,13 @@ def safe_submit_stop(
        `submit_fn(client, symbol=, qty=, stop_price=)` — the existing
        stops.submit_atr_stop, kept broker-agnostic and test-injectable.
 
+    `entry_filled` (Stage 0.2 naked-long fix): set True when this stop protects
+    an entry we JUST confirmed filled. A freshly-bought symbol isn't in the
+    broker's positions list for an instant, so `available_to_sell` reads 0 and
+    a strict cap skips the stop — which left 0 of 409 trades with a resting
+    stop. When entry_filled and available reads 0, arm at the requested qty
+    anyway; the broker still rejects a genuine oversell.
+
     Returns:
       {"action": "SUBMITTED", "qty": n, "cancelled": c, "order": <order>}
       {"action": "SKIP_NO_AVAILABLE_QTY", "qty": 0, "requested": r, ...}
@@ -619,10 +626,12 @@ def safe_submit_stop(
     if reconcile:
         cancelled = reconcile_exit_orders(client, symbol)
     avail = available_to_sell(client, symbol, include_run_reservations=True)
-    if avail is None:
-        # Broker can't report positions (stub/unavailable): don't block arming a
-        # stop on a freshly-filled entry whose position isn't visible yet — fall
-        # back to the requested qty. The broker still rejects a true oversell.
+    if avail is None or (entry_filled and not avail):
+        # Fall back to the requested qty when (a) the broker can't report
+        # positions at all (stub/unavailable), OR (b) we just confirmed the
+        # entry filled but the broker hasn't surfaced the fresh position yet
+        # (avail==0 — the fill-settlement race). The broker still rejects a
+        # true oversell, so arming at the requested qty here is safe.
         qty = max(0, int(_as_float(requested_qty, 0)))
     else:
         qty = cap_sell_qty(requested_qty, avail)
