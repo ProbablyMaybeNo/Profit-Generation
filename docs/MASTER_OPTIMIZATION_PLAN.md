@@ -196,7 +196,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
     RoR underestimates correlated risk). Tech/semis are 80–90% correlated in a drawdown.
   - ACCEPT (met): a 9th 0.75% position is rejected at the heat cap. Unit test the heat accumulator + the
     in-run gate (DRY_BUY then SKIP_HEAT_CAP).
-- [ ] **1.2b Sector-correlation cluster sizing** — DEFERRED: needs a sector backfill first.
+- **1.2b Sector-correlation cluster sizing** — ⏸ DEFERRED (backlog, not a build target). Needs a sector backfill first.
   `data/universes/nasdaq100.csv` has an empty `sector` column (sp500 is populated), so the "3+ in a
   sector → 0.25% each" rule would silently no-op on most names. Prereq: backfill nasdaq100 sectors, then
   add the cluster rule keyed off the universe `sector` field.
