@@ -99,7 +99,7 @@ what we cannot measure.**
 **Go-gate:** phantom factory off; ≥1 real `order_type='stop'` row rests on the book after a live entry;
 reports exclude phantom/stale by default; a daily invariant counter would have caught the naked-stop bug.
 
-- [ ] **0.1 Kill the 1d phantom factory (one-line fix)**
+- [x] **0.1 Kill the 1d phantom factory (one-line fix)** ✅ 2026-06-17 · commit `b9f21bb`
   - WHY: `daily_report.py` opens an outcome for every 1d `long_entry` signal that merely has a close
     price — no fill required — then the orphan sweep quarantines it as `phantom_no_fill`. 13 new
     phantoms were manufactured-then-quarantined on 2026-06-17 alone; 2,634 of all phantoms are 1d.
@@ -109,7 +109,7 @@ reports exclude phantom/stale by default; a daily invariant counter would have c
   - ACCEPT: run the daily report on a day with unfilled 1d signals → **0 new `phantom_no_fill` rows**
     created. Add `tests/test_daily_report_require_fill.py` asserting the 1d path passes `require_fill=True`.
 
-- [ ] **0.2 Make the protective hard stop actually rest on the book**
+- [x] **0.2 Make the protective hard stop actually rest on the book** ✅ 2026-06-17 · `entry_filled` fallback in `safe_submit_stop` + `_entry_is_live` in the entry path
   - WHY: **0 of 409 trades ever had a resting stop** (all `order_type='market'`), yet 119 buys are
     stamped `entry_stops='atr_initial'`. Root cause: a fill-settlement race — `_process_entry` submits
     a market BUY, immediately reads `order.filled_avg_price` (None on a just-accepted order),
@@ -549,4 +549,14 @@ strengthens the engine; this line gets us to the first live dollar.
 ## Build Log
 
 - 2026-06-17 — Plan authored from 14-agent audit+research workflow. Stage 0 P0 bugs verified against
-  source/DB (`daily_report.py:378` lacks `require_fill`; 0/409 trades have a resting stop). Nothing built yet.
+  source/DB (`daily_report.py:378` lacks `require_fill`; 0/409 trades have a resting stop).
+- 2026-06-17 — **0.1 shipped** (commit `b9f21bb`): `require_fill=True` on the 1d reconcile pass kills the
+  phantom factory. Behavioral test drives the real `persist_report`. Full non-live suite green
+  (2 pre-existing unrelated failures: `test_macro_fetcher` FRED, `test_intraday_skips` paused-gate — folded
+  into Stage 2 / Stage 4.2 respectively).
+- 2026-06-17 — **0.2 shipped**: protective stops now rest on the book. Root cause was a fill-settlement
+  race — a just-submitted market BUY isn't in the broker positions list yet, so `available_to_sell`
+  returned 0 (not None) and `safe_submit_stop` skipped the stop (0/409 trades). Fix: `entry_filled`
+  fallback in `safe_submit_stop` arms at requested qty when the broker shows 0 right after a live entry;
+  `_entry_is_live` marks the entry in `_process_entry`. New `tests/test_stage0_stop_rests.py` reproduces
+  the exact prod race end-to-end. Suite: 2511 passed, same 2 pre-existing failures, 72s.

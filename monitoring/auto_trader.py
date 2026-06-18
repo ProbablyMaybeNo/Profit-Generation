@@ -414,6 +414,29 @@ def _submit_limit_order(
     return client.submit_order(req)
 
 
+_ENTRY_DEAD_STATUSES = {"rejected", "canceled", "cancelled", "expired"}
+
+
+def _order_status(order) -> str:
+    """Lowercased order status, tolerant of Alpaca enums and bare strings."""
+    raw = getattr(order, "status", "")
+    val = getattr(raw, "value", None)
+    s = val if val is not None else str(raw)
+    return s.split(".")[-1].lower()
+
+
+def _entry_is_live(order) -> bool:
+    """True when a just-submitted entry order is live/filling (not rejected).
+
+    Stage 0.2: a market BUY may return status='accepted' before the broker
+    surfaces the new position, so the stop-attach path reads
+    available_to_sell()==0 and would skip the protective stop — the naked-long
+    bug (0 of 409 trades had a resting stop). A live entry lets the stop arm at
+    the requested qty anyway; the broker still rejects a genuine oversell.
+    """
+    return _order_status(order) not in _ENTRY_DEAD_STATUSES
+
+
 def _get_data_client():
     """Build a Stock data client lazily so callers without market-data
     permissions never pay the import cost."""
@@ -878,6 +901,11 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         return {"action": "ERROR", "strategy_id": sid, "symbol": sym,
                 "error": str(e)[:200]}
 
+    # Stage 0.2 — mark the entry live (not rejected) so the protective stop arms
+    # even when the broker hasn't surfaced the fresh position yet (the naked-long
+    # fill-settlement race; see _entry_is_live). Buy-status settlement is handled
+    # by order_sync.
+    entry_filled = _entry_is_live(order)
     entry_fill = float(getattr(order, "filled_avg_price", 0) or 0) or None
     db.record_paper_trade(conn, {
         "alpaca_order_id": str(getattr(order, "id", "")),
@@ -907,6 +935,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         bars_fetcher=bars_fetcher,
         strategy_class=strategy_class,
         market_regime=market_regime,
+        entry_filled=entry_filled,
     )
 
     # 6.1.1 — record the stop method on the entry row so audit queries
@@ -2849,6 +2878,7 @@ def _maybe_attach_stop(
     strategy_class: Optional[str] = None,
     market_regime: Optional[str] = None,
     regime_confidence: Optional[float] = None,
+    entry_filled: bool = False,
 ) -> Optional[dict]:
     """Compute + (if not dry-run) submit an initial stop. Routes through
     sizing.resolve_initial_stop so the same path serves trend (4.6),
@@ -3013,6 +3043,7 @@ def _maybe_attach_stop(
             res = pm_stop.safe_submit_stop(
                 client, symbol=sig["symbol"], requested_qty=qty,
                 stop_price=stop_price, submit_fn=_stop_submit,
+                entry_filled=entry_filled,
             )
         except Exception as e:
             log(f"stop submit failed for {sig['strategy_id']}/{sig['symbol']}: {e}",
