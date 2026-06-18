@@ -218,7 +218,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
   - ACCEPT: simulated DD triggers each rung; risk halves and restores correctly. Extend
     `tests/test_drawdown_throttle.py` / `tests/test_kill_switch.py`.
 
-- [ ] **1.5 Replace the $250 price cap with a notional/ATR cap**
+- [x] **1.5 No absolute share-price veto** ✅ 2026-06-18 · the "$250 cap" was historical (max_position_usd is now $10k notional); `SKIP_PRICE` only fires when one share > the whole cap (never, for our universe). Regression test pins NVDA/SPY/QQQ aren't vetoed. **Fractional shares deliberately rejected** — Alpaca can't place stop orders on fractional positions, which would reintroduce the 0.2 naked-long bug.
   - WHY: the absolute `price_too_high` ($250) cap blocked **6,338 entries** on exactly the liquid
     large-caps the daily edge wants (NVDA/SPY/QQQ at $462–$755).
   - FILES: `monitoring/auto_trader.py` (price-cap veto), `config/settings.json`.
@@ -226,7 +226,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
     shares where available so high-priced names size correctly.
   - ACCEPT: an NVDA/SPY signal is no longer vetoed by price; notional stays within sizing limits. Test the gate.
 
-- [ ] **1.6 R-multiple logging on every closed trade**
+- [x] **1.6 R-multiple logging on every closed trade** ✅ 2026-06-18 · `outcomes.r_multiple` (return ÷ initial-stop risk) computed in `close_outcome`; `expectancy_metrics()` rolls up avg-R + win-rate (excludes phantom/stale) into the daily report
   - WHY: R-multiples are the substrate for Kelly inputs, pyramiding readiness, and honest expectancy.
   - FILES: `monitoring/outcome_tracker.py` (add `r_multiple` to position-scoped outcomes).
   - DO: at close, log `R = realized_PnL / initial_risk`. Surface avg R and expectancy in the daily report.
@@ -586,3 +586,14 @@ strengthens the engine; this line gets us to the first live dollar.
   front ONLY when `atr_risk` is active (every other path byte-for-byte unchanged). **Config flipped
   `kelly_quarter` → `atr_risk` + `risk_per_trade_pct=0.0075`** — constant 0.75% dollar risk per trade is
   now live on paper (RoR ~0). 8 new tests. Suite: 2525 passed, same 2 pre-existing failures.
+- 2026-06-18 — **1.5 done** (no code change needed): the "$250 price veto" was historical — the cap is
+  now $10k notional and `SKIP_PRICE` only fires when one share exceeds the whole cap (never for our
+  universe). Regression test pins NVDA/SPY/QQQ aren't vetoed. **Fractional shares rejected by design** —
+  Alpaca can't rest a stop order on a fractional position, which would undo Stage 0.2.
+- 2026-06-18 — **1.6 shipped**: `outcomes.r_multiple` column + migration; `close_outcome` computes
+  R = return% ÷ initial-stop-distance% from the entry's protective stop. `expectancy_metrics()` rolls up
+  avg-R + win-rate over honest closed outcomes (phantom/stale excluded) and `persist_report` logs it. R
+  is the substrate for Kelly inputs + pyramiding readiness (Stage 1.2/4). 4 new tests. Suite: 2530 passed.
+- 2026-06-18 — **Stage 1 is 3/6 done (1.1, 1.5, 1.6).** Remaining: 1.2 (portfolio-heat cap + sector
+  cluster), 1.3 (hybrid swing-low → Chandelier trail, incl. the 2× ATR skip rule), 1.4 (drawdown
+  kill-switch ladder).
