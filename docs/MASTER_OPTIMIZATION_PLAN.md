@@ -191,14 +191,15 @@ NASDAQ-100 + S&P-500 universe before locking them.
   - ACCEPT: for a worked case ($100k, 0.75%, ATR-stop $1.50 → ~500 shares) the sizer returns the
     expected qty; volatile names get smaller size than calm names at equal risk. Extend `tests/test_sizing.py`.
 
-- [ ] **1.2 Portfolio-heat cap (6%) + sector-correlation cluster sizing**
+- [x] **1.2a Portfolio-heat cap (6%)** ✅ 2026-06-18 · `portfolio_heat_usd()` sums open Σ(stop distance × size); `process_signals` threads a `remaining_heat_usd` budget into `_process_entry` (mirrors the BP budget) → `SKIP_HEAT_CAP`. Enabled via `risk.max_portfolio_heat_pct=0.06`.
   - WHY: heat = Σ(stop distance × size)/equity is the cap that survives a correlated selloff (the formula
     RoR underestimates correlated risk). Tech/semis are 80–90% correlated in a drawdown.
-  - FILES: `monitoring/auto_trader.py` entry gate; `config/risk.py`.
-  - DO: block new entries when total portfolio heat reaches **6%**. If 3+ open positions share a sector,
-    treat the cluster as one unit (e.g. 3 correlated names → 0.25% risk each so the cluster = 0.75%).
-  - ACCEPT: a 9th 0.75% position is rejected at the heat cap; a 3-name semi cluster is sized to 0.25%
-    each. Unit test the heat accumulator and the cluster rule.
+  - ACCEPT (met): a 9th 0.75% position is rejected at the heat cap. Unit test the heat accumulator + the
+    in-run gate (DRY_BUY then SKIP_HEAT_CAP).
+- [ ] **1.2b Sector-correlation cluster sizing** — DEFERRED: needs a sector backfill first.
+  `data/universes/nasdaq100.csv` has an empty `sector` column (sp500 is populated), so the "3+ in a
+  sector → 0.25% each" rule would silently no-op on most names. Prereq: backfill nasdaq100 sectors, then
+  add the cluster rule keyed off the universe `sector` field.
 
 - [ ] **1.3 Hybrid trailing stop: swing-low initial → Chandelier(3×) at +1R**
   - WHY: Chandelier ATR trail is the evidence-backed default (3× daily beat fixed-5% by 48%); a clean
@@ -594,6 +595,11 @@ strengthens the engine; this line gets us to the first live dollar.
   R = return% ÷ initial-stop-distance% from the entry's protective stop. `expectancy_metrics()` rolls up
   avg-R + win-rate over honest closed outcomes (phantom/stale excluded) and `persist_report` logs it. R
   is the substrate for Kelly inputs + pyramiding readiness (Stage 1.2/4). 4 new tests. Suite: 2530 passed.
-- 2026-06-18 — **Stage 1 is 3/6 done (1.1, 1.5, 1.6).** Remaining: 1.2 (portfolio-heat cap + sector
-  cluster), 1.3 (hybrid swing-low → Chandelier trail, incl. the 2× ATR skip rule), 1.4 (drawdown
+- 2026-06-18 — **1.2a shipped**: portfolio heat cap. `portfolio_heat_usd()` sums open Σ(stop distance ×
+  size); `process_signals` threads `remaining_heat_usd` into `_process_entry` (mirrors BP budget) →
+  `SKIP_HEAT_CAP` once the run would exceed `risk.max_portfolio_heat_pct` (set 0.06). At 0.75%/trade that's
+  ~8 concurrent positions. 2 new tests (accumulator + in-run gate). **1.2b (sector clustering) deferred** —
+  nasdaq100 sectors are empty; needs a backfill. Suite: 2532 passed, same 2 pre-existing failures.
+- 2026-06-18 — **Stage 1 is 4/6 done (1.1, 1.2a, 1.5, 1.6).** Remaining: 1.2b (sector cluster, needs
+  sector backfill), 1.3 (hybrid swing-low → Chandelier trail, incl. the 2× ATR skip rule), 1.4 (drawdown
   kill-switch ladder).

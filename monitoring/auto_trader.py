@@ -309,6 +309,39 @@ def _calc_qty(price: Optional[float], max_position_usd: float) -> int:
     return int(max_position_usd // price)
 
 
+def portfolio_heat_usd(conn, *, default_stop_pct: float = 0.05) -> float:
+    """Stage 1.2 — total open dollar risk across the book = Σ over open
+    positions of qty × (entry − initial stop). This is the 'heat' a correlated
+    selloff would realize at once; capping it (vs capping per-trade risk alone)
+    is what survives a tech/semi cluster gapping down together. A position with
+    no resting stop is charged `default_stop_pct` of its notional so an
+    unprotected leg can't read as zero risk.
+    """
+    rows = conn.execute(
+        """
+        SELECT o.entry_price AS entry,
+               (SELECT COALESCE(SUM(b.qty), 0) FROM paper_trades b
+                 WHERE b.signal_id = o.signal_id AND b.side = 'buy') AS qty,
+               (SELECT s.stop_price FROM paper_trades s
+                 WHERE s.signal_id = o.signal_id AND s.order_type = 'stop'
+                   AND s.stop_price IS NOT NULL
+                 ORDER BY s.id ASC LIMIT 1) AS stop
+          FROM outcomes o
+         WHERE o.status = 'open'
+        """
+    ).fetchall()
+    total = 0.0
+    for r in rows:
+        entry, qty, stop = r["entry"], r["qty"], r["stop"]
+        if not entry or not qty:
+            continue
+        if stop is not None and 0 < stop < entry:
+            total += qty * (entry - stop)
+        else:
+            total += qty * entry * default_stop_pct
+    return total
+
+
 def _coerce_offset_min(raw) -> int:
     """Read settings.entry_time_offset_min defensively. Negative → 0;
     above MAX_OFFSET_MIN → clamped + warning."""
@@ -590,7 +623,8 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                     throttle_multiplier: float = 1.0,
                     market_regime: Optional[str] = None,
                     tracked_strategies: Optional[List[dict]] = None,
-                    remaining_bp_budget: Optional[float] = None) -> dict:
+                    remaining_bp_budget: Optional[float] = None,
+                    remaining_heat_usd: Optional[float] = None) -> dict:
     from monitoring import sizing as sizing_mod
     from monitoring import stops as stops_mod
     from monitoring import crypto_adapter as crypto_mod
@@ -806,6 +840,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "remaining_bp_budget": round(remaining_bp_budget, 2),
                 "sizing": sizing}
 
+    # Stage 1.2 — portfolio heat cap. Risk-of-ruin is bounded by TOTAL open risk,
+    # not per-trade risk: refuse the entry when it would push Σ(stop distance ×
+    # size) past the run's remaining heat budget (default cap 6% of equity). Risk
+    # for this entry is qty × stop-distance when known (atr_risk), else a
+    # notional fraction. None budget → disabled (no equity / cap not configured).
+    rps_for_heat = (atr_risk_inputs or {}).get("risk_per_share")
+    if rps_for_heat:
+        entry_risk_usd = qty * float(rps_for_heat)
+    else:
+        entry_risk_usd = order_notional * float(
+            settings.get("default_stop_pct_for_heat", 0.05))
+    if (remaining_heat_usd is not None
+            and entry_risk_usd > remaining_heat_usd + 1e-6):
+        _record_skip(
+            conn, sig=sig, gate="portfolio_heat",
+            reason_detail=(f"entry risk ${entry_risk_usd:.2f} exceeds remaining "
+                           f"heat budget ${remaining_heat_usd:.2f}"),
+            source=_src,
+        )
+        return {"action": "SKIP_HEAT_CAP", "strategy_id": sid, "symbol": sym,
+                "entry_risk_usd": round(entry_risk_usd, 2),
+                "remaining_heat_usd": round(remaining_heat_usd, 2),
+                "sizing": sizing}
+
     offset_min = _coerce_offset_min(settings.get("entry_time_offset_min"))
     target_utc = (
         _target_execution_utc(asof or date.today(), offset_min)
@@ -898,6 +956,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
                 "limit_price": limit_price,
                 "requested_order_type": requested_order_type,
                 "sizing": sizing,
+                "entry_risk_usd": round(entry_risk_usd, 2),
                 "stop": stop_info}
 
     if target_utc is not None:
@@ -1011,6 +1070,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
             "limit_price": limit_price,
             "requested_order_type": requested_order_type,
             "sizing": sizing,
+            "entry_risk_usd": round(entry_risk_usd, 2),
             "stop": stop_info,
             "stop_protection": protection}
 
@@ -3473,6 +3533,17 @@ def process_signals(
                   if _bp_base not in (None, "") else None)
     bp_committed_this_run = 0.0
 
+    # Stage 1.2 — portfolio heat budget for this run: cap total open dollar-risk
+    # (Σ stop distance × size) at risk.max_portfolio_heat_pct of equity so a
+    # correlated selloff can't stop out the whole book at once. Disabled (None)
+    # when the cap is unset or equity is unknown.
+    max_heat_pct = float((settings.get("risk") or {}).get(
+        "max_portfolio_heat_pct", 0) or 0)
+    heat_cap_usd = (portfolio_value * max_heat_pct
+                    if (max_heat_pct > 0 and portfolio_value) else None)
+    heat_used_usd = portfolio_heat_usd(conn) if heat_cap_usd is not None else 0.0
+    heat_committed_this_run = 0.0
+
     # Seed with M5 pause-flatten actions so they surface in the run report.
     actions: List[dict] = list(pause_flatten_actions)
     cool_down_cache: Dict[str, Optional[dict]] = {}
@@ -3895,6 +3966,9 @@ def process_signals(
             )
             remaining_bp = (bp_ceiling - bp_committed_this_run
                             if bp_ceiling is not None else None)
+            remaining_heat = (
+                heat_cap_usd - heat_used_usd - heat_committed_this_run
+                if heat_cap_usd is not None else None)
             entry_action = _process_entry(
                 conn, strategy_client, settings, sig, dry_run,
                 asof=asof, sleep_fn=sleep_fn, now_fn=now_fn,
@@ -3905,6 +3979,7 @@ def process_signals(
                 market_regime=current_regime,
                 tracked_strategies=regime_tracked,
                 remaining_bp_budget=remaining_bp,
+                remaining_heat_usd=remaining_heat,
             )
             if llm_action["action"] == "downsize":
                 entry_action["llm_filter_downsize"] = True
@@ -3914,6 +3989,8 @@ def process_signals(
                 entries_submitted_this_run += 1
                 bp_committed_this_run += float(
                     entry_action.get("notional") or 0)
+                heat_committed_this_run += float(
+                    entry_action.get("entry_risk_usd") or 0)
                 if max_open_per_strategy > 0:
                     open_per_strategy[sig["strategy_id"]] = (
                         open_per_strategy.get(sig["strategy_id"], 0) + 1

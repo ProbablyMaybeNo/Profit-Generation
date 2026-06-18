@@ -11,7 +11,8 @@
     "max_open_positions": 12,
     "max_open_per_strategy": 5,
     "max_orders_per_day": 100,
-    "allow_shorts": false
+    "allow_shorts": false,
+    "max_portfolio_heat_pct": 0.06
   },
   "crypto": {
     "max_position_usd": 500,
