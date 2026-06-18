@@ -729,6 +729,7 @@ DEFAULT_ATR_INITIAL_PERIOD = 14
 DEFAULT_ATR_INITIAL_MULTIPLIER = 2.5
 STOP_METHOD_ATR_INITIAL = "atr_initial"
 STOP_METHOD_FIXED_PERCENT = "fixed_percent"
+STOP_METHOD_SWING_LOW = "swing_low_atr"  # Stage 1.3
 
 
 def _coerce_positive(raw, default: float) -> float:
@@ -875,12 +876,42 @@ def fixed_percent_stop(
     return round(stop, 4)
 
 
+def swing_low_initial_stop(
+    *,
+    entry_price: float,
+    swing_low: Optional[float],
+    atr: Optional[float],
+    buffer_mult: float = 1.0,
+    max_atr_dist: float = 2.0,
+    side: str = "long",
+) -> Optional[float]:
+    """Stage 1.3 — structure-based initial stop: just below the nearest swing
+    low, buffered by `buffer_mult × ATR`, but never further than
+    `max_atr_dist × ATR` from entry. A too-distant structural stop would make
+    the position 'noise' under volatility-target sizing (tiny qty, poor R:R),
+    so it's capped at max_atr_dist rather than allowed to run wide. Long only
+    for now (the live book is long-only). Returns a stop level or None.
+    """
+    if (side or "long").lower() != "long":
+        return None
+    if (entry_price is None or entry_price <= 0 or swing_low is None
+            or atr is None or atr <= 0):
+        return None
+    raw = float(swing_low) - float(buffer_mult) * float(atr)
+    floor = float(entry_price) - float(max_atr_dist) * float(atr)
+    stop = max(raw, floor)  # never wider than max_atr_dist × ATR from entry
+    if stop >= entry_price or stop <= 0:
+        return None
+    return round(stop, 4)
+
+
 def resolve_initial_stop(
     *,
     entry_price: float,
     atr: Optional[float],
     strategy_id: Optional[str],
     settings_stops: Optional[Dict] = None,
+    swing_low: Optional[float] = None,
     legacy_multiple: Optional[float] = None,
     side: str = "long",
     strategy_class: Optional[str] = None,
@@ -941,6 +972,27 @@ def resolve_initial_stop(
         "regime": regime,
         "fallback_percent": None,
     }
+    # Stage 1.3 — opt-in structure-based initial stop. When
+    # settings_stops.initial_method == "swing_low" and a swing low is supplied,
+    # place the stop just below it (capped at max_atr_dist × ATR). Falls through
+    # to the ATR stop if the swing-low stop isn't computable. Default
+    # ("atr_initial") leaves the entry−k×ATR behaviour untouched.
+    initial_method = "atr_initial"
+    if isinstance(settings_stops, dict):
+        initial_method = str(
+            settings_stops.get("initial_method") or "atr_initial").lower()
+    if initial_method == "swing_low" and swing_low is not None:
+        sw_cfg = settings_stops if isinstance(settings_stops, dict) else {}
+        sl_stop = swing_low_initial_stop(
+            entry_price=entry_price, swing_low=swing_low, atr=atr,
+            buffer_mult=float(sw_cfg.get("swing_low_buffer_atr", 1.0)),
+            max_atr_dist=float(sw_cfg.get("swing_low_max_atr_dist", 2.0)),
+            side=side,
+        )
+        if sl_stop is not None:
+            out["stop_price"] = sl_stop
+            out["method"] = STOP_METHOD_SWING_LOW
+            return out
     stop = atr_initial_stop(
         entry_price=entry_price, atr=atr,
         multiplier=multiplier, side=side,

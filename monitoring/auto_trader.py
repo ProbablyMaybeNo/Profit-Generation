@@ -309,6 +309,22 @@ def _calc_qty(price: Optional[float], max_position_usd: float) -> int:
     return int(max_position_usd // price)
 
 
+def _recent_swing_low(bars, lookback: int) -> Optional[float]:
+    """Lowest low over the last `lookback` bars — the nearest swing low used by
+    the Stage 1.3 structure-based initial stop. Handles a pandas DataFrame or a
+    list of bar dicts; returns None when no usable low is present."""
+    try:
+        if hasattr(bars, "tail"):  # pandas DataFrame
+            sub = bars.tail(max(1, int(lookback)))
+            lo = sub["low"].min()
+            return float(lo) if lo == lo else None  # NaN guard
+        lows = [b.get("low") for b in list(bars)[-int(lookback):]
+                if isinstance(b, dict) and b.get("low") is not None]
+        return float(min(lows)) if lows else None
+    except Exception:
+        return None
+
+
 def portfolio_heat_usd(conn, *, default_stop_pct: float = 0.05) -> float:
     """Stage 1.2 — total open dollar risk across the book = Σ over open
     positions of qty × (entry − initial stop). This is the 'heat' a correlated
@@ -3068,10 +3084,18 @@ def _maybe_attach_stop(
     except (KeyError, IndexError, TypeError):
         sig_type = ""
     side = "short" if sig_type.startswith("short") else "long"
+    # Stage 1.3 — nearest swing low for the structure-based initial stop, only
+    # when that method is opted into (default atr_initial computes no swing low).
+    swing_low = None
+    if str((settings_stops or {}).get("initial_method") or "").lower() \
+            == "swing_low":
+        lookback = int((settings_stops or {}).get("swing_low_lookback", 10))
+        swing_low = _recent_swing_low(bars, lookback)
     resolved = sizing_mod.resolve_initial_stop(
         entry_price=entry_fill, atr=atr,
         strategy_id=sig["strategy_id"],
         settings_stops=settings_stops,
+        swing_low=swing_low,
         legacy_multiple=legacy_multiple if legacy_multiple > 0 else None,
         side=side,
         strategy_class=strategy_class,

@@ -99,10 +99,11 @@
     "_notes_pf_size_up": "Sprint-1 M4 — expectancy-tiered size-up. A strategy whose measured profit factor exceeds pf_threshold (2.0) gets boosted_max_position_fraction (0.15) instead of the base max_position_fraction (0.10), so proven high-edge EOD winners (3-bar-low PF 2.92, 4bar-reversal PF 3.31) deploy more of the idle capital. fraction_of_kelly stays at 0.25 (NOT raised — conservative posture held until stop effectiveness is confirmed via M1 MFE/MAE). The boost is hard-clamped in code to 0.20. Set enabled=false to disable."
   },
   "trailing_stop": {
-    "method": "atr_trail",
+    "method": "chandelier",
     "multiplier": 3.0,
-    "atr_period": 14,
-    "_notes": "6.4 — Global trailing-stop policy. method one of {atr_trail, chandelier, percent_trail}. atr_trail: stop = highest_high_since_entry − (multiplier × ATR_14), ratcheting up only (never loosens). multiplier 3.0 gives the trade room above the tighter 2.5× ATR initial stop. Floored against the entry-time ATR stop so it can never slip below the initial protective level. Per-strategy overrides go in that strategy's TRACKED_STRATEGIES declaration under `trailing_stop`. Requires a bars_fetcher in the live path (wired in auto_trader.process_signals). Set method to null to disable."
+    "atr_period": 22,
+    "chandelier_lookback": 22,
+    "_notes": "Stage 1.3 — Chandelier(22, 3.0) is the evidence-backed trailing default (3x beat fixed-5% by ~48% in backtest). stop = highest_high_over_22_bars − (3 × ATR_22), ratcheting up only and floored against the entry-time initial stop so it never slips below the protective level (so the initial stop effectively holds until the trade is ~+1R, then the trail engages). Was atr_trail(14, 3.0). method one of {atr_trail, chandelier, percent_trail}; per-strategy overrides via TRACKED_STRATEGIES.trailing_stop. Set method to null to disable."
   },
   "intraday": {
     "min_position_usd": 800,

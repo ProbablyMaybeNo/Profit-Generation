@@ -201,7 +201,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
   sector → 0.25% each" rule would silently no-op on most names. Prereq: backfill nasdaq100 sectors, then
   add the cluster rule keyed off the universe `sector` field.
 
-- [ ] **1.3 Hybrid trailing stop: swing-low initial → Chandelier(3×) at +1R**
+- [x] **1.3 Hybrid stop: swing-low initial → Chandelier(3×)** ✅ 2026-06-18 · **Chandelier(22, 3.0) trail ADOPTED** in config (was atr_trail; floored at the initial stop so it engages ~+1R). **Swing-low initial stop BUILT + tested but OPT-IN** (`stops.initial_method`, default `atr_initial`), with the 2× ATR distance cap baked in — flipping it changes live stop distance + feeds `atr_risk` sizing, so it's gated pending a trade-frequency observation rather than flipped blind.
   - WHY: Chandelier ATR trail is the evidence-backed default (3× daily beat fixed-5% by 48%); a clean
     swing-low initial stop gives a real invalidation level. MFE/MAE shows we give back ~4.5× what we
     capture — tighter, ratcheting exits directly fix that.
@@ -604,7 +604,13 @@ strengthens the engine; this line gets us to the first live dollar.
   breaker. `risk.max_daily_loss_pct` 2→3 (3% daily pause); `drawdown_throttle` set to halve@15% DD /
   quarter@20% / halt+kill@25%. With `atr_risk`, the 0.5× size multiplier halves per-trade risk to 0.375%
   — the plan's exact spec. 5 new tests; module DEFAULTS (and their tests) untouched. Suite: 2537 passed.
-- 2026-06-18 — **Stage 1 is 5/6 done (1.1, 1.2a, 1.4, 1.5, 1.6).** Remaining: **1.3** (hybrid swing-low →
-  Chandelier(3×) initial/trailing stop + the 2× ATR skip rule) — the meatiest item: it changes live
-  initial-stop placement and feeds `atr_risk` risk-per-share, so it warrants a focused session + a look at
-  real behavior. Plus 1.2b (sector cluster, needs the sector backfill).
+- 2026-06-18 — **1.3 shipped**: adopted Chandelier(22, 3.0) trail (config; engine already tested, floored
+  at the initial stop). Built the swing-low structure-based initial stop (`swing_low_initial_stop` +
+  `resolve_initial_stop` routing + `_recent_swing_low`) with a 2× ATR distance cap, kept OPT-IN
+  (`stops.initial_method` default `atr_initial`) so the live stop-distance/sizing change is observed before
+  flipping. 10 new tests. Suite: 2547 passed, same 2 pre-existing failures.
+- 2026-06-18 — **STAGE 1 COMPLETE** (1.1, 1.2a, 1.3, 1.4, 1.5, 1.6). The survivability risk engine is live
+  on paper: constant 0.75% risk/trade (atr_risk), 6% portfolio-heat cap, Chandelier(22,3.0) trail, DD
+  ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:
+  **1.2b** sector-cluster sizing (needs nasdaq100 sector backfill) and the **1.3 swing-low initial stop
+  flip** (built+tested, observe before enabling). Neither blocks Stage 2.
