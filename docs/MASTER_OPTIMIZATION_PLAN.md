@@ -138,7 +138,7 @@ reports exclude phantom/stale by default; a daily invariant counter would have c
   - ACCEPT: a buy whose stop is rejected/skipped is **not** stamped as protected; the invariant counter
     appears in the daily report. Unit test both branches.
 
-- [ ] **0.4 Run `order_sync` at end-of-pass (strand fix)**
+- [x] **0.4 Run `order_sync` at end-of-pass (strand fix)** ✅ 2026-06-17 · end-of-pass `sync_order_fills` mirroring the top-of-pass guard
   - WHY: `order_sync.sync_order_fills` runs only at the **start** of a `process_signals` pass, so the
     current pass's own SELLs are never re-queried; on the EOD final run they strand at
     `status='accepted'` / NULL fill forever (4 stuck today). This is the documented precursor to orphan

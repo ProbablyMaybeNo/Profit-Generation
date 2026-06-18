@@ -3960,6 +3960,26 @@ def process_signals(
     )
     actions.extend(max_loss_cap_actions)
 
+    # Stage 0.4 — re-sync THIS pass's own orders at the END. The top-of-pass
+    # order_sync only sees the PREVIOUS run's orders; the sells/stops this pass
+    # just submitted are never re-queried, so on the EOD final run (no later
+    # pass) they strand at status='accepted'/NULL fill forever — the documented
+    # precursor to orphan reconciled_no_position outcomes (4 such sells were
+    # stuck at authoring). Re-running here backfills them. Same built_own_client
+    # guard as the top-of-pass sync. Best-effort: a broker hiccup never
+    # poisons the returned result.
+    if built_own_client:
+        try:
+            from monitoring import order_sync
+            end_sync = order_sync.sync_order_fills(conn, client)
+            if end_sync.get("updated"):
+                log(f"auto_trader: end-of-pass order_sync backfilled "
+                    f"{end_sync['updated']} row(s), {end_sync['filled']} newly "
+                    f"filled", "INFO")
+        except Exception as e:
+            log(f"auto_trader: end-of-pass order_sync skipped "
+                f"({type(e).__name__}: {e})", "WARNING")
+
     out = {"status": "OK", "dry_run": dry_run, "asof": asof.isoformat(),
            "actions": actions, "market_regime": current_regime}
     if throttle_info is not None:
