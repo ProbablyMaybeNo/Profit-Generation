@@ -940,7 +940,13 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
 
     # 6.1.1 — record the stop method on the entry row so audit queries
     # like "show me every entry protected by ATR" don't need to join.
-    if stop_info and stop_info.get("stop_method"):
+    # Stage 0.3 — gate the stamp on an actually-submitted stop. Previously this
+    # keyed off stop_method (set the moment a stop PRICE was computed, before
+    # submit), so a buy whose stop was skipped/rejected was still stamped
+    # 'atr_initial' — 119 buys advertised protection that did not exist. Only
+    # stamp when the stop truly rests on the book (status=='submitted').
+    if stop_info and stop_info.get("status") == "submitted" \
+            and stop_info.get("stop_method"):
         db.record_paper_trade(conn, {
             "alpaca_order_id": str(getattr(order, "id", "")),
             "signal_id": sig["id"],

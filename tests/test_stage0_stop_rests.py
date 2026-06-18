@@ -174,3 +174,61 @@ def test_entry_fills_race_still_rests_a_stop(tmp_path, monkeypatch):
     assert stop_row is not None, "naked-long regression: no resting stop recorded"
     assert stop_row["side"] == "sell"
     assert stop_row["stop_price"] == 95.0  # 100 - 2.5 * 2
+
+    # The entry row IS stamped protected — the stop genuinely submitted (0.3).
+    entry_row = conn.execute(
+        "SELECT entry_stops FROM paper_trades WHERE alpaca_order_id='entry-race'"
+    ).fetchone()
+    assert entry_row["entry_stops"] == "atr_initial"
+
+
+def test_rejected_entry_is_not_stamped_protected(tmp_path, monkeypatch):
+    """Stage 0.3 — a buy whose stop never rests must NOT be stamped protected."""
+    test_db = tmp_path / "trading.db"
+    monkeypatch.setattr(db, "DB_FILE", test_db)
+    db.init_db(test_db)
+    db.upsert_strategy(db.init_db(), {"extra": {"strategy_id": "winner"}})
+    monkeypatch.setattr(at, "is_paper_mode", lambda: True)
+
+    conn = _seed_eligible("winner")
+    db.record_signal(conn, strategy_id="winner", symbol="GDX",
+                     bar_ts="2026-05-14", signal_type="long_entry",
+                     close=100.0, bar_interval="1d")
+
+    # Entry is REJECTED -> entry_filled False -> stop is skipped (no position).
+    def fake_submit_market(client, *, symbol, qty, side, client_order_id=None):
+        return _order("entry-rej", "rejected", filled_avg_price=None)
+
+    stop_calls = {"n": 0}
+
+    def fake_submit_stop(client, *, symbol, qty, stop_price, client_order_id=None):
+        stop_calls["n"] += 1
+        return _order("stop-rej", "accepted")
+
+    monkeypatch.setattr(at, "_submit_market_order", fake_submit_market)
+    monkeypatch.setattr(stops_mod, "submit_atr_stop", fake_submit_stop)
+
+    client = MagicMock()
+    client.get_open_position = lambda symbol: None
+    client.get_all_positions = lambda *a, **k: []
+    client.get_orders = lambda *a, **k: []
+    client.cancel_order_by_id = lambda oid: None
+
+    settings = {
+        "enabled": True, "dry_run": False,
+        "min_outcomes": 30, "min_mean_ret_pct": 0.0, "min_sharpe_ish": 0.10,
+        "max_position_usd": 1000,
+        "stops": {"atr_multiplier": 2.5, "atr_period": 14},
+    }
+    bars = [{"high": 101, "low": 99, "close": 100}] * 16
+    at.process_signals(
+        conn, asof=date(2026, 5, 14), settings=settings, client=client,
+        bars_fetcher=lambda sym: bars, sleep_fn=lambda s: None,
+    )
+
+    assert stop_calls["n"] == 0, "no stop should submit for a rejected entry"
+    entry_row = conn.execute(
+        "SELECT entry_stops FROM paper_trades WHERE alpaca_order_id='entry-rej'"
+    ).fetchone()
+    assert entry_row["entry_stops"] is None, \
+        "rejected entry must not be stamped as stop-protected"

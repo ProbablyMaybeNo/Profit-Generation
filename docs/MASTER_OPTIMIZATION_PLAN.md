@@ -127,7 +127,7 @@ reports exclude phantom/stale by default; a daily invariant counter would have c
     `stop_price` for that symbol; `verify_fill_protected` reports `submitted`. Add a live-marked smoke
     test that places one entry and asserts a resting stop appears.
 
-- [ ] **0.3 Stop-stamp honesty + daily naked-stop invariant**
+- [x] **0.3 Stop-stamp honesty** ✅ 2026-06-17 · stamp gated on `status=='submitted'` (the daily naked-stop invariant counter is folded into 0.6 — both are daily protection metrics)
   - WHY: `auto_trader.py:914` stamps `entry_stops='atr_initial'` whenever `stop_method` is truthy
     (set *before* submit), so the DB advertises protection that doesn't exist. A simple invariant
     (stamped-buys ≈ resting stops) would have surfaced the 119-vs-0 gap instantly.
@@ -160,13 +160,16 @@ reports exclude phantom/stale by default; a daily invariant counter would have c
   - ACCEPT: per-strategy P&L derived from outcomes reconciles in sign/direction with the equity curve;
     phantom/stale rows are filtered in the default report. Add a regression test on a fixture DB.
 
-- [ ] **0.6 Promote `verify_fill_protected` to a tracked daily counter + alert**
-  - WHY: M7's protection check is currently best-effort and silently swallows unknown broker reads, so
-    a chronic 0-stop condition can hide (it did).
+- [ ] **0.6 Daily protection metrics: stamped-vs-resting invariant + `verify_fill_protected` counter** *(absorbs 0.3b)*
+  - WHY: M7's protection check is best-effort and silently swallows unknown broker reads, so a chronic
+    0-stop condition can hide (it did). A daily invariant (stamped-buys ≈ resting/filled stops) would
+    have surfaced the 119-vs-0 gap instantly.
   - FILES: `monitoring/position_manager.py:700–749`; `monitoring/daily_report.py`.
-  - DO: emit a daily-report line `entries_protected / entries_total` and fire Telegram if any filled
-    entry lacks a resting stop. Treat a broker read failure as **not-protected** (loud), not "assume OK".
-  - ACCEPT: the daily report shows the protected ratio; a deliberately-unprotected entry triggers the alert.
+  - DO: emit a daily-report line `entries_protected / entries_total` AND the stamped-vs-resting-stop
+    invariant; fire Telegram if any filled entry lacks a resting stop or the counts diverge. Treat a
+    broker read failure as **not-protected** (loud), not "assume OK".
+  - ACCEPT: the daily report shows the protected ratio + invariant; a deliberately-unprotected entry
+    triggers the alert.
 
 ---
 
@@ -560,3 +563,8 @@ strengthens the engine; this line gets us to the first live dollar.
   fallback in `safe_submit_stop` arms at requested qty when the broker shows 0 right after a live entry;
   `_entry_is_live` marks the entry in `_process_entry`. New `tests/test_stage0_stop_rests.py` reproduces
   the exact prod race end-to-end. Suite: 2511 passed, same 2 pre-existing failures, 72s.
+- 2026-06-17 — **0.3 (stamp honesty) shipped**: the `entry_stops` stamp on the entry row is now gated on
+  `stop_info.status=='submitted'`, so a buy whose stop is skipped/rejected is no longer falsely
+  advertised as protected. New regression test (rejected entry → unstamped). Suite: 2512 passed, same 2
+  pre-existing failures. Remaining Stage 0: 0.4 (order_sync at end-of-pass), 0.5 (position-scoped
+  outcomes), 0.6 (daily protection metrics, absorbs the 0.3 invariant counter).
