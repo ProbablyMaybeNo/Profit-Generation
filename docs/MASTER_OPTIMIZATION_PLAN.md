@@ -180,7 +180,7 @@ honest reporting defaults — the one architectural item, scoped to its own focu
 trailing stop is live; every closed trade logs its R-multiple. Backtest the multipliers on our own
 NASDAQ-100 + S&P-500 universe before locking them.
 
-- [ ] **1.1 ATR volatility-targeting position sizing**
+- [x] **1.1 ATR volatility-targeting position sizing** ✅ 2026-06-18 · `atr_risk` method + `risk_per_trade_pct=0.0075`; config flipped from `kelly_quarter`. *(The "skip if stop > 2× ATR" guard moves to 1.3 — with a 2.5× ATR stop it would veto everything; it belongs with the swing-low stop.)*
   - WHY: research is unanimous — sizing is the primary edge, signal is secondary. We currently size off
     a fixed `max_position_usd` cap, which over/under-sizes by volatility. Risk-of-ruin math: **1%/trade
     → RoR ≈ 0; 10%/trade → 1.7% (unacceptable)** at our edge.
@@ -578,3 +578,11 @@ strengthens the engine; this line gets us to the first live dollar.
 - 2026-06-17 — **Stage 0 is 5/6 done (0.1–0.4, 0.6).** Only **0.5** (position-scoped outcome model +
   report exclusion of phantom/stale by default) remains — deferred to a focused session per its
   architectural scope. The two CRITICAL live bugs (phantom factory, naked stop) are closed and tested.
+  PR #1 opened (feat/stage0-execution-truth → main).
+- 2026-06-18 — **1.1 shipped** (branch `feat/stage1-survivability-sizing`, off the Stage 0 branch): new
+  `atr_risk` sizing method in `sizing.py` (`atr_risk_notional` — qty = floor(equity × risk_pct /
+  stop-distance), `max_position_usd` stays a hard ceiling), routed through `compute_notional` with safe
+  fallback to tiered when equity/stop is unavailable. `_process_entry` computes the stop-distance up
+  front ONLY when `atr_risk` is active (every other path byte-for-byte unchanged). **Config flipped
+  `kelly_quarter` → `atr_risk` + `risk_per_trade_pct=0.0075`** — constant 0.75% dollar risk per trade is
+  now live on paper (RoR ~0). 8 new tests. Suite: 2525 passed, same 2 pre-existing failures.

@@ -709,6 +709,30 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         declaration=decl,
         settings_auto_trade=settings,
     )
+    # Stage 1.1 — volatility-target sizing needs the initial-stop distance up
+    # front (risk-per-share = entry − stop). Compute the stop once here (the same
+    # dry-run path the unprotected-entry guard uses) ONLY when atr_risk is the
+    # active method, so every other sizing path is unchanged. A missing/invalid
+    # stop leaves inputs None and atr_risk falls back to the tiered method.
+    atr_risk_inputs = None
+    if sizing_mod.normalize_sizing_method(settings.get("sizing_method")) \
+            == sizing_mod.SIZING_METHOD_ATR_RISK:
+        entry_px = float(sig["close"] or 0)
+        size_stop = _maybe_attach_stop(
+            conn, client, settings, sig,
+            entry_fill=entry_px, qty=1,
+            client_order_id=None, bars_fetcher=bars_fetcher, dry_run=True,
+            strategy_class=strategy_class, market_regime=market_regime,
+        )
+        sp = (size_stop or {}).get("stop_price")
+        rps = (entry_px - sp) if (sp is not None and entry_px > 0) else None
+        atr_risk_inputs = {
+            "entry_price": entry_px,
+            "risk_per_share": rps if (rps is not None and rps > 0) else None,
+            "atr": (size_stop or {}).get("atr"),
+            "risk_pct": float(settings.get(
+                "risk_per_trade_pct", sizing_mod.DEFAULT_RISK_PER_TRADE_PCT)),
+        }
     sizing = sizing_mod.compute_notional(
         conn, sid,
         sizing_method=settings.get("sizing_method"),
@@ -720,6 +744,7 @@ def _process_entry(conn, client, settings: dict, sig, dry_run: bool,
         strategy_class=strategy_class,
         min_position_usd=min_position_usd,
         intraday_multiplier=intraday_multiplier,
+        atr_risk_inputs=atr_risk_inputs,
     )
     if is_crypto:
         sizing["asset_class"] = "crypto"

@@ -34,10 +34,15 @@ SIZING_METHOD_FIXED = "fixed"
 SIZING_METHOD_KELLY = "kelly"
 SIZING_METHOD_TIERED = "tiered"
 SIZING_METHOD_KELLY_QUARTER = "kelly_quarter"  # 6.2.2
+SIZING_METHOD_ATR_RISK = "atr_risk"  # Stage 1.1 — volatility targeting
 SUPPORTED_SIZING_METHODS = {
     SIZING_METHOD_FIXED, SIZING_METHOD_KELLY, SIZING_METHOD_TIERED,
-    SIZING_METHOD_KELLY_QUARTER,
+    SIZING_METHOD_KELLY_QUARTER, SIZING_METHOD_ATR_RISK,
 }
+
+# Stage 1.1 — risk a fixed fraction of equity per trade (0.75% keeps
+# risk-of-ruin ~0 at the system's edge; 10% would be ~1.7%, unacceptable).
+DEFAULT_RISK_PER_TRADE_PCT = 0.0075
 
 # 6.2.2 — Fractional-Kelly sizing tier defaults.
 # fraction_of_kelly: how much of the raw Kelly fraction we actually
@@ -467,6 +472,58 @@ def kelly_quarter_notional(
     }
 
 
+def _pos_or_none(x) -> Optional[float]:
+    """float(x) when it parses to a positive number, else None."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def atr_risk_notional(
+    *, portfolio_value, max_position_usd, inputs: Optional[Dict],
+) -> Dict:
+    """Stage 1.1 — volatility-target sizing. Size the position so the distance
+    to the initial stop risks `risk_pct` of equity:
+
+        risk_budget = equity * risk_pct
+        qty         = floor(risk_budget / risk_per_share)   # stop distance
+        notional    = min(qty * entry_price, max_position_usd)
+
+    This shrinks size on volatile names (wide stop) and grows it on calm ones
+    at constant dollar risk — the opposite of fixed-notional sizing, which
+    risks more on volatile names. `max_position_usd` stays a hard ceiling.
+
+    Returns {notional, sizing_method, qty, risk_per_share, risk_pct,
+    risk_budget, fallback}. fallback=True (notional 0) when the inputs are
+    unusable (no equity / no stop distance) so the caller drops to a fallback
+    method rather than zeroing the trade.
+    """
+    inp = inputs or {}
+    equity = _pos_or_none(portfolio_value)
+    entry_price = _pos_or_none(inp.get("entry_price"))
+    rps = _pos_or_none(inp.get("risk_per_share"))
+    risk_pct = _pos_or_none(inp.get("risk_pct")) or DEFAULT_RISK_PER_TRADE_PCT
+    if not (equity and entry_price and rps):
+        return {"notional": 0.0, "sizing_method": SIZING_METHOD_ATR_RISK,
+                "fallback": True, "fraction": None, "stats": None}
+    risk_budget = equity * risk_pct
+    qty = int(risk_budget // rps)
+    notional = min(qty * entry_price, float(max_position_usd))
+    return {
+        "notional": round(notional, 2),
+        "sizing_method": SIZING_METHOD_ATR_RISK,
+        "qty": qty,
+        "risk_per_share": round(rps, 4),
+        "risk_pct": risk_pct,
+        "risk_budget": round(risk_budget, 2),
+        "fallback": False,
+        "fraction": None,
+        "stats": None,
+    }
+
+
 def compute_notional(
     conn: sqlite3.Connection,
     strategy_id: str,
@@ -481,6 +538,7 @@ def compute_notional(
     strategy_class: Optional[str] = None,
     min_position_usd: float = 0.0,
     intraday_multiplier: Optional[float] = None,
+    atr_risk_inputs: Optional[Dict] = None,
     fallback_method: str = SIZING_METHOD_TIERED,
 ) -> Dict:
     """Single entry point for the auto-trader.
@@ -562,6 +620,32 @@ def compute_notional(
                 "sizing_method": SIZING_METHOD_KELLY_QUARTER,
                 "kelly_quarter": kq,
             }
+    elif method == SIZING_METHOD_ATR_RISK:
+        ar = atr_risk_notional(
+            portfolio_value=portfolio_value,
+            max_position_usd=max_position_usd,
+            inputs=atr_risk_inputs,
+        )
+        if ar.get("fallback"):
+            # No equity / no computable stop distance: drop to the fallback
+            # method (default tiered) rather than zero the trade. Preserve the
+            # diagnostic so logs show why ATR-risk didn't fire.
+            fb_method = normalize_sizing_method(fallback_method)
+            if fb_method == SIZING_METHOD_KELLY:
+                out = kelly_notional(
+                    conn, strategy_id, portfolio_value,
+                    max_position_usd=max_position_usd, cap=cap,
+                )
+            else:
+                out = tiered_notional(
+                    conn, strategy_id,
+                    settings_tiered=settings_tiered,
+                    max_position_usd=max_position_usd,
+                )
+            out["sizing_method"] = fb_method
+            out["atr_risk"] = {"fallback": True}
+        else:
+            out = ar
     else:
         out = {
             "notional": float(max_position_usd),

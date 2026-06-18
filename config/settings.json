@@ -31,7 +31,8 @@
       "min_avg_return_pct": 0.0
     },
     "max_position_usd": 10000,
-    "sizing_method": "kelly_quarter",
+    "sizing_method": "atr_risk",
+    "risk_per_trade_pct": 0.0075,
     "max_new_entries_per_day": 25,
     "tiered": {
       "tier_0_usd": 5000,
