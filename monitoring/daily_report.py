@@ -375,8 +375,17 @@ def persist_report(report: DailyReport, markdown: Optional[str] = None) -> Dict[
         # records excursion. (Stop/trailing reasons are handled in F5; the
         # intraday open/close pass is F2.)
         from monitoring.auto_trader import _build_default_bars_fetcher
+        # Stage 0.1 (master plan, 2026-06-17): require_fill on the 1d pass too.
+        # Without it this pass opened an outcome for EVERY 1d long_entry that
+        # merely had a close price — no broker fill — which the orphan sweep
+        # then quarantined as phantom_no_fill (13 manufactured-then-quarantined
+        # on 2026-06-17 alone; 2,634 of all phantoms are 1d). Mirrors the
+        # intraday pass below. require_fill gates only the OPEN path; existing
+        # open outcomes still close normally on a long_exit signal.
         counts = outcome_tracker.reconcile_signals(
-            conn, bars_fetcher=_build_default_bars_fetcher()
+            conn,
+            bars_fetcher=_build_default_bars_fetcher(),
+            require_fill=True,
         )
         # F2 (audit 2026-06-03): the 1d pass above never opens intraday
         # outcomes, so M1's EOD-flatten capture had nothing to close — 0
