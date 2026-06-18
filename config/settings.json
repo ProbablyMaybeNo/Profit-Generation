@@ -113,6 +113,16 @@
     "min_position_usd": 800,
     "_notes": "Sprint-1 M4 — intraday position floor. After the intraday size multiplier (0.5) shrinks the notional, it is floored to this value so an intraday entry can afford >=1 share of liquid names (SPY ~$590-760, QQQ ~$500, NVDA ~$140). Applies to intraday entries only (bar_interval != '1d'); EOD sizing is untouched. Stays well within risk.max_position_usd ($10k) and, at risk.max_open_positions (12), caps intraday exposure far below the idle cash buffer. Set to 0 to disable the intraday-specific floor."
   },
+  "event_quarantine": {
+    "enabled": true,
+    "size_multiplier": 0.25,
+    "dates": {
+      "2026-07-14": "CPI",
+      "2026-07-28": "FOMC",
+      "2026-07-29": "FOMC"
+    },
+    "_notes": "Stage 2.3 — market-wide event quarantine. On a listed high-risk macro print day, intraday entries (bar_interval != '1d') are skipped outright (SKIP_MARKET_EVENT — don't hold a fast position into a CPI/FOMC print) and EOD entries are de-sized to size_multiplier (default 0.25 = 25%) of normal, folded into the entry notional multiplier. This is pure risk management off the public calendar (no prediction). Complements the per-symbol earnings veto (auto_trade.earnings_veto_days), which skips entries near a single symbol's own earnings. dates accepts {ISO: label} or a list of ISO strings; an empty/invalid override falls back to the built-in list in monitoring/event_calendar.py. enabled=false disables the whole filter. Update the dates each quarter from the public FOMC/BLS calendars."
+  },
   "max_loss_cap": {
     "max_loss_pct": 8.0,
     "_notes": "Sprint-3 M10 — trend loser cap. A HARD per-position max-loss floor for the trend book (trend-donchian-breakout-20, trend-ma-cross-20-50). When an open position's unrealised loss from ENTRY reaches max_loss_pct (default 8.0 = -8%), it is force-closed (broker sell + outcome close with exit_reason='max_loss_cap') even though the ATR trailing stop hasn't tripped — the trailing stop only ratchets DOWN from the high, so a position that gaps/bleeds straight off entry (ENPH -16%, AVGO -16% the week of 2026-06-03) never engages it and bled past any sane single-name loss. This cap bounds the tail WITHOUT touching the strategy's entry/exit logic or weakening any risk.* limit, the paper gate, or the kill switch — it only ADDS a tighter exit. Resolution mirrors time_stop/trailing_stop: a per-strategy `max_loss_cap` declaration in TREND_DECLARATIONS wins, then this global block. Runs AFTER the trailing + time-stop passes, so either of those wins when it trips first. Set max_loss_pct to 0/null (here or per-strategy) to disable. Default chosen conservatively at -8% (tighter than the worst observed -16% blowups, looser than the ~7.5% a 2.5xATR trail implies on a 3%-ATR name, so it only catches genuine tail bleed)."

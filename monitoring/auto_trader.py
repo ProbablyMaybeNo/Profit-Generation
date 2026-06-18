@@ -3515,6 +3515,7 @@ def process_signals(
     # (the trend-character axis). Gate is on by default; disable via
     # settings.risk.regime_gate.enabled=false (sizing scale then 1.0).
     from monitoring import regime as risk_regime_mod
+    from monitoring import event_calendar as event_cal_mod
     risk_regime_cfg = (settings.get("risk") or {}).get("regime_gate") or {}
     risk_regime_gate_enabled = bool(risk_regime_cfg.get("enabled", True))
     risk_regime_score = risk_regime_mod.latest_regime_score(conn)
@@ -3815,6 +3816,30 @@ def process_signals(
                         **risk_regime_skip,
                     })
                     continue
+            # Stage 2.3 — market-wide event quarantine (CPI / FOMC). Pure risk
+            # management off the public calendar: skip intraday entries on an
+            # event day (don't hold a fast position into the print) and de-size
+            # EOD entries (folded into local_throttle below). Per-symbol
+            # earnings veto is handled separately by _earnings_veto.
+            event_action = event_cal_mod.event_entry_action(
+                asof or date.today(),
+                bar_interval=(sig["bar_interval"]
+                              if "bar_interval" in sig.keys() else "1d"),
+                settings=settings,
+            )
+            if event_action["action"] == "skip":
+                _record_skip(
+                    conn, sig=sig, gate="market_event",
+                    reason_detail=event_action.get("reason"), source=sig_src,
+                )
+                actions.append({
+                    **event_action,
+                    "action": "SKIP_MARKET_EVENT",
+                    "strategy_id": sig["strategy_id"],
+                    "symbol": sig["symbol"],
+                    "signal_id": sig["id"],
+                })
+                continue
             # Auto-pause from 3.3.4 — refuse entries on strategies the
             # divergence checker has flagged. Exits remain unaffected so
             # currently-open positions still close cleanly.
@@ -4031,6 +4056,11 @@ def process_signals(
             local_throttle = throttle_multiplier * float(
                 llm_action["qty_multiplier"]
             )
+            # Stage 2.3 — fold the market-event de-size (EOD entries on a
+            # CPI/FOMC day) into the notional multiplier. 'skip' was already
+            # handled above; 'allow' carries no multiplier.
+            if event_action.get("action") == "desize":
+                local_throttle *= float(event_action.get("multiplier", 1.0))
             remaining_bp = (bp_ceiling - bp_committed_this_run
                             if bp_ceiling is not None else None)
             remaining_heat = (

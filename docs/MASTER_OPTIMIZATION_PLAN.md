@@ -238,6 +238,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
 ### Stage 2 — REGIME GATE  *(first automation layer · rules-based, no ML)*
 **Go-gate:** a daily pre-market regime score exists and both sizing and eligibility read it; an
 event-quarantine filter de-sizes/skips known high-risk sessions.
+**Status (2026-06-18): COMPLETE — 2.1, 2.2, 2.3 all shipped + tested.** Go-gate green.
 
 - [x] **2.1 Daily pre-market regime score (VIX 200d-MA + ADX)** ✅ 2026-06-18 · new `monitoring/regime.py` (pure `score_regime`/`compute_adx`/`moving_average` + `compute_and_persist_regime` reading VIX from `macro` and ADX from the daily-bars fetcher) writes one `regime_scores` row/day (risk_on/transitional/risk_off + `risk_scale` 1.0/0.5/0.25 + confidence); `latest_regime_score` reader for both sizing + eligibility. Wired into `run_macro.bat` after the VIX pull. **Also FIXED the pre-existing `test_macro_fetcher` FRED failure** (the redundant client-side `observation_start` re-filter dropped server-filtered rows once fixture dates aged > lookback; now trusts the server filter, applies client-side cutoff only on the legacy-fred fallback path).
   - WHY: a rules-based VIX-200d-MA regime gate cut max drawdown −55%→−22% while preserving returns
@@ -258,7 +259,7 @@ event-quarantine filter de-sizes/skips known high-risk sessions.
   - ACCEPT: on a forced `risk_off` day, trend entries are blocked and size is reduced; MR still allowed
     on chop. Test the eligibility/sizing interaction.
 
-- [ ] **2.3 Event-quarantine filter (earnings + FOMC/CPI)**
+- [x] **2.3 Event-quarantine filter (earnings + FOMC/CPI)** ✅ 2026-06-18 · new `monitoring/event_calendar.py` (built-in CPI 14 Jul / FOMC 28–29 Jul, config-overridable). On a market-event day: intraday entries → `SKIP_MARKET_EVENT`; EOD entries de-sized to 25% (folded into the entry notional multiplier). Wired into the `process_signals` eligibility chain alongside the existing per-symbol earnings veto. Governed by `event_quarantine.enabled` (default true). 12 new tests.
   - WHY: pure risk management, zero prediction, zero crowding risk (the calendar is public). Directly
     addresses our documented event-volatility vulnerability. Mark **14 Jul (CPI)**, **28–29 Jul (FOMC)**,
     mid-Jul mega-cap earnings as high-risk.
@@ -633,6 +634,22 @@ strengthens the engine; this line gets us to the first live dollar.
   atr_risk size until the first daily score persists (intended); updated the Stage-1 heat-cap test to disable
   the gate so it stays a pure heat test. 9 new tests. Suite: 2574 passed, only the allowed `test_intraday_skips`
   pre-existing failure remains.
+- 2026-06-18 — **2.3 shipped**: market-wide event quarantine. New `monitoring/event_calendar.py` —
+  pure calendar logic over a built-in CPI/FOMC date list (2026-07-14 CPI, 07-28/29 FOMC), overridable via
+  `settings.event_quarantine.dates` ({ISO:label} or list). `event_entry_action(asof, bar_interval, settings)`
+  returns allow / skip (intraday) / desize (EOD). Wired into the `process_signals` eligibility chain right
+  after the risk-regime gate: intraday entries on an event day → `SKIP_MARKET_EVENT` (don't hold a fast
+  position into the print); EOD entries de-sized to `size_multiplier` (default 0.25) by folding it into
+  `local_throttle`. Complements the existing per-symbol earnings veto (untouched). Governed by
+  `event_quarantine.enabled` (default true). 12 new tests. Suite: 2586 passed, only the allowed
+  `test_intraday_skips` pre-existing failure remains.
+- 2026-06-18 — **STAGE 2 COMPLETE** (2.1, 2.2, 2.3). The regime gate is live on paper: a daily risk_on/
+  transitional/risk_off score (VIX-200dMA + ADX) persisted to `regime_scores`, read by both eligibility
+  (risk_off blocks directional/momentum classes; mean-reversion stays) and sizing (risk_pct × 1.0/0.5/0.25),
+  plus a public-calendar event quarantine (CPI/FOMC → intraday skip + EOD 25% de-size). All three gates are
+  config-toggleable. Go-gate met: the pre-market regime score exists and both sizing + eligibility read it;
+  an event filter de-sizes/skips known high-risk sessions. Note: the score only writes once `run_macro.bat`
+  runs on the next scheduled pass; until then the conservative `transitional` (0.5×) default applies.
 - 2026-06-18 — **STAGE 1 COMPLETE** (1.1, 1.2a, 1.3, 1.4, 1.5, 1.6). The survivability risk engine is live
   on paper: constant 0.75% risk/trade (atr_risk), 6% portfolio-heat cap, Chandelier(22,3.0) trail, DD
   ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:
