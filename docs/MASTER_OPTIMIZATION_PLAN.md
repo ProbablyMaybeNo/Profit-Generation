@@ -249,7 +249,7 @@ event-quarantine filter de-sizes/skips known high-risk sessions.
   - ACCEPT: the score writes daily and is queryable; backtest the gate on/off over our universe and
     record the DD/Sharpe delta. New `tests/test_regime.py`.
 
-- [ ] **2.2 Wire regime into eligibility & sizing**
+- [x] **2.2 Wire regime into eligibility & sizing** ✅ 2026-06-18 · `process_signals` reads `latest_regime_score` once/run. ELIGIBILITY: on a `risk_off` tape, directional/momentum classes (trend/breakout/momentum) are blocked → `SKIP_RISK_REGIME`; mean-reversion stays eligible (size-scaled instead). SIZING: the `atr_risk` per-trade `risk_pct` is multiplied by the regime `risk_scale` (risk_on 1.0× / transitional 0.5× / risk_off 0.25×). Gated by `risk.regime_gate.enabled` (default true; false → no block + scale forced 1.0). Class-based (keyed off existing `strategy_class`, no new per-strategy config). 9 new tests.
   - WHY: the gate only pays if strategies actually read it — MR strategies favored on chop, trend/ORB
     on trend/catalyst days; size down in `transitional`/`risk_off`.
   - FILES: `monitoring/auto_trader.py` eligibility chain; sizing path.
@@ -621,6 +621,18 @@ strengthens the engine; this line gets us to the first live dollar.
   valid rows once the fixed fixture dates aged past the 30d test lookback — now trusts the server filter and
   only re-filters on the legacy no-`observation_start` fallback path. 17 new tests. Suite: 2565 passed, only
   the allowed `test_intraday_skips` (Stage 4.2) pre-existing failure remains.
+- 2026-06-18 — **2.2 shipped**: regime score wired into both halves of the entry pipeline. `process_signals`
+  reads `regime.latest_regime_score(conn)` once per run (defaults to conservative `transitional`/0.5× when
+  no score persisted yet). New class-vs-regime eligibility gate (`regime.regime_blocks_class` /
+  `regime_eligibility_skip`): on a `risk_off` tape, directional/momentum classes (trend/breakout/momentum)
+  are blocked with `SKIP_RISK_REGIME`; mean-reversion stays eligible and is de-risked via sizing instead.
+  `_process_entry` multiplies the `atr_risk` `risk_pct` by the regime `risk_scale` (1.0/0.5/0.25), threaded
+  through a new `risk_regime_scale` param. Governed by `settings.risk.regime_gate.enabled` (default true;
+  false → no eligibility block and the sizing scale is forced to 1.0). Class-based off the existing
+  `strategy_class` field — no new per-strategy config. Note: the conservative `transitional` default halves
+  atr_risk size until the first daily score persists (intended); updated the Stage-1 heat-cap test to disable
+  the gate so it stays a pure heat test. 9 new tests. Suite: 2574 passed, only the allowed `test_intraday_skips`
+  pre-existing failure remains.
 - 2026-06-18 — **STAGE 1 COMPLETE** (1.1, 1.2a, 1.3, 1.4, 1.5, 1.6). The survivability risk engine is live
   on paper: constant 0.75% risk/trade (atr_risk), 6% portfolio-heat cap, Chandelier(22,3.0) trail, DD
   ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:

@@ -369,6 +369,49 @@ def latest_regime_score(conn) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Eligibility — class-vs-regime gate (Stage 2.2)
+# ---------------------------------------------------------------------------
+
+# Directional / momentum classes are the ones we pull back from on a stress
+# (risk_off) tape: a breakout/trend/momentum entry into a high-VIX selloff is
+# exactly the crowded trade that gets stopped out. Mean-reversion is favored on
+# chop and still allowed on stress (it just gets size-scaled down, not blocked).
+DIRECTIONAL_CLASSES = frozenset({"trend", "breakout", "momentum"})
+MEAN_REVERSION_CLASSES = frozenset({"mean_reversion", "mean-reversion"})
+
+
+def regime_blocks_class(strategy_class: Optional[str], regime: str) -> bool:
+    """True when a strategy of `strategy_class` is blocked in `regime`.
+
+    Rule (v1, no ML): on a `risk_off` tape, block directional/momentum
+    entries (trend/breakout/momentum); allow mean-reversion (it gets
+    size-scaled instead). risk_on / transitional block nothing — sizing
+    carries the de-risking via `risk_scale`. Unknown classes are never
+    blocked (fall through to the rest of the eligibility chain).
+    """
+    sc = (strategy_class or "").strip().lower()
+    if regime == RISK_OFF and sc in DIRECTIONAL_CLASSES:
+        return True
+    return False
+
+
+def regime_eligibility_skip(
+    strategy_class: Optional[str], *, regime: str,
+) -> Optional[dict]:
+    """Skip-descriptor when the class is gated out of the risk regime, else None."""
+    if not regime_blocks_class(strategy_class, regime):
+        return None
+    return {
+        "regime": regime,
+        "strategy_class": strategy_class,
+        "reason": (
+            f"{strategy_class!r} entries are blocked in risk regime "
+            f"{regime!r} (directional class on a stress tape)"
+        ),
+    }
+
+
 if __name__ == "__main__":
     conn = db.init_db()
     try:

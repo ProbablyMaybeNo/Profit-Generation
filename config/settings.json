@@ -12,7 +12,11 @@
     "max_open_per_strategy": 5,
     "max_orders_per_day": 100,
     "allow_shorts": false,
-    "max_portfolio_heat_pct": 0.06
+    "max_portfolio_heat_pct": 0.06,
+    "regime_gate": {
+      "enabled": true,
+      "_notes": "Stage 2.2 — risk-environment gate. Reads the daily regime_scores label (risk_on/transitional/risk_off, written by monitoring.regime via run_macro.bat). When enabled: (a) eligibility blocks directional/momentum entries (trend/breakout/momentum) on a risk_off tape — mean-reversion stays eligible and is size-scaled instead — yielding SKIP_RISK_REGIME; (b) sizing multiplies the per-trade risk_per_trade_pct by the regime risk_scale (risk_on 1.0x / transitional 0.5x / risk_off 0.25x) in the atr_risk path. enabled=false → no eligibility block and the sizing scale is forced to 1.0 (unchanged behavior). Falls back to 'transitional' (0.5x, no block) when no score has been persisted yet."
+    }
   },
   "drawdown_throttle": {
     "_notes": "Stage 1.4 — peak-drawdown size ladder. With atr_risk sizing the size multiplier scales the notional, which scales qty, which scales the per-trade risk: 0.5x => 0.375% risk. halve_at_pct 85 = halve at 15% account DD; quarter at 20%; halt + kill switch at a catastrophic 25% (research target: keep DD < 25%). evaluate() is stateless so recover_at_pct is advisory only.",
