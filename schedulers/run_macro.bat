@@ -17,5 +17,9 @@ echo === run_macro start %DATE% %TIME% === >> "%LOGFILE%"
 "%PY%" -m monitoring.macro_fetcher >> "%LOGFILE%" 2>&1
 set EXITCODE=%ERRORLEVEL%
 
+REM Stage 2.1 — compute the daily regime score right after the VIX pull,
+REM so eligibility + sizing read a fresh risk_on/transitional/risk_off label.
+"%PY%" -m monitoring.regime >> "%LOGFILE%" 2>&1
+
 echo === run_macro exit %EXITCODE% %DATE% %TIME% === >> "%LOGFILE%"
 exit /b %EXITCODE%

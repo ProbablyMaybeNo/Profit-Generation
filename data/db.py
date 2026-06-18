@@ -216,6 +216,20 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_macro_series_date ON macro(series_id, bar_date)",
     """
+    CREATE TABLE IF NOT EXISTS regime_scores (
+        score_date   TEXT PRIMARY KEY,
+        regime       TEXT NOT NULL,
+        risk_scale   REAL NOT NULL,
+        vix          REAL,
+        vix_200dma   REAL,
+        adx          REAL,
+        confidence   REAL,
+        detail       TEXT,
+        computed_at  TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_regime_scores_date ON regime_scores(score_date)",
+    """
     CREATE TABLE IF NOT EXISTS meta (
         key    TEXT PRIMARY KEY,
         value  TEXT NOT NULL
@@ -1098,6 +1112,52 @@ def latest_macro_value(
         " WHERE series_id=? AND value IS NOT NULL "
         " ORDER BY bar_date DESC LIMIT 1",
         (series_id,),
+    ).fetchone()
+
+
+def upsert_regime_score(
+    conn: sqlite3.Connection,
+    *,
+    score_date: str,
+    regime: str,
+    risk_scale: float,
+    vix: Optional[float] = None,
+    vix_200dma: Optional[float] = None,
+    adx: Optional[float] = None,
+    confidence: Optional[float] = None,
+    detail: Optional[str] = None,
+) -> int:
+    """Insert or update the regime score for a date. Idempotent on score_date.
+
+    Returns 1 always (the row is the authoritative latest score for the day).
+    """
+    with conn:
+        conn.execute(
+            "INSERT INTO regime_scores "
+            "  (score_date, regime, risk_scale, vix, vix_200dma, adx, "
+            "   confidence, detail, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(score_date) DO UPDATE SET "
+            "  regime=excluded.regime, risk_scale=excluded.risk_scale, "
+            "  vix=excluded.vix, vix_200dma=excluded.vix_200dma, "
+            "  adx=excluded.adx, confidence=excluded.confidence, "
+            "  detail=excluded.detail, computed_at=excluded.computed_at",
+            (
+                score_date, regime, float(risk_scale),
+                None if vix is None else float(vix),
+                None if vix_200dma is None else float(vix_200dma),
+                None if adx is None else float(adx),
+                None if confidence is None else float(confidence),
+                detail, _utc_now_iso(),
+            ),
+        )
+    return 1
+
+
+def latest_regime_score(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    """Return the most recent regime_scores row, or None if the table is empty."""
+    return conn.execute(
+        "SELECT * FROM regime_scores ORDER BY score_date DESC LIMIT 1"
     ).fetchone()
 
 

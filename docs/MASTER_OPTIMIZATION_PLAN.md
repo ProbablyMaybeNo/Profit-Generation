@@ -239,7 +239,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
 **Go-gate:** a daily pre-market regime score exists and both sizing and eligibility read it; an
 event-quarantine filter de-sizes/skips known high-risk sessions.
 
-- [ ] **2.1 Daily pre-market regime score (VIX 200d-MA + ADX)**
+- [x] **2.1 Daily pre-market regime score (VIX 200d-MA + ADX)** ✅ 2026-06-18 · new `monitoring/regime.py` (pure `score_regime`/`compute_adx`/`moving_average` + `compute_and_persist_regime` reading VIX from `macro` and ADX from the daily-bars fetcher) writes one `regime_scores` row/day (risk_on/transitional/risk_off + `risk_scale` 1.0/0.5/0.25 + confidence); `latest_regime_score` reader for both sizing + eligibility. Wired into `run_macro.bat` after the VIX pull. **Also FIXED the pre-existing `test_macro_fetcher` FRED failure** (the redundant client-side `observation_start` re-filter dropped server-filtered rows once fixture dates aged > lookback; now trusts the server filter, applies client-side cutoff only on the legacy-fred fallback path).
   - WHY: a rules-based VIX-200d-MA regime gate cut max drawdown −55%→−22% while preserving returns
     (Sharpe 0.45→0.72) in a 2005–2025 backtest. Best documented solo-operator edge; no ML needed for v1.
   - FILES: new `monitoring/regime.py`; `monitoring/macro_fetcher.py` (VIX source); a `regime` field in
@@ -609,6 +609,18 @@ strengthens the engine; this line gets us to the first live dollar.
   `resolve_initial_stop` routing + `_recent_swing_low`) with a 2× ATR distance cap, kept OPT-IN
   (`stops.initial_method` default `atr_initial`) so the live stop-distance/sizing change is observed before
   flipping. 10 new tests. Suite: 2547 passed, same 2 pre-existing failures.
+- 2026-06-18 — **2.1 shipped** (branch `feat/stage2-regime-gate`): new `monitoring/regime.py` — the risk-environment
+  axis (risk_on/transitional/risk_off), distinct from regime_router's trend-character `market_regime`. Pure
+  `compute_adx` (Wilder ADX 14), `moving_average`, `score_regime` (VIX-vs-200dMA gate + ADX conviction →
+  label + `risk_scale` 1.0/0.5/0.25 + confidence). `compute_and_persist_regime` reads the latest VIX +
+  200d-MA from `macro` and ADX from the injected daily-bars fetcher (SPY proxy), upserting one row/day into
+  the new `regime_scores` table (`data/db.py` + `upsert_regime_score`/`latest_regime_score`). Wired into
+  `schedulers/run_macro.bat` so the score writes daily right after the VIX pull. Conservative `transitional`
+  fallback when inputs are missing. **Fixed the pre-existing `test_macro_fetcher` FRED test** (2.1
+  prerequisite): the client-side `observation_start` re-filter double-applied the server's filter and dropped
+  valid rows once the fixed fixture dates aged past the 30d test lookback — now trusts the server filter and
+  only re-filters on the legacy no-`observation_start` fallback path. 17 new tests. Suite: 2565 passed, only
+  the allowed `test_intraday_skips` (Stage 4.2) pre-existing failure remains.
 - 2026-06-18 — **STAGE 1 COMPLETE** (1.1, 1.2a, 1.3, 1.4, 1.5, 1.6). The survivability risk engine is live
   on paper: constant 0.75% risk/trade (atr_risk), 6% portfolio-heat cap, Chandelier(22,3.0) trail, DD
   ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:

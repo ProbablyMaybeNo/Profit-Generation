@@ -100,6 +100,7 @@ def fetch_series_points(
         log(f"macro fetch: cannot init FRED client ({e})", "WARNING")
         return []
     cutoff = date.today() - timedelta(days=lookback_days)
+    client_side_cutoff: Optional[date] = None
     try:
         series = client.get_series(series_id, observation_start=cutoff.isoformat())
     except TypeError:
@@ -108,10 +109,11 @@ def fetch_series_points(
         except Exception as e:
             log(f"macro fetch: {series_id} failed ({e})", "WARNING")
             return []
+        client_side_cutoff = cutoff
     except Exception as e:
         log(f"macro fetch: {series_id} failed ({e})", "WARNING")
         return []
-    return list(_iter_series_points(series, observation_start=cutoff))
+    return list(_iter_series_points(series, observation_start=client_side_cutoff))
 
 
 def persist_series_points(
