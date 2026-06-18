@@ -151,7 +151,7 @@ honest reporting defaults — the one architectural item, scoped to its own focu
   - ACCEPT: after a pass that submits sells, those sells reach `filled`/`canceled` (not stranded
     `accepted`) by pass end. Test with a mocked broker.
 
-- [ ] **0.5 Position-scoped outcomes + honest reporting defaults**
+- **0.5 Position-scoped outcomes + honest reporting defaults** — ⏸ DEFERRED (backlog, its own focused session — architectural outcome-model rewrite; not a build target yet)
   - WHY: the outcome model is signal-scoped, which is what permits the phantom class and makes
     per-strategy expectancy/Kelly untrustworthy. Reports/backtests must never count phantom or
     force-flatten noise as P&L.
