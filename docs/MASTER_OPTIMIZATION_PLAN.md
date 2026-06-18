@@ -211,7 +211,7 @@ NASDAQ-100 + S&P-500 universe before locking them.
   - ACCEPT: stop ratchets up only on new highs, never down; switches from swing-low to Chandelier at +1R.
     Extend the trailing-stop tests with a synthetic price path.
 
-- [ ] **1.4 Drawdown kill-switch ladder**
+- [x] **1.4 Drawdown kill-switch ladder** ✅ 2026-06-18 · config over the existing `drawdown_throttle` + daily breaker. 3% daily-loss pause; peak-DD ladder halve@15% (→0.375% risk via the notional×0.5 multiplier, which `atr_risk` turns into half-risk), quarter@20%, halt+kill@25%. *(evaluate() is stateless — `recover_at_pct` is advisory.)*
   - WHY: rule-based pauses beat emotional overrides (a documented top-5 failure mode).
   - FILES: `monitoring/drawdown_throttle.py`, `monitoring/kill_switch.py`, `config/settings.json`.
   - DO: at **3% daily DD** pause new entries for the day; at **≥15% account DD** halve risk to 0.375%
@@ -600,6 +600,11 @@ strengthens the engine; this line gets us to the first live dollar.
   `SKIP_HEAT_CAP` once the run would exceed `risk.max_portfolio_heat_pct` (set 0.06). At 0.75%/trade that's
   ~8 concurrent positions. 2 new tests (accumulator + in-run gate). **1.2b (sector clustering) deferred** —
   nasdaq100 sectors are empty; needs a backfill. Suite: 2532 passed, same 2 pre-existing failures.
-- 2026-06-18 — **Stage 1 is 4/6 done (1.1, 1.2a, 1.5, 1.6).** Remaining: 1.2b (sector cluster, needs
-  sector backfill), 1.3 (hybrid swing-low → Chandelier trail, incl. the 2× ATR skip rule), 1.4 (drawdown
-  kill-switch ladder).
+- 2026-06-18 — **1.4 shipped** (config): drawdown kill-switch ladder over the existing throttle + daily
+  breaker. `risk.max_daily_loss_pct` 2→3 (3% daily pause); `drawdown_throttle` set to halve@15% DD /
+  quarter@20% / halt+kill@25%. With `atr_risk`, the 0.5× size multiplier halves per-trade risk to 0.375%
+  — the plan's exact spec. 5 new tests; module DEFAULTS (and their tests) untouched. Suite: 2537 passed.
+- 2026-06-18 — **Stage 1 is 5/6 done (1.1, 1.2a, 1.4, 1.5, 1.6).** Remaining: **1.3** (hybrid swing-low →
+  Chandelier(3×) initial/trailing stop + the 2× ATR skip rule) — the meatiest item: it changes live
+  initial-stop placement and feeds `atr_risk` risk-per-share, so it warrants a focused session + a look at
+  real behavior. Plus 1.2b (sector cluster, needs the sector backfill).

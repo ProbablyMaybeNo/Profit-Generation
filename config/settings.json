@@ -7,12 +7,20 @@
   "paper_trading": true,
   "risk": {
     "max_position_usd": 10000,
-    "max_daily_loss_pct": 2.0,
+    "max_daily_loss_pct": 3.0,
     "max_open_positions": 12,
     "max_open_per_strategy": 5,
     "max_orders_per_day": 100,
     "allow_shorts": false,
     "max_portfolio_heat_pct": 0.06
+  },
+  "drawdown_throttle": {
+    "_notes": "Stage 1.4 — peak-drawdown size ladder. With atr_risk sizing the size multiplier scales the notional, which scales qty, which scales the per-trade risk: 0.5x => 0.375% risk. halve_at_pct 85 = halve at 15% account DD; quarter at 20%; halt + kill switch at a catastrophic 25% (research target: keep DD < 25%). evaluate() is stateless so recover_at_pct is advisory only.",
+    "window_days": 30,
+    "halve_at_pct": 85.0,
+    "quarter_at_pct": 80.0,
+    "kill_at_pct": 75.0,
+    "recover_at_pct": 90.0
   },
   "crypto": {
     "max_position_usd": 500,
