@@ -56,6 +56,7 @@ from monitoring.strategy_health import (  # noqa: E402
     _fresh_only_clause,
     _interval_class_clause,
     is_paused,
+    unpause_strategy,
 )
 
 # --- gate thresholds -------------------------------------------------------
@@ -460,6 +461,56 @@ def clear_admission(conn, strategy_id: str) -> bool:
     return cur.rowcount > 0
 
 
+# --- cold-start (3.2): grace-admit a proven-but-paused strategy ------------
+
+
+def grace_admit(
+    conn, strategy_id: str, *,
+    grace_days: int = DEFAULT_GRACE_DAYS,
+    now_iso: Optional[str] = None,
+    unpause_fn=None,
+) -> Dict:
+    """Cold-start a proven-but-paused strategy at grace (reduced) size so it can
+    accumulate the fresh, honest closes M12's evidence gate needs — the bootstrap
+    a paused strategy cannot provide on its own (no trades while paused → no
+    evidence). UNLIKE `evaluate_candidate` this ACTS: it unpauses the strategy and
+    opens its probation window. It deliberately bypasses the evidence + correlation
+    gates (there is no fresh evidence yet) but STILL enforces one-at-a-time, so
+    only a single strategy is ever cold-starting at once.
+
+    Sizing stays small automatically downstream: a freshly-unpaused strategy is in
+    its low-sample grace window (grace_period_size_multiplier) and the regime gate
+    scale stacks on top. Once it has >= MIN_FRESH_CLOSES fresh closes, run
+    `evaluate_candidate` to graduate it to full size or re-pause it.
+
+    This is the operator's deliberate cold-start trigger — not something any
+    automated loop calls. Returns {strategy_id, admitted, window, reason}.
+    """
+    out = {"strategy_id": strategy_id, "admitted": False,
+           "window": None, "reason": ""}
+    if not is_paused(conn, strategy_id, asof_iso=now_iso):
+        out["reason"] = f"{strategy_id} is not paused — nothing to cold-start"
+        return out
+    one = evaluate_one_at_a_time(conn, strategy_id, asof_iso=now_iso)
+    if not one["passed"]:
+        out["reason"] = f"REFUSED (one-at-a-time): {one['reason']}"
+        return out
+    unpause = unpause_fn if unpause_fn is not None else unpause_strategy
+    unpaused = unpause(conn, strategy_id)
+    window = record_admission(
+        conn, strategy_id, grace_days=grace_days, now_iso=now_iso)
+    out["admitted"] = True
+    out["window"] = window
+    out["reason"] = (
+        f"GRACE-ADMITTED {strategy_id} (unpaused={unpaused}); probation window "
+        f"open until {window.get('expires_at')}. Trades at reduced grace size; "
+        f"run evaluate_candidate after >= {MIN_FRESH_CLOSES} fresh closes to "
+        f"graduate to full size or re-pause."
+    )
+    log(out["reason"], "SUCCESS")
+    return out
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -472,6 +523,9 @@ def main():
                         help="evaluate even if the strategy isn't paused")
     parser.add_argument("--list-windows", action="store_true",
                         help="print open probation windows and exit")
+    parser.add_argument("--grace-admit", action="store_true",
+                        help="COLD-START: unpause this paused strategy at grace "
+                             "size + open its probation window (operator action)")
     args = parser.parse_args()
 
     conn = db.init_db()
@@ -486,6 +540,12 @@ def main():
             return
         if not args.strategy_id:
             parser.error("strategy_id is required unless --list-windows")
+        if args.grace_admit:
+            res = grace_admit(conn, args.strategy_id)
+            log(f"[{'GRACE-ADMIT' if res['admitted'] else 'REFUSED'}] "
+                f"{args.strategy_id}: {res['reason']}",
+                "SUCCESS" if res["admitted"] else "WARNING")
+            return
         verdict = evaluate_candidate(
             conn, args.strategy_id, bar_interval=args.interval,
             require_paused=not args.no_require_paused,
