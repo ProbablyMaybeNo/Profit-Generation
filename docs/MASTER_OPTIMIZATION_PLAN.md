@@ -286,6 +286,7 @@ accumulating **fresh, honest** closed outcomes. **Do not unpause anything until 
     that passes; conflict fixtures prove no oversell/competing-flatten. New `tests/test_reintroduction.py`.
 
 - [ ] **3.2 Unpause the botnet101 mean-reversion winners (one at a time, M12-gated)**
+  - 🔧 2026-06-18 — **cold-start MECHANISM built** (`reintroduction.grace_admit` + `--grace-admit` CLI, 5 tests): unpauses ONE paused strategy at grace size + opens its one-at-a-time probation window so it can accumulate the fresh closes M12's evidence gate needs (a paused strategy has none). Box stays unchecked — the actual unpause is Ross's deliberate trigger after the live-broker validation pass confirms the engine runs clean. Recommended first cold-start: `py -3.13 -m monitoring.reintroduction botnet101-3-bar-low --grace-admit`.
   - WHY: these carry our historical edge and were paused only by the reset, not by failure
     (3-bar-low +24.8%/100% WR, consec-below-ema +15.0%/75% WR, 4bar-momentum-reversal +3.08%). The core
     that broke them is now rebuilt + verified.
@@ -650,6 +651,12 @@ strengthens the engine; this line gets us to the first live dollar.
   config-toggleable. Go-gate met: the pre-market regime score exists and both sizing + eligibility read it;
   an event filter de-sizes/skips known high-risk sessions. Note: the score only writes once `run_macro.bat`
   runs on the next scheduled pass; until then the conservative `transitional` (0.5×) default applies.
+- 2026-06-18 — **3.1 (M12) shipped + merged** (commit `9fc1e95` → main `80dd6ff`): `monitoring/reintroduction.py`
+  read-only admission gate (≥20 fresh closes + positive expectancy + correlation<0.3 + one-at-a-time);
+  15 tests incl. IWM/KRE/NVDA/QQQ no-oversell fixtures. The anti-doom-loop gate. No strategy unpaused.
+- 2026-06-18 — **3.2 cold-start mechanism built** (`grace_admit` + CLI, 5 tests): the bootstrap that lets a
+  proven-but-paused strategy start accumulating fresh closes at grace size (M12 then graduates/re-pauses).
+  Operator-triggered; nothing unpaused yet. Suite: 2605 passed, 1 allowed pre-existing failure.
 - 2026-06-18 — **STAGE 1 COMPLETE** (1.1, 1.2a, 1.3, 1.4, 1.5, 1.6). The survivability risk engine is live
   on paper: constant 0.75% risk/trade (atr_risk), 6% portfolio-heat cap, Chandelier(22,3.0) trail, DD
   ladder (halve@15%/halt@25% + 3% daily), R-multiple expectancy. Two opt-in/deferred refinements remain:
